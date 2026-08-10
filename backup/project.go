@@ -117,9 +117,6 @@ func (pb *ProjectBackup) Run(ctx context.Context) error {
 
 	logger.Info().Str("snapshot_id", snapshotID).Msg("Backup completed")
 
-
-
-
 	// Start containers back up (only if we stopped them)
 	if pb.project.StopContainers && len(services) > 0 {
 		if err := pb.compose.Start(ctx, services, pb.project.StartTimeout); err != nil {
