@@ -1,0 +1,11 @@
+[Unit]
+Description=Docker Backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dbk --config /etc/dbk/config.yaml
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

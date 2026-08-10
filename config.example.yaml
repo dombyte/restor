@@ -1,0 +1,354 @@
+# Docker Backup Tool (dbk) - Configuration Example
+# ====================================================
+#
+# This file demonstrates all available configuration options for dbk.
+#
+# Config Format Support: YAML (.yaml, .yml), JSON (.json), TOML (.toml)
+#
+# Usage:
+#   cp config.example.yaml config.yaml
+#   ./dbk --config config.yaml
+#
+# For systemd installation, place config at /etc/dbk/config.yaml
+#
+# ====================================================
+# Execution Modes
+# ====================================================
+#   - "parallel": All projects backup simultaneously using goroutines
+#     * Faster for independent projects
+#     * Higher resource usage (memory, I/O, network)
+#     * Use when projects don't share dependencies
+#   - "sequential": Projects backup one after another in order
+#     * Lower resource usage
+#     * Slower overall but more controlled
+#     * Use when projects share resources or have dependencies
+#
+# ====================================================
+# Environment Variables
+# ====================================================
+# Environment variables can be specified in three ways:
+#   1. Inline in this file (environments section)
+#   2. Loaded from external file (env_file)
+#   3. Referenced from system environment (${VAR_NAME} syntax)
+#
+# Priority: Inline > External File > System Environment
+#
+# Supported external file formats: .env, .yaml, .yml, .json
+#
+# Variables are passed to BOTH restic and docker compose commands.
+#
+# ====================================================
+# Restic Authentication
+# ====================================================
+# Choose ONE method for restic repository password:
+#   Method 1: RESTIC_PASSWORD - Direct password in config/env (less secure)
+#   Method 2: RESTIC_PASSWORD_FILE - Path to file containing password (recommended)
+#   Method 3: RESTIC_PASSWORD_COMMAND - Command that outputs password
+#
+# ====================================================
+# Locking Mechanism
+# ====================================================
+# dbk uses file-based locking to prevent concurrent backups of the same
+# docker-compose.yml file. Lock files are stored in /tmp/dbk-locks/ by default.
+# Stale locks (from crashed processes) are automatically cleaned up on startup.
+
+# ============================================
+# Global Settings
+# ============================================
+
+# Execution mode: "parallel" or "sequential"
+# Default: "sequential" if not specified
+mode: sequential
+
+# Optional: Load environment variables from external file
+# Recommended for production to keep credentials separate from config
+# Supports: .env, .yaml, .yml, .json formats
+# Example: env_file: /etc/dbk/env.yaml
+env_file: ""
+
+# Inline environment variables (override external file values)
+# These are passed to both restic and docker compose commands
+# Use ${VAR_NAME} syntax to reference system environment variables
+environments:
+  # ========================================
+  # Restic Authentication (choose ONE method)
+  # ========================================
+
+  # Method 1: Direct password (not recommended for production)
+  # RESTIC_PASSWORD: "my-secret-password"
+
+  # Method 2: Password file path (RECOMMENDED for production)
+  RESTIC_PASSWORD_FILE: "/etc/dbk/restic-password"
+
+  # Method 3: Password from system environment variable
+  # RESTIC_PASSWORD: "${RESTIC_PASSWORD}"
+
+  # ========================================
+  # S3-Compatible Storage (AWS, MinIO, DigitalOcean, etc.)
+  # ========================================
+  AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
+  AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
+  AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-eu-central-1}"
+
+
+  # ========================================
+  # Backblaze B2
+  # ========================================
+  # B2_ACCOUNT_ID: "${B2_ACCOUNT_ID}"
+  # B2_ACCOUNT_KEY: "${B2_ACCOUNT_KEY}"
+
+  # ========================================
+  # SFTP/SSH
+  # ========================================
+  # SFTP_USERNAME: "${SFTP_USERNAME}"
+  # SFTP_PASSWORD: "${SFTP_PASSWORD}"
+  # SFTP_HOST: "backup-server.example.com"
+  # SFTP_PORT: "22"
+
+  # ========================================
+  # Restic Performance Options
+  # ========================================
+  # TMPDIR: "/tmp/restic-cache"
+  # GOMAXPROCS: "2"
+
+  # ========================================
+  # HTTP Proxy Settings
+  # ========================================
+  # HTTP_PROXY: "http://proxy.example.com:8080"
+  # HTTPS_PROXY: "http://proxy.example.com:8080"
+  # NO_PROXY: "localhost,127.0.0.1"
+
+# ============================================
+# Global Configuration
+# ============================================
+# Global settings apply to all projects and repository-wide operations
+
+global:
+  # REQUIRED: Restic repository location
+  # This is the only required global setting - all projects use this repo
+  #
+  # Supported backends (examples):
+  #   Local:     /srv/restic-repo
+  #   S3:        s3:s3.amazonaws.com/bucket-name
+  #   S3 Custom:  s3:https://s3.your-provider.com/bucket
+  #   B2:        b2:bucket-name
+  #   SFTP:      sftp:user@host:/path/to/repo
+  #   Rest:      rest:http://server:8000/repo
+  #   Azure:     azure:container-name:/path
+  #   Google:    gs:bucket-name:/path
+  #   Swift:     swift:container-name:/path
+  restic_repo: s3:https://s3.amazonaws.com/your-backups
+
+  # GLOBAL: Enable/disable automatic pruning
+  # When true: Each project with retention_policy runs 'forget', then ONE 'prune' runs for entire repo
+  # This is efficient as prune only needs to run once after all forget operations
+  # When false: You must manually run prune, or use restic's auto-prune features
+  auto_prune: true
+
+  # GLOBAL: Restic options for the repository-wide prune command
+  # These options are ONLY used for the global prune operation (not for individual backups)
+  # Useful for performance tuning and repository maintenance
+  prune_options:
+    # Cache directory for restic (improves performance)
+    - "--cache-dir=/tmp/restic-cache"
+
+    # Parallel upload/download connections
+    - "-o upload.concurrent=4"
+    - "-o download.concurrent=2"
+
+    # AWS-specific options
+    - "-o AWS.connections=50"
+    - "-o AWS.retries=3"
+
+    # Memory limits
+    # - "-o memory.limit-upload=50"  # Limit upload to 50 MiB/s
+    # - "-o memory.limit-download=50"  # Limit download to 50 MiB/s
+
+  # Optional: Global commands to run before/after ALL backups
+  # These run once at the start/end of the entire backup process
+  # Return code 0 = success, non-zero = failure (stops backup process)
+  # pre_backup_cmd: "/usr/local/bin/global-pre-backup-hook.sh"
+  # post_backup_cmd: "/usr/local/bin/global-post-backup-hook.sh"
+
+# ============================================
+# Project Definitions
+# ============================================
+# Each project represents a Docker Compose project to backup.
+# The key (project name) is used as the restic tag for easy identification.
+#
+# REQUIRED fields for each project:
+#   - compose_file: Absolute path to docker-compose.yml file
+#   - sources: List of directories/files to backup with restic
+#   - stop_timeout: Timeout in seconds for stopping containers
+#   - start_timeout: Timeout in seconds for starting containers
+#   - retention_policy: Retention policy for snapshots (used with forget)
+#
+# OPTIONAL fields for each project:
+#   - stop_containers: true/false - Enable/disable container stop/start (default: true)
+#   - services: List of specific services to stop/start (default: all from compose)
+#   - backup_options: Additional restic options for backup command only
+#   - forget_options: Additional restic options for forget command only
+#   - pre_backup_cmd: Project-specific pre-backup hook (overrides global)
+#   - post_backup_cmd: Project-specific post-backup hook (overrides global)
+#
+# Retention Policy Format:
+#   --keep-last N        Keep last N snapshots
+#   --keep-hourly N      Keep last N hourly snapshots
+#   --keep-daily N       Keep last N daily snapshots
+#   --keep-weekly N      Keep last N weekly snapshots
+#   --keep-monthly N     Keep last N monthly snapshots
+#   --keep-yearly N      Keep last N yearly snapshots
+#   --keep-within D      Keep snapshots within duration D (e.g., 30d, 2y)
+#   Examples:
+#     --keep-last 10
+#     --keep-daily 30 --keep-weekly 12 --keep-monthly 6
+#     --keep-within 30d
+#
+projects:
+  # ========================================
+  # Example 1: Full-stack web application
+  # ========================================
+  # This example shows a typical web app with database, cache, and file storage
+  # Backs up both the application data and Docker volumes
+  web-app:
+    # REQUIRED: Absolute path to docker-compose.yml file
+    compose_file: /srv/docker/web-app/docker-compose.yml
+
+    # REQUIRED: Timeout for stopping containers (seconds)
+    # Increase for containers that take longer to shut down gracefully
+    stop_timeout: 30
+
+    # REQUIRED: Timeout for starting containers (seconds)
+    # Increase for containers with long startup times or health checks
+    start_timeout: 60
+
+    # OPTIONAL: Specific services to stop/start
+    # If not specified, ALL services from compose file will be stopped
+    services:
+      - web
+      - api
+      - db
+      - redis
+
+    # REQUIRED: Directories and files to backup with restic
+    # Include both application data and Docker volume data
+    sources:
+      # Application code and configurations
+      - /srv/docker/web-app
+
+      # Docker volumes (automatically created by Docker)
+      - /var/lib/docker/volumes/webapp_db/_data
+      - /var/lib/docker/volumes/webapp_redis/_data
+      - /var/lib/docker/volumes/webapp_media/_data
+      - /var/lib/docker/volumes/webapp_static/_data
+
+    # REQUIRED: Retention policy for this project
+    # Keeps 30 daily snapshots, 12 weekly, and 6 monthly
+    retention_policy: --keep-daily 30 --keep-weekly 12 --keep-monthly 6
+
+    # OPTIONAL: Exclude patterns for backup
+    # Files matching these patterns will NOT be backed up
+    backup_options:
+      - "--exclude=*.tmp"
+      - "--exclude=*.log"
+      - "--exclude=*.cache"
+      - "--exclude=__pycache__/"
+      - "--exclude=.env"
+      - "--exclude=*.sqlite-journal"
+
+    # OPTIONAL: Additional options for forget command
+    # These are added to the forget command for this project
+    # forget_options:
+    #   - "--keep-tag=important"
+
+    # OPTIONAL: Project-specific pre/post backup commands
+    # These override the global commands for this project only
+    pre_backup_cmd: "/usr/local/bin/webapp-pre-backup.sh"
+    post_backup_cmd: "/usr/local/bin/webapp-post-backup.sh"
+
+  # ========================================
+  # Example 2: Database-only backup (read-only)
+  # ========================================
+  # This example shows a database that should NOT have its containers stopped
+  # Useful for databases with replication or high-availability setups
+  # where stopping containers would cause issues
+  postgres-ha:
+    compose_file: /srv/docker/postgres-ha/docker-compose.yml
+
+    stop_timeout: 10
+    start_timeout: 10
+
+    # Disable container stop/start for read-only backup
+    # The backup will run while containers are running
+    # Note: This may result in inconsistent backups for databases
+    # Consider using database-native backup tools instead
+    stop_containers: false
+
+    sources:
+      - /var/lib/docker/volumes/postgres_ha_data/_data
+      - /var/lib/docker/volumes/postgres_ha_wal/_data
+
+    # More aggressive retention for database backups
+    retention_policy: --keep-daily 90 --keep-weekly 52 --keep-monthly 12
+
+    # No per-project commands - uses global commands
+
+  # ========================================
+  # Example 3: Minimal configuration
+  # ========================================
+  # Shows the minimum required configuration for a simple project
+  simple-service:
+    compose_file: /srv/docker/simple-app/docker-compose.yml
+    stop_timeout: 10
+    start_timeout: 10
+    sources:
+      - /srv/docker/simple-app/data
+    retention_policy: --keep-daily 7
+
+  # ========================================
+  # Example 4: Development environment
+  # ========================================
+  # Shows a project with custom retention and backup options
+  dev-environment:
+    compose_file: /home/dev/projects/myapp/docker-compose.yml
+    stop_timeout: 5
+    start_timeout: 5
+    sources:
+      - /home/dev/projects/myapp
+      - /var/lib/docker/volumes/dev_db/_data
+
+    # Less retention for development (saves space)
+    retention_policy: --keep-last 5
+
+    # Exclude common development files
+    backup_options:
+      - "--exclude=node_modules/"
+      - "--exclude=.git/"
+      - "--exclude=*.log"
+      - "--exclude=dist/"
+
+  # ========================================
+  # Example 5: Multi-service with specific service selection
+  # ========================================
+  # Only backup specific services from a larger compose file
+  monitoring-stack:
+    compose_file: /srv/docker/monitoring/docker-compose.yml
+    stop_timeout: 15
+    start_timeout: 30
+
+    # Only stop these specific services (not all in compose file)
+    services:
+      - prometheus
+      - alertmanager
+
+    sources:
+      - /var/lib/docker/volumes/monitoring_prometheus/_data
+      - /var/lib/docker/volumes/monitoring_alertmanager/_data
+      - /srv/docker/monitoring/config
+
+    retention_policy: --keep-daily 30 --keep-weekly 12
+
+    # Performance options for time-series data
+    backup_options:
+      - "--exclude=*.tmp"
+      - "-o upload.concurrent=2"  # Slower upload for large files

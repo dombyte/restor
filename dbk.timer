@@ -1,0 +1,11 @@
+[Unit]
+Description=Docker Backup
+Documentation=https://github.com/restic/restic
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+
+[Install]
+WantedBy=timers.target
