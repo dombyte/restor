@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	github.com/rs/zerolog v1.32.0
 	github.com/spf13/cobra v1.7.0
-	github.com/spf13/viper v1.18.0
+	github.com/spf13/viper v1.18.2
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
 )
 
