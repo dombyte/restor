@@ -1,11 +1,10 @@
 [Unit]
 Description=Docker Backup
-Documentation=https://github.com/restic/restic
 
 [Timer]
-OnCalendar=daily
+OnCalendar=*-*-* 01:00:00
 Persistent=true
-
+Unit=dbk.service
 
 [Install]
 WantedBy=timers.target

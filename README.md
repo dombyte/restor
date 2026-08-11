@@ -52,12 +52,15 @@ sudo cp dbk.timer /etc/systemd/system/
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now dbk.timer
+sudo systemctl enable dbk.service
+sudo systemctl start dbk.timer
+sudo systemctl enable dbk.timer
 ```
 
 ### 5. Verify
 
 ```bash
+systemctl list-timers
 sudo systemctl status dbk.timer
 sudo journalctl -u dbk -f
 ```
