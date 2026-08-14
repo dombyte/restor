@@ -177,9 +177,10 @@ global:
 # The key (project name) is used as the restic tag for easy identification.
 #
 # REQUIRED fields for each project:
-#   - service_manager: Type of service manager ("docker-compose", "podman-compose", or "systemd")
+#   - service_manager: Type of service manager ("docker-compose", "podman-compose", "systemd", or "noop")
 #   - For docker-compose/podman-compose: compose_file (absolute path to compose file)
 #   - For systemd: systemd_units (list of systemd unit names)
+#   - For noop: No additional service configuration needed (file-only backups)
 #   - sources: List of directories/files to backup with restic
 #   - stop_timeout: Timeout in seconds for stopping services
 #   - start_timeout: Timeout in seconds for starting services
@@ -473,3 +474,24 @@ projects:
       - /etc/postgresql
 
     retention_policy: --keep-daily 7
+
+  # ========================================
+  # Example 10: File-only backup (noop service manager)
+  # ========================================
+  # For backups that only backup files/directories without any services to manage
+  # Useful for static file backups, configuration files, or any backup that doesn't
+  # require stopping/starting services
+  file-backup:
+    service_manager: noop
+    
+    stop_timeout: 10
+    start_timeout: 10
+
+    # Just backup these directories - no services involved
+    sources:
+      - /etc/nginx
+      - /etc/apache2
+      - /home/ubuntu/important-files
+      - /var/log/custom-logs
+
+    retention_policy: --keep-daily 14 --keep-weekly 8

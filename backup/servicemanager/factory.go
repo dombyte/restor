@@ -27,8 +27,10 @@ func (f *Factory) CreateServiceManager(config *ServiceConfig, env []string, logg
 		return nil, err
 	}
 
-	// Validate and warn about missing binaries
-	f.validateBinaries(config)
+	// Validate and warn about missing binaries (skip for noop)
+	if config.ServiceManagerType != TypeNoop {
+		f.validateBinaries(config)
+	}
 
 	// Use provided logger or default
 	l := log.Logger
@@ -52,6 +54,10 @@ func (f *Factory) CreateServiceManager(config *ServiceConfig, env []string, logg
 		}
 		l.Debug().Str("service_manager", TypeSystemd).Strs("units", config.SystemdUnits).Str("scope", scope).Msg("Creating Systemd service manager")
 		return NewSystemd(config.SystemdUnits, scope, env, l), nil
+
+	case TypeNoop:
+		l.Debug().Str("service_manager", TypeNoop).Msg("Creating Noop service manager")
+		return NewNoop(env, l), nil
 
 	default:
 		return nil, &ConfigValidationError{

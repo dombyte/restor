@@ -5,6 +5,7 @@ const (
 	TypeDockerCompose = "docker-compose"
 	TypePodmanCompose = "podman-compose"
 	TypeSystemd       = "systemd"
+	TypeNoop         = "noop"
 )
 
 // Systemd scope constants

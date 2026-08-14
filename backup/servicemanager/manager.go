@@ -52,6 +52,9 @@ func (sc *ServiceConfig) Validate() error {
 				Message:  "systemd_scope must be 'system' or 'user'",
 			}
 		}
+	case TypeNoop:
+		// Noop service manager doesn't require any additional configuration
+		// It's used for file-only backups without any services to manage
 	default:
 		return &ConfigValidationError{
 			Field:    "service_manager",

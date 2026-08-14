@@ -345,6 +345,9 @@ func (c *Config) validateServiceManagerConfig(name string, projectConfig Project
 		if projectConfig.SystemdScope != "" && projectConfig.SystemdScope != "system" && projectConfig.SystemdScope != "user" {
 			return fmt.Errorf("project %s: systemd_scope must be 'system' or 'user'", name)
 		}
+	case "noop":
+		// Noop service manager doesn't require any additional configuration
+		// It's used for file-only backups without any services to manage
 	default:
 		return fmt.Errorf("project %s: unsupported service_manager: %s", name, projectConfig.ServiceManager)
 	}
