@@ -15,9 +15,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Version is set at build time using -ldflags
+var Version = "dev"
+
+// BuildDate is set at build time using -ldflags
+var BuildDate = ""
+
+// GitCommit is set at build time using -ldflags
+var GitCommit = ""
+
 var (
 	configFlag string
 	debugFlag  bool
+	versionFlag bool
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -39,10 +49,48 @@ func Execute() {
 	cobra.CheckErr(rootCmd.Execute())
 }
 
+// versionCmd represents the version command
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print the version number of dbk",
+	Long:  "All software has versions. This is dbk's",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("dbk version %s\n", Version)
+		if BuildDate != "" {
+			fmt.Printf("build date: %s\n", BuildDate)
+		}
+		if GitCommit != "" {
+			fmt.Printf("git commit: %s\n", GitCommit)
+		}
+	},
+}
+
 func init() {
 	cobra.OnInitialize(initConfig)
+
+	// Add version flag
+	rootCmd.Flags().BoolVarP(&versionFlag, "version", "v", false, "Print version and exit")
+
+	// Add subcommands
+	rootCmd.AddCommand(versionCmd)
+
 	rootCmd.Flags().StringVar(&configFlag, "config", "", "Configuration file path (required)")
 	rootCmd.Flags().BoolVar(&debugFlag, "debug", false, "Enable debug logging")
+
+	// Set up pre-run to handle version flag before required flag check
+	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		if versionFlag {
+			fmt.Printf("dbk version: %s\n", Version)
+			if BuildDate != "" {
+				fmt.Printf("build date: %s\n", BuildDate)
+			}
+			if GitCommit != "" {
+				fmt.Printf("git commit: %s\n", GitCommit)
+			}
+			os.Exit(0)
+		}
+	}
+
 	rootCmd.MarkFlagRequired("config")
 }
 
