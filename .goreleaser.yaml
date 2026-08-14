@@ -1,6 +1,6 @@
 version: 2
 
-project_name: dbk
+project_name: restor
 before:
   hooks:
     - go mod tidy
@@ -9,7 +9,7 @@ before:
 builds:
   - id: solis-multi-arch
     main: ./main.go
-    binary: dbk
+    binary: restor
     goos:
       - linux
       - darwin
@@ -26,7 +26,7 @@ builds:
     env:
       - CGO_ENABLED=0
     ldflags:
-      - "-s -w -X github.com/dombyte/dbk/cmd.Version={{.Version}} -X github.com/dombyte/dbk/cmd.BuildDate={{.Date}} -X github.com/dombyte/dbk/cmd.GitCommit={{.ShortCommit}}"
+      - "-s -w -X github.com/dombyte/restor/cmd.Version={{.Version}} -X github.com/dombyte/restor/cmd.BuildDate={{.Date}} -X github.com/dombyte/restor/cmd.GitCommit={{.ShortCommit}}"
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:

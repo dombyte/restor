@@ -1,9 +1,9 @@
 [Unit]
-Description=Docker Backup
+Description=Restic Backup Orchestrator
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/dbk --config /etc/dbk/config.yaml
+ExecStart=/usr/local/bin/restor --config /etc/restor/config.yaml
 StandardOutput=journal
 StandardError=journal
 

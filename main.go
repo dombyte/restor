@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/dombyte/dbk/cmd"
+	"github.com/dombyte/restor/cmd"
 )
 
 func main() {

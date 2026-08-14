@@ -7,8 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/dombyte/dbk/backup"
-	"github.com/dombyte/dbk/config"
+	"github.com/dombyte/restor/backup"
+	"github.com/dombyte/restor/config"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -32,12 +32,12 @@ var (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "dbk --config <file>",
-	Short: "Docker container backup tool using restic",
-	Long: `dbk is a CLI tool for backing up Docker containers using restic.
+	Use:   "restor --config <file>",
+	Short: "Restic backup orchestrator",
+	Long: `restor is a CLI tool for orchestrating backups using restic.
 
 It supports multiple projects, parallel/sequential execution, and automatic
-container stop/start during backup.`,
+service stop/start during backup.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runBackup(cmd.Context())
 	},
@@ -52,10 +52,10 @@ func Execute() {
 // versionCmd represents the version command
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "Print the version number of dbk",
-	Long:  "All software has versions. This is dbk's",
+	Short: "Print the version number of restor",
+	Long:  "All software has versions. This is restor's",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("dbk version %s\n", Version)
+		fmt.Printf("restor version %s\n", Version)
 		if BuildDate != "" {
 			fmt.Printf("build date: %s\n", BuildDate)
 		}
@@ -80,7 +80,7 @@ func init() {
 	// Set up pre-run to handle version flag before required flag check
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		if versionFlag {
-			fmt.Printf("dbk version: %s\n", Version)
+			fmt.Printf("restor version: %s\n", Version)
 			if BuildDate != "" {
 				fmt.Printf("build date: %s\n", BuildDate)
 			}

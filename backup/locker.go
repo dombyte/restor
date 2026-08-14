@@ -18,7 +18,7 @@ type Locker struct {
 // NewLocker creates a new Locker with the specified lock directory
 func NewLocker(lockDir string) *Locker {
 	if lockDir == "" {
-		lockDir = "/tmp/dbk-locks"
+		lockDir = "/tmp/restor-locks"
 	}
 	return &Locker{
 		lockDir: lockDir,

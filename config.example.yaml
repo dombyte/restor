@@ -1,15 +1,15 @@
-# Docker Backup Tool (dbk) - Configuration Example
+# Restor - Restic Backup Orchestrator - Configuration Example
 # ====================================================
 #
-# This file demonstrates all available configuration options for dbk.
+# This file demonstrates all available configuration options for restor.
 #
 # Config Format Support: YAML (.yaml, .yml), JSON (.json), TOML (.toml)
 #
 # Usage:
 #   cp config.example.yaml config.yaml
-#   ./dbk --config config.yaml
+#   ./restor --config config.yaml
 #
-# For systemd installation, place config at /etc/dbk/config.yaml
+# For systemd installation, place config at /etc/restor/config.yaml
 #
 # ====================================================
 # Execution Modes
@@ -48,8 +48,8 @@
 # ====================================================
 # Locking Mechanism
 # ====================================================
-# dbk uses file-based locking to prevent concurrent backups of the same
-# docker-compose.yml file. Lock files are stored in /tmp/dbk-locks/ by default.
+# restor uses file-based locking to prevent concurrent backups of the same
+# compose file. Lock files are stored in /tmp/restor-locks/ by default.
 # Stale locks (from crashed processes) are automatically cleaned up on startup.
 
 # ============================================
@@ -63,7 +63,7 @@ mode: sequential
 # Optional: Load environment variables from external file
 # Recommended for production to keep credentials separate from config
 # Supports: .env, .yaml, .yml, .json formats
-# Example: env_file: /etc/dbk/env.yaml
+# Example: env_file: /etc/restor/env.yaml
 env_file: ""
 
 # Inline environment variables (override external file values)
@@ -78,7 +78,7 @@ environments:
   # RESTIC_PASSWORD: "my-secret-password"
 
   # Method 2: Password file path (RECOMMENDED for production)
-  RESTIC_PASSWORD_FILE: "/etc/dbk/restic-password"
+  RESTIC_PASSWORD_FILE: "/etc/restor/restic-password"
 
   # Method 3: Password from system environment variable
   # RESTIC_PASSWORD: "${RESTIC_PASSWORD}"

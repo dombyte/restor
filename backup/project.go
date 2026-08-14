@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dombyte/dbk/backup/restic"
-	"github.com/dombyte/dbk/backup/servicemanager"
-	"github.com/dombyte/dbk/config"
+	"github.com/dombyte/restor/backup/restic"
+	"github.com/dombyte/restor/backup/servicemanager"
+	"github.com/dombyte/restor/config"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"

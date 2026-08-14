@@ -1,10 +1,10 @@
-# Docker Backup
+# Restor
 
-Backup Docker containers and volumes to a restic repository.
+Restic Backup Orchestrator - Back up services and files to a restic repository.
 
 ## Features
 
-- Multiple Docker Compose projects from one config file
+- Multiple projects from one config file
 - Parallel or sequential execution
 - Automatic container stop/start during backup
 - Per-project retention policies (forget) with a single global prune
@@ -21,48 +21,48 @@ Backup Docker containers and volumes to a restic repository.
 
 2. Run manually:
    ```bash
-   ./dbk --config config.yaml
+   ./restor --config config.yaml
    ```
 
 ## Systemd Installation
 
 ### 1. Install binary
 
-Copy `dbk` to `/usr/local/bin/dbk`:
+Copy `restor` to `/usr/local/bin/restor`:
 ```bash
-sudo cp dbk /usr/local/bin/dbk
+sudo cp restor /usr/local/bin/restor
 ```
 
 ### 2. Install config
 
-Copy your config to `/etc/dbk/config.yaml`:
+Copy your config to `/etc/restor/config.yaml`:
 ```bash
-sudo mkdir -p /etc/dbk
-sudo cp config.yaml /etc/dbk/
+sudo mkdir -p /etc/restor
+sudo cp config.yaml /etc/restor/
 ```
 
 ### 3. Install systemd files
 
 ```bash
-sudo cp dbk.service /etc/systemd/system/
-sudo cp dbk.timer /etc/systemd/system/
+sudo cp restor.service /etc/systemd/system/
+sudo cp restor.timer /etc/systemd/system/
 ```
 
 ### 4. Enable and start
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable dbk.service
-sudo systemctl start dbk.timer
-sudo systemctl enable dbk.timer
+sudo systemctl enable restor.service
+sudo systemctl start restor.timer
+sudo systemctl enable restor.timer
 ```
 
 ### 5. Verify
 
 ```bash
 systemctl list-timers
-sudo systemctl status dbk.timer
-sudo journalctl -u dbk -f
+sudo systemctl status restor.timer
+sudo journalctl -u restor -f
 ```
 
 ## Configuration

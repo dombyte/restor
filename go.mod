@@ -1,4 +1,4 @@
-module github.com/dombyte/dbk
+module github.com/dombyte/restor
 
 go 1.26.5
 

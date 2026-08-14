@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/dombyte/dbk/backup/restic"
-	"github.com/dombyte/dbk/config"
+	"github.com/dombyte/restor/backup/restic"
+	"github.com/dombyte/restor/config"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
