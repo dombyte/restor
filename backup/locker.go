@@ -162,7 +162,7 @@ func (l *Locker) CleanupStaleLocks() error {
 			continue
 		}
 		// Lock is stale, remove it
-		log.Info().Str("lock_file", lockFile).Msg("Cleaned up stale lock file")
+		log.Debug().Str("lock_file", lockFile).Msg("Cleaned up stale lock file")
 		if err := os.Remove(lockFile); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("failed to remove stale lock file %s: %w", lockFile, err)
 		}

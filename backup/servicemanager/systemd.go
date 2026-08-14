@@ -98,7 +98,7 @@ func (s *Systemd) GetServices(ctx context.Context, services []string) ([]string,
 // Stop stops the specified systemd services
 func (s *Systemd) Stop(ctx context.Context, services []string, timeout time.Duration) error {
 	if len(services) == 0 {
-		s.logger.Info().Msg("No services to stop")
+		s.logger.Debug().Msg("No services to stop")
 		return nil
 	}
 
@@ -132,7 +132,7 @@ func (s *Systemd) Stop(ctx context.Context, services []string, timeout time.Dura
 // Start starts the specified systemd services
 func (s *Systemd) Start(ctx context.Context, services []string, timeout time.Duration) error {
 	if len(services) == 0 {
-		s.logger.Info().Msg("No services to start")
+		s.logger.Debug().Msg("No services to start")
 		return nil
 	}
 

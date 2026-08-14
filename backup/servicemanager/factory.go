@@ -38,6 +38,10 @@ func (f *Factory) CreateServiceManager(config *ServiceConfig, env []string, logg
 		l = logger[0]
 	}
 
+	// Add service_manager to the logger context for consistent logging
+	// Note: Project name may already be in the logger passed from project.go
+	l = l.With().Str("service_manager", config.ServiceManagerType).Logger()
+
 	switch config.ServiceManagerType {
 	case TypeDockerCompose:
 		l.Debug().Str("service_manager", TypeDockerCompose).Str("compose_file", config.ComposeFile).Msg("Creating Docker Compose service manager")
@@ -86,7 +90,7 @@ func (f *Factory) validateBinaries(config *ServiceConfig) {
 	if !binaryExists(binary) {
 		log.Warn().Str("binary", binary).Str("service_manager", config.ServiceManagerType).Msg("Binary not found in PATH - operations will fail if the binary is not available at runtime")
 	} else {
-		log.Debug().Str("binary", binary).Msg("Binary found in PATH")
+		log.Debug().Str("binary", binary).Str("service_manager", config.ServiceManagerType).Msg("Binary found in PATH")
 	}
 }
 

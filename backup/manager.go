@@ -73,7 +73,10 @@ func (m *Manager) Run(ctx context.Context) error {
 	if hasAutoPrune {
 		for _, project := range m.projects {
 			if project.RetentionPolicy != "" {
-				projectLogger := logger.With().Str("project", project.Name).Logger()
+				projectLogger := logger.With().
+					Str("project", project.Name).
+					Str("service_manager", project.ServiceManager).
+					Logger()
 				projectRestic := restic.NewRestic(project.ResticRepo, config.GetEnvArray(project.Environment), []string{}, projectLogger)
 				projectLogger.Info().Str("tag", project.Name).Str("retention_policy", project.RetentionPolicy).Msg("Running forget")
 				if forgetErr := projectRestic.Forget(ctx, project.Name, project.RetentionPolicy, project.ForgetOptions); forgetErr != nil {

@@ -82,7 +82,7 @@ func (c *DockerCompose) GetServices(ctx context.Context, services []string) ([]s
 // Stop stops the specified services
 func (c *DockerCompose) Stop(ctx context.Context, services []string, timeout time.Duration) error {
 	if len(services) == 0 {
-		c.logger.Info().Msg("No services to stop")
+		c.logger.Debug().Msg("No services to stop")
 		return nil
 	}
 
@@ -109,7 +109,7 @@ func (c *DockerCompose) Stop(ctx context.Context, services []string, timeout tim
 // Start starts the specified services
 func (c *DockerCompose) Start(ctx context.Context, services []string, timeout time.Duration) error {
 	if len(services) == 0 {
-		c.logger.Info().Msg("No services to start")
+		c.logger.Debug().Msg("No services to start")
 		return nil
 	}
 

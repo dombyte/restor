@@ -108,7 +108,7 @@ func (pb *ProjectBackup) Run(ctx context.Context) error {
 			return fmt.Errorf("failed to get services: %w", getServicesErr)
 		}
 
-		logger.Info().Strs("services", services).Msg("Services to manage")
+		logger.Debug().Strs("services", services).Msg("Services to manage")
 
 		// Stop services
 		if len(services) > 0 {
@@ -125,7 +125,7 @@ func (pb *ProjectBackup) Run(ctx context.Context) error {
 			}
 		}
 	} else {
-		logger.Info().Msg("Service stop/start disabled for this project")
+		logger.Debug().Msg("Service stop/start disabled for this project")
 	}
 
 	// Run the actual backup
