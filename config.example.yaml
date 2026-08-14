@@ -173,19 +173,24 @@ global:
 # ============================================
 # Project Definitions
 # ============================================
-# Each project represents a Docker Compose project to backup.
+# Each project represents a service project to backup.
 # The key (project name) is used as the restic tag for easy identification.
 #
 # REQUIRED fields for each project:
-#   - compose_file: Absolute path to docker-compose.yml file
+#   - service_manager: Type of service manager ("docker-compose", "podman-compose", or "systemd")
+#   - For docker-compose/podman-compose: compose_file (absolute path to compose file)
+#   - For systemd: systemd_units (list of systemd unit names)
 #   - sources: List of directories/files to backup with restic
-#   - stop_timeout: Timeout in seconds for stopping containers
-#   - start_timeout: Timeout in seconds for starting containers
+#   - stop_timeout: Timeout in seconds for stopping services
+#   - start_timeout: Timeout in seconds for starting services
 #   - retention_policy: Retention policy for snapshots (used with forget)
 #
 # OPTIONAL fields for each project:
-#   - stop_containers: true/false - Enable/disable container stop/start (default: true)
-#   - services: List of specific services to stop/start (default: all from compose)
+#   - stop_services: true/false - Enable/disable service stop/start (default: true)
+#     * When false: Services continue running during backup (read-only mode)
+#     * Useful for databases, high-availability services, or when using filesystem snapshots
+#   - services: List of specific services to stop/start (default: all from service manager)
+#   - systemd_scope: For systemd only - "system" (default) or "user" for user-level services
 #   - backup_options: Additional restic options for backup command only
 #   - forget_options: Additional restic options for forget command only
 #   - pre_backup_cmd: Project-specific pre-backup hook (overrides global)
@@ -206,11 +211,14 @@ global:
 #
 projects:
   # ========================================
-  # Example 1: Full-stack web application
+  # Example 1: Full-stack web application (Docker Compose)
   # ========================================
   # This example shows a typical web app with database, cache, and file storage
   # Backs up both the application data and Docker volumes
   web-app:
+    # REQUIRED: Service manager type
+    service_manager: docker-compose
+    
     # REQUIRED: Absolute path to docker-compose.yml file
     compose_file: /srv/docker/web-app/docker-compose.yml
 
@@ -267,22 +275,23 @@ projects:
     post_backup_cmd: "/usr/local/bin/webapp-post-backup.sh"
 
   # ========================================
-  # Example 2: Database-only backup (read-only)
+  # Example 2: Database-only backup (read-only, stop/start disabled)
   # ========================================
   # This example shows a database that should NOT have its containers stopped
   # Useful for databases with replication or high-availability setups
   # where stopping containers would cause issues
   postgres-ha:
+    service_manager: docker-compose
     compose_file: /srv/docker/postgres-ha/docker-compose.yml
 
     stop_timeout: 10
     start_timeout: 10
 
-    # Disable container stop/start for read-only backup
-    # The backup will run while containers are running
+    # Disable service stop/start for read-only backup
+    # The backup will run while services are running
     # Note: This may result in inconsistent backups for databases
-    # Consider using database-native backup tools instead
-    stop_containers: false
+    # Consider using database-native backup tools instead, or use filesystem snapshots
+    stop_services: false
 
     sources:
       - /var/lib/docker/volumes/postgres_ha_data/_data
@@ -298,6 +307,7 @@ projects:
   # ========================================
   # Shows the minimum required configuration for a simple project
   simple-service:
+    service_manager: docker-compose
     compose_file: /srv/docker/simple-app/docker-compose.yml
     stop_timeout: 10
     start_timeout: 10
@@ -310,6 +320,7 @@ projects:
   # ========================================
   # Shows a project with custom retention and backup options
   dev-environment:
+    service_manager: docker-compose
     compose_file: /home/dev/projects/myapp/docker-compose.yml
     stop_timeout: 5
     start_timeout: 5
@@ -332,6 +343,7 @@ projects:
   # ========================================
   # Only backup specific services from a larger compose file
   monitoring-stack:
+    service_manager: docker-compose
     compose_file: /srv/docker/monitoring/docker-compose.yml
     stop_timeout: 15
     start_timeout: 30
@@ -352,3 +364,112 @@ projects:
     backup_options:
       - "--exclude=*.tmp"
       - "-o upload.concurrent=2"  # Slower upload for large files
+
+  # ========================================
+  # Example 6: Podman Compose application
+  # ========================================
+  # Same as Docker Compose but uses Podman instead
+  podman-app:
+    service_manager: podman-compose
+    compose_file: /srv/podman/myapp/docker-compose.yml
+    stop_timeout: 20
+    start_timeout: 40
+
+    sources:
+      - /srv/podman/myapp
+      - /var/lib/containers/storage/volumes/myapp_data/_data
+
+    retention_policy: --keep-daily 14 --keep-weekly 8
+
+  # ========================================
+  # Example 7: Systemd services (system-level)
+  # ========================================
+  # Back up systemd services running at system level
+  systemd-services:
+    service_manager: systemd
+    
+    # REQUIRED: List of systemd unit names to manage
+    systemd_units:
+      - nginx.service
+      - mysql.service
+      - redis.service
+    
+    # OPTIONAL: Scope - "system" (default) or "user" for user-level services
+    systemd_scope: system
+    
+    stop_timeout: 15
+    start_timeout: 30
+
+    # Back up configuration files and data directories
+    sources:
+      - /etc/nginx
+      - /etc/mysql
+      - /var/lib/mysql
+      - /var/lib/redis
+      - /var/log/nginx
+
+    retention_policy: --keep-daily 7 --keep-weekly 4
+
+  # ========================================
+  # Example 8: Systemd user services
+  # ========================================
+  # Back up systemd services running at user level
+  user-services:
+    service_manager: systemd
+    
+    systemd_units:
+      - myapp.service
+      - mydb.service
+    
+    # User-level services
+    systemd_scope: user
+    
+    stop_timeout: 10
+    start_timeout: 20
+
+    sources:
+      - /home/myuser/.config/myapp
+      - /home/myuser/.local/share/myapp
+
+    retention_policy: --keep-last 5
+
+  # ========================================
+  # Example 9: Read-only backup (stop/start disabled)
+  # ========================================
+  # Demonstrate how to disable service stop/start for read-only backups
+  # Useful for databases, high-availability services, or when using filesystem snapshots
+  read-only-docker:
+    service_manager: docker-compose
+    compose_file: /srv/docker/ha-database/docker-compose.yml
+    
+    # Disable service stop/start - services keep running during backup
+    stop_services: false
+    
+    stop_timeout: 10
+    start_timeout: 10
+
+    sources:
+      - /var/lib/docker/volumes/db_data/_data
+      - /srv/docker/ha-database/config
+
+    retention_policy: --keep-daily 7
+
+  # Read-only backup for systemd services
+  read-only-systemd:
+    service_manager: systemd
+    systemd_units:
+      - postgres.service
+      - redis.service
+    
+    # Disable service stop/start - services keep running during backup
+    stop_services: false
+    
+    stop_timeout: 10
+    start_timeout: 10
+
+    sources:
+      - /var/lib/postgresql
+      - /var/lib/redis
+      - /etc/postgresql
+
+    retention_policy: --keep-daily 7

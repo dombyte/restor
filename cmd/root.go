@@ -106,7 +106,10 @@ func runBackup(ctx context.Context) error {
 	for _, project := range projects {
 		log.Info().
 			Str("project", project.Name).
+			Str("service_manager", project.ServiceManager).
 			Str("compose_file", project.ComposeFile).
+			Strs("systemd_units", project.SystemdUnits).
+			Str("systemd_scope", project.SystemdScope).
 			Strs("sources", project.Sources).
 			Strs("services", project.Services).
 			Bool("auto_prune", project.AutoPrune).

@@ -81,8 +81,25 @@ func (c *Config) resolveProject(name string, projectConfig ProjectConfig, envVar
 
 	// Apply defaults first, then override with project-specific values
 
-	// ComposeFile (required per project, no default)
+	// ServiceManager (required per project)
+	if projectConfig.ServiceManager == "" {
+		return nil, fmt.Errorf("service_manager is required for project %s", name)
+	}
+	project.ServiceManager = projectConfig.ServiceManager
+
+	// Validate service manager configuration
+	if err := c.validateServiceManagerConfig(name, projectConfig); err != nil {
+		return nil, err
+	}
+
+	// ComposeFile (required for docker-compose and podman-compose)
 	project.ComposeFile = projectConfig.ComposeFile
+
+	// SystemdUnits (required for systemd)
+	project.SystemdUnits = projectConfig.SystemdUnits
+
+	// SystemdScope (optional for systemd, defaults to "system")
+	project.SystemdScope = projectConfig.SystemdScope
 
 	// Services
 	project.Services = projectConfig.Services
@@ -105,10 +122,10 @@ func (c *Config) resolveProject(name string, projectConfig ProjectConfig, envVar
 	// AutoPrune (from global settings)
 	project.AutoPrune = c.Global.AutoPrune
 
-	// StopContainers (per project only, defaults to true if not specified)
-	project.StopContainers = true // Default to true
-	if projectConfig.StopContainers != nil {
-		project.StopContainers = *projectConfig.StopContainers
+	// StopServices (per project only, defaults to true if not specified)
+	project.StopServices = true // Default to true
+	if projectConfig.StopServices != nil {
+		project.StopServices = *projectConfig.StopServices
 	}
 
 	// BackupOptions - per-project only for backup command
@@ -142,8 +159,19 @@ func (c *Config) resolveProject(name string, projectConfig ProjectConfig, envVar
 
 // expandProjectEnvVars expands environment variables in project fields
 func expandProjectEnvVars(project *Project) error {
+	// Expand ServiceManager (though it's usually a literal value)
+	project.ServiceManager = os.ExpandEnv(project.ServiceManager)
+
 	// Expand ComposeFile
 	project.ComposeFile = os.ExpandEnv(project.ComposeFile)
+
+	// Expand SystemdUnits
+	for i, unit := range project.SystemdUnits {
+		project.SystemdUnits[i] = os.ExpandEnv(unit)
+	}
+
+	// Expand SystemdScope
+	project.SystemdScope = os.ExpandEnv(project.SystemdScope)
 
 	// Expand ResticRepo
 	project.ResticRepo = os.ExpandEnv(project.ResticRepo)
@@ -301,6 +329,26 @@ func loadJsonEnvFile(filePath string) (map[string]string, error) {
 		env[k] = os.ExpandEnv(v)
 	}
 	return env, nil
+}
+
+// validateServiceManagerConfig validates the service manager configuration for a project
+func (c *Config) validateServiceManagerConfig(name string, projectConfig ProjectConfig) error {
+	switch projectConfig.ServiceManager {
+	case "docker-compose", "podman-compose":
+		if projectConfig.ComposeFile == "" {
+			return fmt.Errorf("project %s: compose_file is required when service_manager is %s", name, projectConfig.ServiceManager)
+		}
+	case "systemd":
+		if len(projectConfig.SystemdUnits) == 0 {
+			return fmt.Errorf("project %s: systemd_units is required when service_manager is systemd", name)
+		}
+		if projectConfig.SystemdScope != "" && projectConfig.SystemdScope != "system" && projectConfig.SystemdScope != "user" {
+			return fmt.Errorf("project %s: systemd_scope must be 'system' or 'user'", name)
+		}
+	default:
+		return fmt.Errorf("project %s: unsupported service_manager: %s", name, projectConfig.ServiceManager)
+	}
+	return nil
 }
 
 // GetEnvArray converts environment map to array format for exec.Command

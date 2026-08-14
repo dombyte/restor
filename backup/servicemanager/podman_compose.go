@@ -1,4 +1,4 @@
-package docker
+package servicemanager
 
 import (
 	"context"
@@ -11,32 +11,37 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Compose wraps the docker compose CLI
-type Compose struct {
+// PodmanCompose wraps the podman compose CLI
+type PodmanCompose struct {
 	composeFile string
 	env         []string
 	logger      zerolog.Logger
 }
 
-// NewCompose creates a new Compose wrapper
-func NewCompose(composeFile string, env []string, logger ...zerolog.Logger) *Compose {
+// NewPodmanCompose creates a new PodmanCompose wrapper
+func NewPodmanCompose(composeFile string, env []string, logger ...zerolog.Logger) *PodmanCompose {
 	l := log.Logger
 	if len(logger) > 0 {
 		l = logger[0]
 	}
-	return &Compose{
+	return &PodmanCompose{
 		composeFile: composeFile,
 		env:         env,
 		logger:      l,
 	}
 }
 
-// buildCommand builds the base docker compose command
-func (c *Compose) buildCommand(args ...string) *exec.Cmd {
+// GetLockFileName returns the compose file path for locking
+func (c *PodmanCompose) GetLockFileName() string {
+	return c.composeFile
+}
+
+// buildCommand builds the base podman compose command
+func (c *PodmanCompose) buildCommand(args ...string) *exec.Cmd {
 	cmdArgs := []string{"compose", "-f", c.composeFile}
 	cmdArgs = append(cmdArgs, args...)
 
-	cmd := exec.Command("docker", cmdArgs...)
+	cmd := exec.Command("podman", cmdArgs...)
 	cmd.Env = c.env
 
 	return cmd
@@ -45,13 +50,13 @@ func (c *Compose) buildCommand(args ...string) *exec.Cmd {
 // GetServices returns the list of services defined in the compose file
 // If services parameter is provided, returns only those services
 // If services parameter is empty, returns all services
-func (c *Compose) GetServices(ctx context.Context, services []string) ([]string, error) {
+func (c *PodmanCompose) GetServices(ctx context.Context, services []string) ([]string, error) {
 	if len(services) > 0 {
 		// Use the provided services list
 		return services, nil
 	}
 
-	// Get all services from docker compose config
+	// Get all services from podman compose config
 	cmd := c.buildCommand("config", "--services")
 
 	output, err := cmd.Output()
@@ -70,12 +75,12 @@ func (c *Compose) GetServices(ctx context.Context, services []string) ([]string,
 		}
 	}
 
-	log.Debug().Strs("services", result).Msg("Found services in compose file")
+	c.logger.Debug().Strs("services", result).Msg("Found services in compose file")
 	return result, nil
 }
 
 // Stop stops the specified services
-func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Duration) error {
+func (c *PodmanCompose) Stop(ctx context.Context, services []string, timeout time.Duration) error {
 	if len(services) == 0 {
 		c.logger.Info().Msg("No services to stop")
 		return nil
@@ -102,7 +107,7 @@ func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Dura
 }
 
 // Start starts the specified services
-func (c *Compose) Start(ctx context.Context, services []string, timeout time.Duration) error {
+func (c *PodmanCompose) Start(ctx context.Context, services []string, timeout time.Duration) error {
 	if len(services) == 0 {
 		c.logger.Info().Msg("No services to start")
 		return nil
@@ -129,7 +134,7 @@ func (c *Compose) Start(ctx context.Context, services []string, timeout time.Dur
 }
 
 // waitForHealthy waits for the specified services to become healthy
-func (c *Compose) waitForHealthy(ctx context.Context, services []string, timeout time.Duration) error {
+func (c *PodmanCompose) waitForHealthy(ctx context.Context, services []string, timeout time.Duration) error {
 	// For simplicity, we'll just wait for the timeout duration
 	// A more robust implementation would check container health status
 	timer := time.NewTimer(timeout)
@@ -144,7 +149,7 @@ func (c *Compose) waitForHealthy(ctx context.Context, services []string, timeout
 }
 
 // Ps returns information about running containers
-func (c *Compose) Ps(ctx context.Context, services []string) (string, error) {
+func (c *PodmanCompose) Ps(ctx context.Context, services []string) (string, error) {
 	cmd := c.buildCommand("ps")
 	if len(services) > 0 {
 		cmd.Args = append(cmd.Args, services...)
@@ -156,4 +161,17 @@ func (c *Compose) Ps(ctx context.Context, services []string) (string, error) {
 	}
 
 	return string(output), nil
+}
+
+// IsContainerRunning checks if a container is running
+func (c *PodmanCompose) IsContainerRunning(ctx context.Context, service string) bool {
+	output, err := c.Ps(ctx, []string{service})
+	if err != nil {
+		return false
+	}
+
+	// Check if the service appears in the output and is running
+	// Podman compose ps output includes status information
+	return strings.Contains(output, service) &&
+		(strings.Contains(output, "Up") || strings.Contains(output, "Running"))
 }

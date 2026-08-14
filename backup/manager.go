@@ -131,7 +131,12 @@ func (m *Manager) runParallel(ctx context.Context) error {
 		go func(p config.Project) {
 			defer wg.Done()
 
-			pb := NewProjectBackup(&p, m.locker)
+			pb, err := NewProjectBackup(&p, m.locker)
+			if err != nil {
+				errors <- fmt.Errorf("project %s: failed to create project backup: %w", p.Name, err)
+				return
+			}
+
 			// Create project backup with a separate locker instance for each goroutine
 			// But we want to share the same lock directory, so we'll use the same locker
 
@@ -177,7 +182,13 @@ func (m *Manager) runSequential(ctx context.Context) error {
 		default:
 			// Continue with next project
 		}
-		pb := NewProjectBackup(&project, m.locker)
+
+		pb, err := NewProjectBackup(&project, m.locker)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("project %s: failed to create project backup: %w", project.Name, err))
+			logger.Error().Err(err).Str("project", project.Name).Msg("Project backup creation failed")
+			continue
+		}
 
 		logger.Info().Str("project", project.Name).Msg("Starting project backup")
 

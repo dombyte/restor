@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dombyte/dbk/backup/docker"
 	"github.com/dombyte/dbk/backup/restic"
+	"github.com/dombyte/dbk/backup/servicemanager"
 	"github.com/dombyte/dbk/config"
 
 	"github.com/rs/zerolog"
@@ -17,47 +17,77 @@ import (
 
 // ProjectBackup handles the backup process for a single project
 type ProjectBackup struct {
-	project *config.Project
-	compose *docker.Compose
-	restic  *restic.Restic
-	locker  *Locker
-	logger  zerolog.Logger
+	project    *config.Project
+	serviceMgr servicemanager.ServiceManager
+	restic     *restic.Restic
+	locker     *Locker
+	logger     zerolog.Logger
 }
 
 // NewProjectBackup creates a new ProjectBackup instance
-func NewProjectBackup(project *config.Project, locker *Locker) *ProjectBackup {
+func NewProjectBackup(project *config.Project, locker *Locker) (*ProjectBackup, error) {
 	// Convert environment map to array
 	envArray := config.GetEnvArray(project.Environment)
 
-	return &ProjectBackup{
-		project: project,
-		compose: docker.NewCompose(project.ComposeFile, envArray),
-		restic:  restic.NewRestic(project.ResticRepo, envArray, []string{}),
-		locker:  locker,
-		logger:  log.Logger,
+	// Create service manager based on project configuration
+	serviceConfig := &servicemanager.ServiceConfig{
+		ServiceManagerType: project.ServiceManager,
+		ComposeFile:        project.ComposeFile,
+		SystemdUnits:       project.SystemdUnits,
+		SystemdScope:       project.SystemdScope,
 	}
+
+	factory := servicemanager.NewFactory()
+	serviceMgr, err := factory.CreateServiceManager(serviceConfig, envArray)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create service manager: %w", err)
+	}
+
+	return &ProjectBackup{
+		project:    project,
+		serviceMgr: serviceMgr,
+		restic:     restic.NewRestic(project.ResticRepo, envArray, []string{}),
+		locker:     locker,
+		logger:     log.Logger,
+	}, nil
 }
 
 // Run executes the backup process for the project
 func (pb *ProjectBackup) Run(ctx context.Context) error {
 	logger := pb.logger.With().
 		Str("project", pb.project.Name).
-		Str("compose_file", pb.project.ComposeFile).
+		Str("service_manager", pb.project.ServiceManager).
 		Logger()
 
-	// Recreate compose with project-specific logger for better log context
-	pb.compose = docker.NewCompose(pb.project.ComposeFile, config.GetEnvArray(pb.project.Environment), logger)
+	// Recreate service manager with project-specific logger for better log context
+	serviceConfig := &servicemanager.ServiceConfig{
+		ServiceManagerType: pb.project.ServiceManager,
+		ComposeFile:        pb.project.ComposeFile,
+		SystemdUnits:       pb.project.SystemdUnits,
+		SystemdScope:       pb.project.SystemdScope,
+	}
+	
+	factory := servicemanager.NewFactory()
+	var err error
+	pb.serviceMgr, err = factory.CreateServiceManager(serviceConfig, config.GetEnvArray(pb.project.Environment), logger)
+	if err != nil {
+		return fmt.Errorf("failed to create service manager: %w", err)
+	}
 
 	// Recreate restic with project-specific logger for better log context
 	pb.restic = restic.NewRestic(pb.project.ResticRepo, config.GetEnvArray(pb.project.Environment), []string{}, logger)
 
-	// Acquire lock
-	if acquired, err := pb.locker.Lock(pb.project.ComposeFile); err != nil {
+	// Acquire lock using the service manager's lock file name
+	lockFileName := pb.serviceMgr.GetLockFileName()
+	if lockFileName == "" {
+		lockFileName = pb.project.Name // Fallback to project name if no lock file name
+	}
+	if acquired, err := pb.locker.Lock(lockFileName); err != nil {
 		return fmt.Errorf("failed to acquire lock: %w", err)
 	} else if !acquired {
-		return fmt.Errorf("compose file %s is already locked by another backup process", pb.project.ComposeFile)
+		return fmt.Errorf("project %s is already locked by another backup process", pb.project.Name)
 	}
-	defer pb.locker.Unlock(pb.project.ComposeFile)
+	defer pb.locker.Unlock(lockFileName)
 
 	// Execute pre-backup command if specified
 	if pb.project.PreBackupCmd != "" {
@@ -67,12 +97,12 @@ func (pb *ProjectBackup) Run(ctx context.Context) error {
 		}
 	}
 
-	// Get services to stop (either from config or all services from compose file)
+	// Get services to stop (either from config or all services from service manager)
 	// Only needed if we're stopping containers
 	var services []string
 	var getServicesErr error
-	if pb.project.StopContainers {
-		services, getServicesErr = pb.compose.GetServices(ctx, pb.project.Services)
+	if pb.project.StopServices {
+		services, getServicesErr = pb.serviceMgr.GetServices(ctx, pb.project.Services)
 		if getServicesErr != nil {
 			logger.Error().Err(getServicesErr).Msg("Failed to get services")
 			return fmt.Errorf("failed to get services: %w", getServicesErr)
@@ -80,22 +110,22 @@ func (pb *ProjectBackup) Run(ctx context.Context) error {
 
 		logger.Info().Strs("services", services).Msg("Services to manage")
 
-		// Stop containers
+		// Stop services
 		if len(services) > 0 {
-			if err := pb.compose.Stop(ctx, services, pb.project.StopTimeout); err != nil {
-				logger.Error().Err(err).Msg("Failed to stop containers")
+			if err := pb.serviceMgr.Stop(ctx, services, pb.project.StopTimeout); err != nil {
+				logger.Error().Err(err).Msg("Failed to stop services")
 				// Continue anyway, maybe we can still backup
 			}
 		}
 
-		// Ensure containers are stopped by checking status
+		// Ensure services are stopped by checking status
 		if len(services) > 0 {
 			if err := pb.waitForStopped(ctx, services, pb.project.StopTimeout); err != nil {
-				logger.Warn().Err(err).Msg("Containers may not have stopped completely")
+				logger.Warn().Err(err).Msg("Services may not have stopped completely")
 			}
 		}
 	} else {
-		logger.Info().Msg("Container stop/start disabled for this project")
+		logger.Info().Msg("Service stop/start disabled for this project")
 	}
 
 	// Run the actual backup
@@ -103,12 +133,12 @@ func (pb *ProjectBackup) Run(ctx context.Context) error {
 	if err != nil {
 		logger.Error().Err(err).Msg("Backup failed")
 
-		// Try to restart containers even if backup failed (only if we stopped them)
-		if pb.project.StopContainers && len(services) > 0 {
-			if restartErr := pb.compose.Start(ctx, services, pb.project.StartTimeout); restartErr != nil {
-				logger.Error().Err(restartErr).Msg("Failed to restart containers after backup failure")
+		// Try to restart services even if backup failed (only if we stopped them)
+		if pb.project.StopServices && len(services) > 0 {
+			if restartErr := pb.serviceMgr.Start(ctx, services, pb.project.StartTimeout); restartErr != nil {
+				logger.Error().Err(restartErr).Msg("Failed to restart services after backup failure")
 			} else {
-				logger.Info().Msg("Containers restarted after backup failure")
+				logger.Info().Msg("Services restarted after backup failure")
 			}
 		}
 
@@ -117,11 +147,11 @@ func (pb *ProjectBackup) Run(ctx context.Context) error {
 
 	logger.Info().Str("snapshot_id", snapshotID).Msg("Backup completed")
 
-	// Start containers back up (only if we stopped them)
-	if pb.project.StopContainers && len(services) > 0 {
-		if err := pb.compose.Start(ctx, services, pb.project.StartTimeout); err != nil {
-			logger.Error().Err(err).Msg("Failed to restart containers")
-			return fmt.Errorf("failed to restart containers: %w", err)
+	// Start services back up (only if we stopped them)
+	if pb.project.StopServices && len(services) > 0 {
+		if err := pb.serviceMgr.Start(ctx, services, pb.project.StartTimeout); err != nil {
+			logger.Error().Err(err).Msg("Failed to restart services")
+			return fmt.Errorf("failed to restart services: %w", err)
 		}
 	}
 
@@ -161,15 +191,15 @@ func (pb *ProjectBackup) runCommand(ctx context.Context, name, command string) e
 	return nil
 }
 
-// waitForStopped waits for containers to be stopped
+// waitForStopped waits for services to be stopped
 func (pb *ProjectBackup) waitForStopped(ctx context.Context, services []string, timeout time.Duration) error {
 	startTime := time.Now()
 
 	for {
-		// Check if all containers are stopped
+		// Check if all services are stopped
 		allStopped := true
 		for _, svc := range services {
-			if pb.isContainerRunning(ctx, svc) {
+			if pb.isServiceRunning(ctx, svc) {
 				allStopped = false
 				break
 			}
@@ -181,7 +211,7 @@ func (pb *ProjectBackup) waitForStopped(ctx context.Context, services []string, 
 
 		// Check timeout
 		if time.Since(startTime) >= timeout {
-			return fmt.Errorf("timeout waiting for containers to stop")
+			return fmt.Errorf("timeout waiting for services to stop")
 		}
 
 		// Wait a bit before checking again
@@ -194,16 +224,18 @@ func (pb *ProjectBackup) waitForStopped(ctx context.Context, services []string, 
 	}
 }
 
-// isContainerRunning checks if a container is running
-func (pb *ProjectBackup) isContainerRunning(ctx context.Context, service string) bool {
-	// Use docker compose ps to check container status
-	output, err := pb.compose.Ps(ctx, []string{service})
+// isServiceRunning checks if a service is running using the service manager
+func (pb *ProjectBackup) isServiceRunning(ctx context.Context, service string) bool {
+	// Use the service manager's Ps method to check service status
+	output, err := pb.serviceMgr.Ps(ctx, []string{service})
 	if err != nil {
 		return false
 	}
 
 	// Check if the service appears in the output and is running
-	// Docker compose ps output includes status information
+	// Different service managers have different output formats, but we can check for common patterns
 	return strings.Contains(output, service) &&
-		(strings.Contains(output, "Up") || strings.Contains(output, "Running"))
+		(strings.Contains(output, "Up") || 
+		 strings.Contains(output, "Running") ||
+		 strings.Contains(output, "active (running)"))
 }
