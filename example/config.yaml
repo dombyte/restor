@@ -6,7 +6,7 @@
 # Config Format Support: YAML (.yaml, .yml), JSON (.json), TOML (.toml)
 #
 # Usage:
-#   cp config.example.yaml config.yaml
+#   cp example/config.yaml config.yaml
 #   ./restor --config config.yaml
 #
 # For systemd installation, place config at /etc/restor/config.yaml

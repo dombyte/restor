@@ -15,7 +15,7 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
 
 1. Copy and edit a config file:
    ```bash
-   cp config.example.yaml config.yaml
+   cp example/config.yaml config.yaml
    # Edit config.yaml with your restic repo and projects
    ```
 
@@ -44,8 +44,8 @@ sudo cp config.yaml /etc/restor/
 ### 3. Install systemd files
 
 ```bash
-sudo cp restor.service /etc/systemd/system/
-sudo cp restor.timer /etc/systemd/system/
+sudo cp example/restor.service /etc/systemd/system/
+sudo cp example/restor.timer /etc/systemd/system/
 ```
 
 ### 4. Enable and start
@@ -67,7 +67,7 @@ sudo journalctl -u restor -f
 
 ## Configuration
 
-See `config.example.yaml` for all options.
+See `example/config.yaml` for all options and `example/restor.env` for an env file template.
 
 **Required:** `restic_repo`, `projects[]` with `compose_file`, `sources`, `stop_timeout`, `start_timeout`, `retention_policy`
 
