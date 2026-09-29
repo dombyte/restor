@@ -1,0 +1,182 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    # Style and best practices
+    - revive
+    - staticcheck
+    - unused
+    - misspell
+    - unconvert
+    - goprintffuncname
+    - importas
+    - whitespace
+    - perfsprint
+
+    # Error handling
+    - errcheck
+    - errorlint
+
+    # Security
+    - gosec
+
+    # Performance and complexity
+    - ineffassign
+    - gocyclo
+    - dupl
+    - mnd
+    - wastedassign
+
+    # Correctness / bug finding
+    - durationcheck
+    - govet
+    - makezero
+    - tparallel
+    - copyloopvar
+    - intrange
+    - bodyclose
+
+    # Database / SQL
+    - rowserrcheck
+    - sqlclosecheck
+
+    # Meta
+    - nolintlint
+
+    # Code structure
+    - lll
+
+    - gochecknoglobals
+    - forbidigo
+
+  settings:
+    forbidigo:
+      forbid:
+        - pattern: ^panic$
+          msg: "no panic at runtime; return an error"
+
+    # Line length linter - hard limit of 100 chars per Global Plan
+    lll:
+      line-length: 100
+      tab-width: 4
+
+    # Cyclomatic complexity linter (reports > min-complexity)
+    gocyclo:
+      min-complexity: 7
+
+
+    # Duplicate code linter
+    dupl:
+      threshold: 100
+
+    # Gosec linter - security checks
+    gosec:
+      confidence: high
+      severity: medium
+
+    # Stricter nolint discipline
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
+    # Errcheck: also flag unchecked type assertions and blank-assigned errors
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+
+    # Revive linter - modern replacement for golint
+    revive:
+      severity: warning
+      confidence: 0.8
+      rules:
+        # Documentation: require docs for exported identifiers
+        - name: exported
+          disabled: false
+
+        # Documentation: require package comments
+        - name: package-comments
+          disabled: false
+
+        # Style: max function length (args = max statements, max lines)
+        - name: function-length
+          disabled: false
+          arguments: [40, 40]
+
+        # Style: max function parameters
+        - name: argument-limit
+          disabled: false
+          arguments: [5]
+
+        # Error strings should not be capitalized / end with punctuation
+        - name: error-strings
+          disabled: false
+
+        # Naming conventions (e.g. Foo not FooUrl)
+        - name: var-naming
+          disabled: false
+
+        # if err != nil { return err } instead of wrapping in else
+        - name: indent-error-flow
+          disabled: false
+
+        # Detect unreachable code
+        - name: unreachable-code
+          disabled: false
+
+        # Redefining builtin identifiers (make, len, min, ...)
+        - name: redefines-builtin-id
+          disabled: false
+
+  exclusions:
+    generated: lax
+    paths:
+      - (^|/)test/
+      - (^|/)mocks/
+      - (^|/)ref/
+      - (^|/)vendor/
+      - (^|/)third_party/
+      - (^|/)builtin/
+      - (^|/)examples/
+      - \.pb\.go$
+      - _gen\.go$
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters: [revive, dupl, errcheck, gosec, lll, gochecknoglobals, forbidigo, mnd]
+        path: _test\.go
+      - linters: [rowserrcheck, sqlclosecheck, bodyclose]
+        path: _test\.go
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      extra-rules: false
+    goimports:
+      # Import groups: stdlib, third-party, project (AGENTS.md code style)
+      local-prefixes:
+        - github.com/dombyte/restor
+  exclusions:
+    generated: lax
+    paths:
+      - (^|/)test/
+      - (^|/)mocks/
+      - (^|/)ref/
+      - (^|/)vendor/
+      - (^|/)third_party/
+      - (^|/)builtin/
+      - (^|/)examples/
+      - \.pb\.go$
+      - _gen\.go$
+
+run:
+  timeout: 5m
+  allow-parallel-runners: true
+  modules-download-mode: readonly

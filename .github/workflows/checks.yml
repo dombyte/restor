@@ -1,0 +1,56 @@
+name: Checks
+
+on:
+  workflow_call: # reused by release.yml so a tag only ships after the checks pass
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Build, test, deadcode, govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Verify module tidiness
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test (race)
+        run: go test -race -cover ./...
+
+      - name: Dead code
+        run: |
+          DEAD=$(go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./...)
+          if [ -n "$DEAD" ]; then echo "$DEAD"; exit 1; fi
+
+      - name: Vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+  golangci-lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Lint + formatting (gofumpt, goimports) from .golangci.yml; covers function
+      # length, complexity, magic numbers, global state and the panic policy.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13
+          args: --config .golangci.yml

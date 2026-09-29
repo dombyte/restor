@@ -1,8 +1,7 @@
-name: dbk Release
+name: Release
 
 on:
   push:
-    # run only against tags
     tags:
       - "v*"
 
@@ -10,19 +9,52 @@ permissions:
   contents: write
 
 jobs:
-  goreleaser:
+  # A release only builds from a commit whose checks pass (same workflow as for PRs).
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  guard:
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Verify tag is on main branch
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor ${{ github.sha }} FETCH_HEAD; then
+            echo "::error::Tag ${{ github.ref_name }} must be on main branch to release"
+            exit 1
+          fi
+  build:
+    runs-on: ubuntu-latest
+    needs:
+      - guard
+      - checks
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - name: Checkout the specific tag
         run: git checkout ${{ github.ref_name }}
+
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      # Changelog and compare range always start at the last stable tag, so v1.2.0-rc1
+      # and v1.2.0 both compare against v1.1.0 (never v1.2.0-rc1...v1.2.0).
+      - name: Find previous stable tag
+        run: |
+          prev="$(git describe --tags --abbrev=0 --exclude '*-*' "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          if [ -n "$prev" ]; then
+            echo "GORELEASER_PREVIOUS_TAG=$prev" >> "$GITHUB_ENV"
+          fi
 
+      # No container image: restor runs on the host (see AGENTS.md "Deviations").
       - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
