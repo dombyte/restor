@@ -49,7 +49,8 @@
 # Locking Mechanism
 # ====================================================
 # restor uses file-based locking to prevent concurrent backups of the same
-# compose file. Lock files are stored in /tmp/restor-locks/ by default.
+# compose file. Each user has their own lock directory: /run/restor for root,
+# $XDG_RUNTIME_DIR/restor for other users ($TMPDIR/restor-<uid> without it).
 # Stale locks (from crashed processes) are automatically cleaned up on startup.
 
 # ============================================

@@ -1,0 +1,15 @@
+# User unit installed by the .deb/.rpm packages: systemctl --user enable --now restor.timer
+[Unit]
+Description=Restic Backup Orchestrator
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/restor --config %h/.config/restor/config.yaml
+# On stop, restor restarts the services it stopped and exits within 5 minutes; give it
+# longer than that before systemd kills it.
+TimeoutStopSec=330
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
