@@ -1,9 +1,13 @@
 package restic
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"strconv"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -36,6 +40,54 @@ func TestClient_Backup(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "1a2b3c4d", id)
+}
+
+// exitError fakes the exec error of a program that exited with code.
+type exitError int
+
+func (e exitError) Error() string { return "exit status " + strconv.Itoa(int(e)) }
+func (e exitError) ExitCode() int { return int(e) }
+
+func TestClient_BackupIncomplete(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	r := mocks.NewMockRunner(t)
+	c, err := New(Deps{Runner: r, Log: zerolog.New(&buf)})
+	require.NoError(t, err)
+	out := "error: open /a/secret: permission denied\n" +
+		"Files:           1 new,     0 changed,     2 unmodified\n" +
+		"Added to the repository: 1.5 KiB (900 B   stored)\n" +
+		"processed 3 files, 4 KiB in 0:01\nsnapshot 1a2b3c4d saved\n" +
+		"Warning: at least one source file could not be read\n"
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--tag", "web", "/a").
+		Return([]byte(out), fmt.Errorf("command: restic: %w", exitError(3)))
+
+	id, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
+
+	assert.Equal(t, "1a2b3c4d", id)
+	var incomplete *IncompleteError
+	require.ErrorAs(t, err, &incomplete)
+	assert.True(t, incomplete.Incomplete())
+	assert.Contains(t, err.Error(), "snapshot incomplete")
+	var exit exitError
+	require.ErrorAs(t, err, &exit, "the runner's error is kept")
+	assert.Contains(t, buf.String(), `"files":"1 new, 0 changed, 2 unmodified"`)
+	assert.Contains(t, buf.String(), `"added":"1.5 KiB (900 B stored)"`)
+	assert.Contains(t, buf.String(), `"processed":"3 files, 4 KiB in 0:01"`)
+}
+
+func TestClient_BackupOtherExitCodeFails(t *testing.T) {
+	t.Parallel()
+	c, r := newClient(t)
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--tag", "web", "/a").
+		Return([]byte("snapshot 1a2b3c4d saved\n"), exitError(1))
+
+	id, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
+
+	assert.Empty(t, id)
+	require.ErrorIs(t, err, exitError(1))
+	var incomplete *IncompleteError
+	assert.NotErrorAs(t, err, &incomplete)
 }
 
 func TestClient_BackupNoSources(t *testing.T) {

@@ -97,7 +97,9 @@ func lockDir(getenv func(string) string) string {
 func createManager(cfg *config.Config, projects []config.Project, d managerDeps) (
 	*backup.Manager, error,
 ) {
-	resticClient, err := restic.New(restic.Deps{Runner: d.resticRunner})
+	resticClient, err := restic.New(restic.Deps{
+		Runner: d.resticRunner, Log: component(d.log, "restic"),
+	})
 	if err != nil {
 		return nil, err
 	}
