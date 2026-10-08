@@ -13,6 +13,10 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
 
 ## Quick Start
 
+Install from a [package](#install-from-a-deb-or-rpm-package) or a
+[release archive](#manual-installation-release-archive), or build with `make build`. To try
+it without installing:
+
 1. Copy and edit a config file:
    ```bash
    cp example/config.yaml config.yaml
@@ -27,79 +31,164 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
 ## Install from a .deb or .rpm package
 
 Each [release](https://github.com/dombyte/restor/releases) has packages for amd64, arm64 and
-armv7 (`armhf` / `armv7hl`). They install `/usr/bin/restor`, the systemd units and the
-examples in `/usr/share/doc/restor/examples/`, and recommend `restic`.
+armv7 (`armhf` / `armv7hl`), next to `checksums.txt`. They install:
+
+| Path | Content |
+|---|---|
+| `/usr/bin/restor` | the binary |
+| `/usr/lib/systemd/system/restor.{service,timer}` | system units (config `/etc/restor/config.yaml`) |
+| `/usr/lib/systemd/user/restor.{service,timer}` | user units (config `~/.config/restor/config.yaml`) |
+| `/usr/share/doc/restor/examples/` | `config.yaml` and `restor.env` templates |
+| `/etc/restor/` | empty, root only (0700) |
+
+`restic` is a recommended dependency: apt and dnf install it unless you have it already or
+turn recommends off. Docker or Podman are not pulled in.
+
+### 1. Download, verify and install
 
 ```bash
-sudo apt install ./restor_<version>_amd64.deb        # Debian, Ubuntu
-sudo dnf install ./restor-<version>-1.x86_64.rpm     # Fedora, RHEL, openSUSE (zypper)
+v=1.2.3   # the release version without "v"
+base=https://github.com/dombyte/restor/releases/download/v$v
+curl -LO "$base/checksums.txt"
+
+# Debian, Ubuntu
+curl -LO "$base/restor_${v}_amd64.deb"
+sha256sum --check --ignore-missing checksums.txt
+sudo apt install "./restor_${v}_amd64.deb"
+
+# Fedora, RHEL, openSUSE (zypper install)
+curl -LO "$base/restor-${v}-1.x86_64.rpm"
+sha256sum --check --ignore-missing checksums.txt
+sudo dnf install "./restor-${v}-1.x86_64.rpm"
 ```
 
-The timer is not enabled automatically. Write the config, then enable it:
+Replace `amd64`/`x86_64` with `arm64`/`aarch64` or `armhf`/`armv7hl` on ARM.
+
+### 2. Configure
 
 ```bash
 sudo cp /usr/share/doc/restor/examples/config.yaml /etc/restor/config.yaml
 sudoedit /etc/restor/config.yaml
+
+# Secrets: an env file (set env_file: /etc/restor/restor.env in the config) and the password
+sudo cp /usr/share/doc/restor/examples/restor.env /etc/restor/restor.env
+sudoedit /etc/restor/restor.env
+sudo sh -c 'umask 077; printf %s "your-password" > /etc/restor/restic-password'
+```
+
+### 3. Test once, then enable the timer
+
+The timer is not enabled by the package, because a run fails until the config is written.
+
+```bash
+sudo restor --config /etc/restor/config.yaml   # or: sudo systemctl start restor.service
+sudo systemctl enable --now restor.timer
+systemctl list-timers restor.timer
+journalctl -u restor -e
+```
+
+The timer runs daily at 01:00 and catches up a missed run after boot. To change the time:
+`sudo systemctl edit restor.timer`.
+
+### Upgrade
+
+Install the newer package the same way (`apt install ./…deb`, `dnf install ./…rpm`). The
+config in `/etc/restor` and the enabled timer are kept; the next run uses the new binary.
+
+### Remove
+
+```bash
+sudo apt remove restor     # or: sudo dnf remove restor
+```
+
+This disables the system timer and keeps `/etc/restor` with your files (delete it by hand).
+Users who enabled their own timer should run `systemctl --user disable restor.timer`
+first.
+
+### Switch from a manual installation
+
+Units in `/etc/systemd/system/` take precedence over the packaged ones and still point to
+`/usr/local/bin/restor`. Remove them after installing the package:
+
+```bash
+sudo systemctl disable --now restor.timer
+sudo rm /etc/systemd/system/restor.service /etc/systemd/system/restor.timer \
+  /usr/local/bin/restor
+sudo systemctl daemon-reload
 sudo systemctl enable --now restor.timer
 ```
 
-Removing the package disables the timer and keeps `/etc/restor`.
+An existing `/etc/restor/config.yaml` is used as is.
 
 ### Run as a normal user
 
 A user can back up what they can read and manage their own services (`systemd_scope: user`,
-rootless podman). The package also installs user units that read
+rootless podman; the `docker` group is effectively root). The user units read
 `~/.config/restor/config.yaml`:
 
 ```bash
 mkdir -p ~/.config/restor
 cp /usr/share/doc/restor/examples/config.yaml ~/.config/restor/config.yaml
+chmod 600 ~/.config/restor/config.yaml
+"$EDITOR" ~/.config/restor/config.yaml
+
+systemctl --user daemon-reload          # only needed if you were logged in during install
+restor --config ~/.config/restor/config.yaml   # test once
 systemctl --user enable --now restor.timer
-sudo loginctl enable-linger "$USER"   # keep the timer running while logged out
+sudo loginctl enable-linger "$USER"     # keep the timer running while logged out
+journalctl --user -u restor -e
 ```
 
 Each user has their own lock directory (`/run/restor` for root, `$XDG_RUNTIME_DIR/restor`
-otherwise), so runs of different users never block each other.
+or `$TMPDIR/restor-<uid>` otherwise), so runs of different users never block each other.
+Locks of different users are not shared: do not let root and a user back up the same
+compose file.
 
 ## Manual Installation (release archive)
 
+Download `restor_<version>_<linux|darwin>_<arch>.tar.gz` from the
+[releases](https://github.com/dombyte/restor/releases) and unpack it. It contains the
+binary, this README, the license and `example/`.
+
 ### 1. Install binary
 
-Copy `restor` to `/usr/local/bin/restor`:
 ```bash
-sudo cp restor /usr/local/bin/restor
+sudo install -m 0755 restor /usr/local/bin/restor
 ```
 
 ### 2. Install config
 
-Copy your config to `/etc/restor/config.yaml`:
 ```bash
-sudo mkdir -p /etc/restor
-sudo cp config.yaml /etc/restor/
+sudo install -d -m 0700 /etc/restor
+sudo cp example/config.yaml /etc/restor/config.yaml
+sudoedit /etc/restor/config.yaml
 ```
+
+For secrets, see step 2 of the package installation above.
 
 ### 3. Install systemd files
 
 ```bash
-sudo cp example/restor.service /etc/systemd/system/
-sudo cp example/restor.timer /etc/systemd/system/
+sudo cp example/restor.service example/restor.timer /etc/systemd/system/
+sudo systemctl daemon-reload
 ```
 
-### 4. Enable and start
+### 4. Test once, then enable the timer
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable restor.service
-sudo systemctl start restor.timer
-sudo systemctl enable restor.timer
+sudo restor --config /etc/restor/config.yaml
+sudo systemctl enable --now restor.timer
 ```
+
+Enable only the timer, not `restor.service`: an enabled service would also run a backup at
+every boot.
 
 ### 5. Verify
 
 ```bash
-systemctl list-timers
+systemctl list-timers restor.timer
 sudo systemctl status restor.timer
-sudo journalctl -u restor -f
+journalctl -u restor -f
 ```
 
 ## Configuration
