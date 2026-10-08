@@ -79,11 +79,12 @@ func (c *Config) RunMode() string {
 	return ModeSequential
 }
 
-// ResolvedProjects returns the projects with defaults and global hooks applied.
+// ResolvedProjects returns the projects with defaults and global hooks applied, sorted
+// by name (the run order in sequential mode).
 func (c *Config) ResolvedProjects() []Project {
 	projects := make([]Project, 0, len(c.Projects))
-	for name, p := range c.Projects {
-		projects = append(projects, c.project(name, p))
+	for _, name := range sortedKeys(c.Projects) {
+		projects = append(projects, c.project(name, c.Projects[name]))
 	}
 	return projects
 }
