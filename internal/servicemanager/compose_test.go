@@ -175,3 +175,32 @@ func TestParseComposePs(t *testing.T) {
 		})
 	}
 }
+
+func TestCompose_Start(t *testing.T) {
+	t.Parallel()
+	c, r := newCompose(t)
+	expectCompose(r, "up", "-d", "web", "db").Return(nil, nil).Once()
+	expectCompose(r, "ps", "--format", "json").
+		Return([]byte(`{"Service":"web","State":"running"}`), nil).Once()
+	expectCompose(r, "ps", "--format", "json").
+		Return([]byte(`{"Service":"web","State":"running"}`+"\n"+
+			`{"Service":"db","State":"running"}`), nil).Once()
+
+	ok, err := c.Start(context.Background(), []string{"web", "db"}, time.Minute)
+
+	require.NoError(t, err)
+	assert.True(t, ok, "returns as soon as all services run")
+}
+
+func TestCompose_StartTimeout(t *testing.T) {
+	t.Parallel()
+	c, r := newCompose(t)
+	expectCompose(r, "up", "-d", "web").Return(nil, nil).Once()
+	expectCompose(r, "ps", "--format", "json").
+		Return([]byte(`{"Service":"web","State":"restarting"}`), nil)
+
+	ok, err := c.Start(context.Background(), []string{"web"}, time.Second)
+
+	require.NoError(t, err)
+	assert.False(t, ok)
+}

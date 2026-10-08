@@ -83,7 +83,8 @@ func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Dura
 	})
 }
 
-// Start runs `up -d <services>` and waits for timeout before it returns true.
+// Start runs `up -d <services>` and waits until all of them are running. It returns
+// false when some are not running after timeout.
 func (c *Compose) Start(ctx context.Context, services []string, timeout time.Duration) (
 	bool, error,
 ) {
@@ -95,12 +96,10 @@ func (c *Compose) Start(ctx context.Context, services []string, timeout time.Dur
 	if _, err := c.run(cmdCtx, append([]string{"up", "-d"}, services...)...); err != nil {
 		return false, fmt.Errorf("servicemanager: start %s: %w", c.s.File, err)
 	}
-	select {
-	case <-ctx.Done():
-		return false, fmt.Errorf("servicemanager: wait: %w", ctx.Err())
-	case <-c.clock.After(timeout):
-		return true, nil
-	}
+	return waitUntil(ctx, c.clock, timeout, func(ctx context.Context) (bool, error) {
+		running, err := c.running(ctx)
+		return err == nil && allOf(services, running), err
+	})
 }
 
 // running returns the services of the compose project that have a running container.
@@ -172,6 +171,16 @@ func parseComposePs(out []byte) ([]psEntry, error) {
 		entries = append(entries, e)
 	}
 	return entries, nil
+}
+
+// allOf reports whether every one of names is in set.
+func allOf(names []string, set map[string]bool) bool {
+	for _, n := range names {
+		if !set[n] {
+			return false
+		}
+	}
+	return true
 }
 
 // anyOf reports whether one of names is in set.
