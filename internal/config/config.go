@@ -7,7 +7,6 @@ import (
 	"os"
 	"slices"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -39,9 +38,6 @@ func Defaults() *Config {
 func Load(path string, getenv func(string) string) (*Config, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
-	v.AutomaticEnv()
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	v.SetEnvPrefix("DOCKER_BACKUP")
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("config: read %s: %w", path, err)
 	}
