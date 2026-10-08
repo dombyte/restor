@@ -37,9 +37,12 @@ func TestNew_WiresAllServiceManagers(t *testing.T) {
 	path := writeConfig(t, `
 global: {restic_repo: /repo, auto_prune: true}
 projects:
-  docker: {service_manager: docker-compose, compose_file: /d.yml, sources: [/d]}
-  podman: {service_manager: podman-compose, compose_file: /p.yml, sources: [/p]}
-  units: {service_manager: systemd, systemd_units: [a.service], sources: [/u]}
+  docker: {service_manager: docker-compose, compose_file: /d.yml, sources: [/d],
+           stop_timeout: 10, start_timeout: 10}
+  podman: {service_manager: podman-compose, compose_file: /p.yml, sources: [/p],
+           stop_timeout: 10, start_timeout: 10}
+  units: {service_manager: systemd, systemd_units: [a.service], sources: [/u],
+          stop_timeout: 10, start_timeout: 10}
   files: {service_manager: noop, sources: [/f]}
 `)
 	a, err := New(options(path))

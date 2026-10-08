@@ -114,15 +114,15 @@ func TestLoad_ProjectNamesAreCaseInsensitive(t *testing.T) {
 	t.Parallel()
 	path := writeFile(t, t.TempDir(), "config.yaml", `
 projects:
-  WebApp: {service_manager: noop}
-  Files: {service_manager: noop}
-  files: {service_manager: noop}
+  WebApp: {service_manager: noop, sources: [/w]}
+  Files: {service_manager: noop, sources: [/f]}
+  files: {service_manager: noop, sources: [/f]}
 `)
 	_, err := Load(path, getenv(nil))
 	require.ErrorIs(t, err, ErrInvalid)
 	assert.Contains(t, err.Error(), "projects.files: duplicate project name")
 
-	path = writeFile(t, t.TempDir(), "config.yaml", "projects:\n  WebApp: {service_manager: noop}\n")
+	path = writeFile(t, t.TempDir(), "config.yaml", "projects:\n  WebApp: {service_manager: noop, sources: [/w]}\n")
 	cfg, err := Load(path, getenv(nil))
 	require.NoError(t, err)
 	assert.Equal(t, "webapp", cfg.ResolvedProjects()[0].Name, "the restic tag stays lowercase")
@@ -168,6 +168,14 @@ func TestLoad_Errors(t *testing.T) {
 		{name: "broken yaml", content: "mode: [", want: []string{"config: parse"}},
 		{name: "wrong type", content: "projects: 5", want: []string{"config: parse"}},
 		{
+			name:    "mode and timeouts",
+			content: "mode: fast\nprojects:\n  a: {service_manager: noop, sources: [/a], stop_timeout: -1}\n",
+			want: []string{
+				`mode: must be "sequential" or "parallel"`,
+				"projects.a.stop_timeout: must be >= 0",
+			},
+		},
+		{
 			name: "missing env file", content: "env_file: /nonexistent/restor.env",
 			want: []string{"config: env file /nonexistent/restor.env"},
 		},
@@ -183,6 +191,9 @@ projects:
 `,
 			want: []string{
 				"projects.a.compose_file: required for service_manager docker-compose",
+				"projects.a.sources: required",
+				"projects.a.stop_timeout: must be > 0 when services are stopped",
+				"projects.a.start_timeout: must be > 0 when services are stopped",
 				"projects.b.systemd_units: required for service_manager systemd",
 				`projects.b.systemd_scope: must be "system" or "user"`,
 				"projects.c.service_manager: required",
@@ -208,7 +219,7 @@ projects:
 
 func TestValidate_FieldErrors(t *testing.T) {
 	t.Parallel()
-	cfg := &Config{Projects: map[string]ProjectConfig{"a": {}}}
+	cfg := &Config{Projects: map[string]ProjectConfig{"a": {Sources: []string{"/a"}}}}
 	err := cfg.Validate()
 	require.ErrorIs(t, err, ErrInvalid)
 	var fe *FieldError
@@ -258,4 +269,12 @@ func TestLoad_EnvNamesKeepCaseInAllFormats(t *testing.T) {
 		require.NoError(t, err, name)
 		assert.Equal(t, []string{"RESTIC_PASSWORD_FILE=/pw"}, cfg.EnvPairs(), name)
 	}
+}
+
+func TestLoad_ExampleConfig(t *testing.T) {
+	t.Parallel()
+	cfg, err := Load(filepath.Join("..", "..", "example", "config.yaml"), getenv(nil))
+	require.NoError(t, err, "the shipped template must stay valid")
+	assert.NotEmpty(t, cfg.ResolvedProjects())
+	assert.Contains(t, cfg.EnvPairs(), "AWS_DEFAULT_REGION=eu-central-1")
 }
