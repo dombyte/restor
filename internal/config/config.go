@@ -133,7 +133,7 @@ func (c *Config) EnvPairs() []string {
 	return pairs
 }
 
-// RunMode returns Mode, falling back to ModeSequential for unknown values.
+// RunMode returns Mode; an empty mode is ModeSequential.
 func (c *Config) RunMode() string {
 	if c.Mode == ModeParallel {
 		return ModeParallel
@@ -179,6 +179,11 @@ func (c *Config) project(name string, p ProjectConfig) Project {
 // Validate checks every field and returns all problems joined.
 func (c *Config) Validate() error {
 	var errs []error
+	if !slices.Contains([]string{"", ModeSequential, ModeParallel}, c.Mode) {
+		errs = append(errs, &FieldError{
+			Path: "mode", Problem: fmt.Sprintf("must be %q or %q", ModeSequential, ModeParallel),
+		})
+	}
 	for _, name := range sortedKeys(c.Projects) {
 		errs = append(errs, validateProject("projects."+name, c.Projects[name])...)
 	}
@@ -187,6 +192,25 @@ func (c *Config) Validate() error {
 
 func validateProject(path string, p ProjectConfig) []error {
 	v := &validator{path: path}
+	v.check(len(p.Sources) > 0, "sources", "required")
+	v.check(p.StopTimeout >= 0, "stop_timeout", "must be >= 0")
+	v.check(p.StartTimeout >= 0, "start_timeout", "must be >= 0")
+	if stopsServices(p) {
+		v.check(p.StopTimeout != 0, "stop_timeout", "must be > 0 when services are stopped")
+		v.check(p.StartTimeout != 0, "start_timeout", "must be > 0 when services are stopped")
+	}
+	v.serviceManager(p)
+	return v.errs
+}
+
+// stopsServices reports whether the project stops services, so its timeouts matter.
+func stopsServices(p ProjectConfig) bool {
+	managed := []string{ManagerDockerCompose, ManagerPodmanCompose, ManagerSystemd}
+	return slices.Contains(managed, p.ServiceManager) && (p.StopServices == nil || *p.StopServices)
+}
+
+// serviceManager checks the service manager and the fields it requires.
+func (v *validator) serviceManager(p ProjectConfig) {
 	switch p.ServiceManager {
 	case ManagerDockerCompose, ManagerPodmanCompose:
 		v.check(p.ComposeFile != "", "compose_file", "required for service_manager "+
@@ -201,7 +225,6 @@ func validateProject(path string, p ProjectConfig) []error {
 	default:
 		v.check(false, "service_manager", fmt.Sprintf("unsupported value %q", p.ServiceManager))
 	}
-	return v.errs
 }
 
 // validator collects FieldErrors below one path.
