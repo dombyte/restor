@@ -116,7 +116,7 @@ func TestCompose_StopStatusFails(t *testing.T) {
 	t.Parallel()
 	c, r := newCompose(t)
 	expectCompose(r, "stop", "-t", "1", "web").Return(nil, nil).Once()
-	expectCompose(r, "ps", "--format", "json").Return([]byte("not json"), nil).Once()
+	expectCompose(r, "ps", "--format", "json").Return([]byte("not json"), nil)
 
 	_, err := c.Stop(context.Background(), []string{"web"}, time.Second)
 

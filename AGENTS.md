@@ -312,7 +312,8 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   `services` selects some of `systemd_units` (a name that is not one of them is a
   validation error); empty means all units.
 - noop: no services; every operation succeeds.
-- Stop and start poll every 500 ms until the expected state or the timeout.
+- Stop and start poll every 500 ms until the expected state or the timeout; a failed
+  status query is retried, and its error counts only when the last poll failed.
 
 ### restic
 - The repository is passed as `RESTIC_REPOSITORY` (not `-r`), so it never shows up in

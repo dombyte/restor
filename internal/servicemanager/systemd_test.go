@@ -169,7 +169,7 @@ func TestSystemd_StatusUnexpectedOutput(t *testing.T) {
 			t.Parallel()
 			s, r := newSystemd(t, false)
 			expectSystemctl(r, "start", "a.service").Return(nil, nil).Once()
-			expectSystemctl(r, "is-active", "a.service").Return(nil, tt.err).Once()
+			expectSystemctl(r, "is-active", "a.service").Return(nil, tt.err)
 
 			_, err := s.Start(context.Background(), []string{"a.service"}, time.Second)
 
