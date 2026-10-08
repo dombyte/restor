@@ -76,7 +76,8 @@ func TestLoad_Full(t *testing.T) {
 	assert.Equal(t, ModeParallel, cfg.RunMode())
 	assert.Equal(t, "s3:bucket", cfg.Global.ResticRepo)
 	assert.Equal(t, []string{"--cache-dir=/home/x/cache"}, cfg.Global.PruneOptions)
-	assert.Contains(t, cfg.EnvPairs(), "FROM_FILE=file")
+	assert.Equal(t, []string{"FROM_FILE=file", "INLINE=/home/x/inline", "SHARED=inline"},
+		cfg.EnvPairs(), "names keep their case; inline variables win over the env file")
 
 	projects := map[string]Project{}
 	for _, p := range cfg.ResolvedProjects() {
@@ -109,6 +110,38 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Empty(t, cfg.EnvPairs())
 }
 
+func TestLoad_ProjectNamesAreCaseInsensitive(t *testing.T) {
+	t.Parallel()
+	path := writeFile(t, t.TempDir(), "config.yaml", `
+projects:
+  WebApp: {service_manager: noop}
+  Files: {service_manager: noop}
+  files: {service_manager: noop}
+`)
+	_, err := Load(path, getenv(nil))
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "projects.files: duplicate project name")
+
+	path = writeFile(t, t.TempDir(), "config.yaml", "projects:\n  WebApp: {service_manager: noop}\n")
+	cfg, err := Load(path, getenv(nil))
+	require.NoError(t, err)
+	assert.Equal(t, "webapp", cfg.ResolvedProjects()[0].Name, "the restic tag stays lowercase")
+}
+
+func TestLoad_WeakTypes(t *testing.T) {
+	t.Parallel()
+	path := writeFile(t, t.TempDir(), "config.yaml", `
+projects:
+  a: {service_manager: noop, stop_timeout: "30", sources: "/a,/b", stop_services: "false"}
+`)
+	cfg, err := Load(path, getenv(nil))
+	require.NoError(t, err)
+	p := cfg.ResolvedProjects()[0]
+	assert.Equal(t, 30*time.Second, p.StopTimeout)
+	assert.Equal(t, []string{"/a", "/b"}, p.Sources)
+	assert.False(t, p.StopServices)
+}
+
 func TestLoad_OtherFormats(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -132,7 +165,7 @@ func TestLoad_Errors(t *testing.T) {
 		want          []string
 	}{
 		{name: "missing file", want: []string{"config: read"}},
-		{name: "broken yaml", content: "mode: [", want: []string{"config: read"}},
+		{name: "broken yaml", content: "mode: [", want: []string{"config: parse"}},
 		{name: "wrong type", content: "projects: 5", want: []string{"config: parse"}},
 		{
 			name: "missing env file", content: "env_file: /nonexistent/restor.env",
@@ -144,7 +177,7 @@ func TestLoad_Errors(t *testing.T) {
 projects:
   a: {service_manager: docker-compose}
   b: {service_manager: systemd, systemd_scope: global}
-  c: {sources: [/x]}
+  c: {}
   d: {service_manager: kubernetes}
   e: {service_manager: noop}
 `,
@@ -204,4 +237,25 @@ func TestResolvedProjects_SortedByName(t *testing.T) {
 		names = append(names, p.Name)
 	}
 	assert.Equal(t, []string{"a", "b", "c", "k", "m", "q", "x", "z"}, names)
+}
+
+func TestLoad_UnsupportedFormat(t *testing.T) {
+	t.Parallel()
+	_, err := Load(writeFile(t, t.TempDir(), "config.ini", "mode=parallel"), getenv(nil))
+	require.ErrorIs(t, err, ErrFormat)
+}
+
+func TestLoad_EnvNamesKeepCaseInAllFormats(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	files := map[string]string{
+		"config.yaml": "environments: {RESTIC_PASSWORD_FILE: /pw}\n",
+		"config.json": `{"environments":{"RESTIC_PASSWORD_FILE":"/pw"}}`,
+		"config.toml": "[environments]\nRESTIC_PASSWORD_FILE = \"/pw\"\n",
+	}
+	for name, content := range files {
+		cfg, err := Load(writeFile(t, dir, name, content), getenv(nil))
+		require.NoError(t, err, name)
+		assert.Equal(t, []string{"RESTIC_PASSWORD_FILE=/pw"}, cfg.EnvPairs(), name)
+	}
 }

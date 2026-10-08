@@ -1,7 +1,8 @@
 // Package config loads the restor configuration: one file (YAML, JSON or TOML, chosen by
-// extension), an optional env file and inline environment variables. Load applies the
-// defaults, expands ${VAR} references from the process environment and validates
-// everything once; the result is read-only.
+// extension), an optional env file and inline environment variables. Keys keep their
+// case (environment variable names are case-sensitive); project names are
+// case-insensitive. Load applies the defaults, expands ${VAR} references from the process
+// environment and validates everything once; the result is read-only.
 package config
 
 import "time"

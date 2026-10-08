@@ -1,19 +1,28 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
-	"github.com/spf13/viper"
+	"github.com/go-viper/mapstructure/v2"
+	"github.com/pelletier/go-toml/v2"
+	"go.yaml.in/yaml/v4"
 )
 
-// ErrInvalid is wrapped by every validation problem (see FieldError).
-var ErrInvalid = errors.New("invalid")
+var (
+	// ErrInvalid is wrapped by every validation problem (see FieldError).
+	ErrInvalid = errors.New("invalid")
+	// ErrFormat is returned for a configuration file with an unsupported extension.
+	ErrFormat = errors.New("unsupported format")
+)
 
 // FieldError is one validation problem, with the path of the field.
 type FieldError struct {
@@ -36,25 +45,82 @@ func Defaults() *Config {
 // Load reads the file at path, merges the environment, expands ${VAR} references with
 // getenv and validates the result. All validation problems are returned together.
 func Load(path string, getenv func(string) string) (*Config, error) {
-	v := viper.New()
-	v.SetConfigFile(path)
-	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("config: read %s: %w", path, err)
+	raw, err := readFile(path)
+	if err != nil {
+		return nil, err
 	}
 	cfg := Defaults()
-	if err := v.Unmarshal(cfg); err != nil {
+	if err := decode(raw, cfg); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
+	dupErrs := cfg.lowerProjectNames()
 	env, err := mergeEnvironments(cfg.EnvFile, cfg.Environments, getenv)
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	cfg.Environments = env
 	cfg.expand(getenv)
-	if err := cfg.Validate(); err != nil {
+	if err := errors.Join(append(dupErrs, cfg.Validate())...); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	return cfg, nil
+}
+
+// readFile parses the file by its extension (.yaml/.yml, .json, .toml) into a generic map;
+// keys keep their case.
+func readFile(path string) (map[string]any, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("config: read %s: %w", path, err)
+	}
+	raw := map[string]any{}
+	switch ext := strings.ToLower(filepath.Ext(path)); ext {
+	case ".yaml", ".yml":
+		err = yaml.Unmarshal(data, &raw)
+	case ".json":
+		err = json.Unmarshal(data, &raw)
+	case ".toml":
+		err = toml.Unmarshal(data, &raw)
+	default:
+		return nil, fmt.Errorf("config: %s: %w %q", path, ErrFormat, ext)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+	return raw, nil
+}
+
+// decode maps raw onto cfg. Field names match case-insensitively, and scalars are
+// converted loosely ("30" → 30, "a,b" → [a b]), as viper did before.
+func decode(raw map[string]any, cfg *Config) error {
+	d, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		Result:           cfg,
+		WeaklyTypedInput: true,
+		DecodeHook:       mapstructure.StringToSliceHookFunc(","),
+	})
+	if err != nil {
+		return err
+	}
+	return d.Decode(raw)
+}
+
+// lowerProjectNames makes project names lowercase: they are case-insensitive and the
+// lowercase name is the restic tag (compatible with snapshots of earlier versions).
+func (c *Config) lowerProjectNames() []error {
+	var errs []error
+	lower := make(map[string]ProjectConfig, len(c.Projects))
+	for _, name := range sortedKeys(c.Projects) {
+		key := strings.ToLower(name)
+		if _, dup := lower[key]; dup {
+			errs = append(errs, &FieldError{
+				Path:    "projects." + key,
+				Problem: "duplicate project name (names are case-insensitive)",
+			})
+		}
+		lower[key] = c.Projects[name]
+	}
+	c.Projects = lower
+	return errs
 }
 
 // EnvPairs returns the merged environment as sorted KEY=value pairs.
