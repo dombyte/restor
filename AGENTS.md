@@ -274,7 +274,8 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 - Validation (all problems at once, with field paths): `mode` is `sequential` (default) or
   `parallel`; per project `service_manager` and `sources` are required; `compose_file` for
   the compose managers, `systemd_units` for systemd; `systemd_scope` is `system` (default)
-  or `user`; `stop_timeout`/`start_timeout` (seconds) are ≥ 0 and > 0 when services are
+  or `user`; `services` of a systemd project are among its `systemd_units`;
+  `stop_timeout`/`start_timeout` (seconds) are ≥ 0 and > 0 when services are
   stopped. Unknown keys are ignored. Startup warns about them
   (typos such as `stop_service`), about a `retention_policy` without `auto_prune` and
   about a missing repository (`restic_repo`, `RESTIC_REPOSITORY`, `RESTIC_REPOSITORY_FILE`).
@@ -300,7 +301,8 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 - systemd: `systemctl [--user] stop|start <units>` (stop ignores "not running"/"not
   loaded"); state from `systemctl is-active <units>`. Stopped = no unit `active`,
   `activating`, `deactivating`, `reloading` or `refreshing`; started = all `active`.
-  `services` filters `systemd_units`; if none match, all units are used.
+  `services` selects some of `systemd_units` (a name that is not one of them is a
+  validation error); empty means all units.
 - noop: no services; every operation succeeds.
 - Stop and start poll every 500 ms until the expected state or the timeout.
 

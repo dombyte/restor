@@ -197,7 +197,8 @@ global:
 #   - stop_services: true/false - Enable/disable service stop/start (default: true)
 #     * When false: Services continue running during backup (read-only mode)
 #     * Useful for databases, high-availability services, or when using filesystem snapshots
-#   - services: List of specific services to stop/start (default: all from service manager)
+#   - services: List of specific services to stop/start (default: all from service manager;
+#     for systemd every name must be one of systemd_units)
 #   - systemd_scope: For systemd only - "system" (default) or "user" for user-level services
 #   - backup_options: Additional restic options for backup command only
 #   - forget_options: Additional restic options for forget command only

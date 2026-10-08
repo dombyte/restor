@@ -188,6 +188,7 @@ projects:
   c: {}
   d: {service_manager: kubernetes}
   e: {service_manager: noop}
+  f: {service_manager: systemd, systemd_units: [a.service], services: [b.service]}
 `,
 			want: []string{
 				"projects.a.compose_file: required for service_manager docker-compose",
@@ -198,6 +199,7 @@ projects:
 				`projects.b.systemd_scope: must be "system" or "user"`,
 				"projects.c.service_manager: required",
 				`projects.d.service_manager: unsupported value "kubernetes"`,
+				`projects.f.services: "b.service" is not in systemd_units`,
 			},
 		},
 	}
