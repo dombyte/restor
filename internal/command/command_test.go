@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -28,6 +32,23 @@ func helper(mode string) int {
 	switch mode {
 	case "echo":
 		fmt.Println(strings.Join(os.Args[1:], " "), os.Getenv("RESTOR_TEST_VALUE"))
+		return 0
+	case "big":
+		line := strings.Repeat("x", 1023) + "\n"
+		for range 3 * maxOutput / len(line) {
+			fmt.Print(line)
+		}
+		fmt.Println("snapshot 1a2b3c4d saved")
+		return 0
+	case "term":
+		// Report SIGTERM, then exit: the runner must ask before it kills.
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGTERM)
+		if err := os.WriteFile(os.Getenv("RESTOR_READY_FILE"), nil, 0o600); err != nil {
+			return 2
+		}
+		<-sig
+		fmt.Println("got SIGTERM")
 		return 0
 	case "fail":
 		fmt.Println("line one")
@@ -69,6 +90,48 @@ func TestRunner_RunFailure(t *testing.T) {
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, err, &exitErr)
 	assert.Equal(t, 3, exitErr.ExitCode())
+}
+
+func TestRunner_RunKeepsTheLastOutput(t *testing.T) {
+	t.Parallel()
+	out, err := newRunner("big").Run(context.Background(), os.Args[0])
+
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(out), maxOutput)
+	assert.Contains(t, string(out), "snapshot 1a2b3c4d saved\n")
+}
+
+func TestTailBuffer(t *testing.T) {
+	t.Parallel()
+	b := &tailBuffer{max: 4}
+	for _, w := range []string{"ab", "cd", "ef", "g", "hijkl"} {
+		n, err := b.Write([]byte(w))
+		require.NoError(t, err)
+		assert.Equal(t, len(w), n)
+	}
+	assert.Equal(t, "ijkl", string(b.Bytes()))
+	assert.Equal(t, "ab", string((&tailBuffer{max: 4, buf: []byte("ab")}).Bytes()))
+}
+
+func TestRunner_RunCancelSendsSIGTERM(t *testing.T) {
+	t.Parallel()
+	ready := filepath.Join(t.TempDir(), "ready")
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		// The helper is a real process; wait until its signal handler is installed.
+		for {
+			if _, err := os.Stat(ready); err == nil {
+				cancel()
+				return
+			}
+			runtime.Gosched()
+		}
+	}()
+
+	out, err := newRunner("term", "RESTOR_READY_FILE="+ready).Run(ctx, os.Args[0])
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Contains(t, string(out), "got SIGTERM")
 }
 
 func TestRunner_RunEmpty(t *testing.T) {

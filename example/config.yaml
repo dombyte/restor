@@ -51,7 +51,7 @@
 # restor uses file-based locking to prevent concurrent backups of the same
 # compose file. Each user has their own lock directory: /run/restor for root,
 # $XDG_RUNTIME_DIR/restor for other users ($TMPDIR/restor-<uid> without it).
-# Stale locks (from crashed processes) are automatically cleaned up on startup.
+# A lock is released by the kernel when its run ends, also when it crashed.
 
 # ============================================
 # Global Settings
@@ -69,7 +69,7 @@ env_file: ""
 
 # Inline environment variables (override external file values)
 # These are passed to both restic and docker compose commands
-# Use ${VAR_NAME} syntax to reference system environment variables
+# Use ${VAR_NAME} syntax to reference system environment variables; $$ is a literal $
 environments:
   # ========================================
   # Restic Authentication (choose ONE method)
@@ -143,6 +143,8 @@ global:
   # GLOBAL: Enable/disable automatic pruning
   # When true: Each project with retention_policy runs 'forget', then ONE 'prune' runs for entire repo
   # This is efficient as prune only needs to run once after all forget operations
+  # When a project fails, only the projects that were backed up run 'forget'; prune is
+  # skipped until a run where every project succeeds
   # When false: You must manually run prune, or use restic's auto-prune features
   auto_prune: true
 
@@ -180,10 +182,12 @@ global:
 #
 # REQUIRED fields for each project:
 #   - service_manager: Type of service manager ("docker-compose", "podman-compose", "systemd", or "noop")
-#   - For docker-compose/podman-compose: compose_file (absolute path to compose file)
+#   - For docker-compose/podman-compose: compose_file (path to the compose file)
 #   - For systemd: systemd_units (list of systemd unit names)
 #   - For noop: No additional service configuration needed (file-only backups)
 #   - sources: List of directories/files to backup with restic
+#   Relative env_file, compose_file and sources paths are resolved against the directory
+#   of this file.
 #   - stop_timeout: Timeout in seconds for stopping services (> 0 when services are stopped)
 #   - start_timeout: Timeout in seconds for starting services (> 0 when services are stopped)
 #
@@ -195,7 +199,9 @@ global:
 #   - stop_services: true/false - Enable/disable service stop/start (default: true)
 #     * When false: Services continue running during backup (read-only mode)
 #     * Useful for databases, high-availability services, or when using filesystem snapshots
-#   - services: List of specific services to stop/start (default: all from service manager)
+#   - services: List of specific services to stop/start (default: all from service manager;
+#     only the ones running at backup time are stopped and started again;
+#     for systemd every name must be one of systemd_units)
 #   - systemd_scope: For systemd only - "system" (default) or "user" for user-level services
 #   - backup_options: Additional restic options for backup command only
 #   - forget_options: Additional restic options for forget command only

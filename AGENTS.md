@@ -118,7 +118,7 @@ internal/backup/           orchestration: Manager (mode, per-project run, forget
                            declares Restic, Services, Locker, Runner
 internal/restic/           restic CLI client: backup, forget, prune, unlock
 internal/servicemanager/   Compose (docker/podman), Systemd, Noop; status polling
-internal/lock/             lock files per key (PID + time), stale lock cleanup
+internal/lock/             flock(2) lock files per key, lock dir safety checks
 internal/command/          the only os/exec user: runs a program with a fixed env and ctx
 internal/util/             RequireAll/DependencyError, Clock; clocktest (fake clock)
 internal/<pkg>/mocks/      mockery output (never hand-edited)
@@ -146,9 +146,9 @@ Layout rules:
 cmd/main               → internal/app, cobra, zerolog
 internal/app           → config, backup, restic, servicemanager, lock, command, util
 internal/backup        → util, zerolog
-internal/restic        → util
+internal/restic        → util, zerolog
 internal/servicemanager → util
-internal/lock          → util, zerolog
+internal/lock          → util
 internal/command       → zerolog
 internal/config        → mapstructure, go-toml, yaml
 internal/util          → stdlib only
@@ -168,7 +168,7 @@ Rules:
   `exec.LookPath` for the startup warning).
 - External clients never import `config` or `backup`, and never each other.
 - Nothing imports `cmd` or `internal/app`.
-- Exported shared interface: `util.Clock` (used by `servicemanager` and `lock`). Every
+- Exported shared interface: `util.Clock` (used by `servicemanager`). Every
   other interface is declared by its consumer.
 
 ---
@@ -182,19 +182,23 @@ restor itself has no data store. What it writes, and who writes it:
   parallel mode concurrently; restic allows concurrent backups). `forget`, `prune` and
   `unlock` run **only in `Manager`, sequentially, after all backups**, because they need
   exclusive repository locks.
-- **Lock files:** `lock.Locker` owns `<lock dir>/<key>.lock` (content: PID and Unix
-  time), created atomically (`O_EXCL`). The lock dir is per user (`lock.DefaultDir`):
+- **Lock files:** `lock.Locker` holds an `flock(2)` on `<lock dir>/<sha256 of key>.lock`
+  (opened with `O_NOFOLLOW`; content: PID and key, for humans only). The kernel releases
+  the lock when the holder exits, so there are no stale locks; the files are never
+  removed (removing one would let two processes lock different inodes of the same path).
+  Two `Lock` calls of one process conflict too. The lock dir is per user (`lock.DefaultDir`):
   `/run/restor` for root on Linux, `$XDG_RUNTIME_DIR/restor` for other users, else
   `restor-<uid>` in the temp dir; it is refused unless it is a real directory owned by the
   user and not writable by others (`ErrUnsafeDir`). The key comes from the service manager: the
-  compose file path, the systemd unit names joined with commas, or `noop-<project>`. A lock
-  is valid while its PID is alive (an unreadable file for one minute); stale locks are
-  removed at startup and when a lock is taken. The locks stop two runs (two processes or
+  compose file path, the systemd unit names joined with commas, or `noop-<project>`. The
+  locks stop two runs (two processes or
   two projects) from stopping and backing up the same compose file / units at once.
   Runs of different users do not see each other's locks (rare: root and a `docker` group
   member backing up the same compose file).
-- **Services:** a project stops and restarts only the services it lists (`services`), or
-  all services of its compose file / its `systemd_units` when the list is empty.
+- **Services:** a project stops and restarts only those of its services (`services`, or
+  all services of its compose file / its `systemd_units` when the list is empty) that are
+  running when its backup starts. Services that were already stopped, and one-shot jobs
+  that have exited, stay as they were.
 
 ---
 
@@ -207,28 +211,32 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
    level; `signal.NotifyContext` for SIGINT/SIGTERM; build info is logged.
 2. `app.New`: `config.Load` (file + env file + inline env, expansion, validation) and
    wiring. Any error ends the run (exit 1).
-3. `Manager.Run`: clean up stale locks, run all projects (sequential or parallel); when
-   every project succeeded and `global.auto_prune` is set: forget per project with a
-   `retention_policy`, then one prune + unlock (only if at least one project forgot).
+3. `Manager.Run`: run all projects (sequential or parallel); when the run was not
+   cancelled and `global.auto_prune` is set: forget each project that was backed up and
+   has a `retention_policy`, then, only when every project succeeded, one prune + unlock
+   (only if at least one project forgot).
 4. Exit code: 0 when every project backed up; 1 when config failed, any project failed or
    the run was cancelled. Forget, prune, unlock and post-backup hook failures are logged
-   but do **not** change the exit code; after a failed project they are skipped.
+   but do **not** change the exit code; after a failed project only prune and unlock are
+   skipped (a warning), and a cancelled run does no maintenance.
 
 ### Failure handling per project
 - Lock held by a live process → project fails.
 - Pre-backup hook fails → project fails; services are not touched.
-- Listing the services fails → project fails.
+- Finding the running services fails → project fails.
 - Stopping services fails → warning, the backup still runs (services may be running).
 - Services not stopped within `stop_timeout` → warning, the backup still runs.
-- `restic backup` fails → services are restarted, project fails.
+- `restic backup` fails → services are restarted, project fails. Exit code 3 (snapshot
+  saved, some source files unreadable) → warning, the project counts as backed up.
 - Restarting services fails → project fails; not running within `start_timeout` →
   warning.
 - Other projects always continue; each failure is logged once by `Manager` with the
   project, and `main` logs the summary (`backup: projects failed: N of M`).
 
 ### Shutdown and supervision
-- SIGINT/SIGTERM cancel the run context: running commands are killed (`exec.
-  CommandContext`), sequential mode starts no further project, waits end early.
+- SIGINT/SIGTERM cancel the run context: running commands get SIGTERM and are killed 10 s
+  later (`exec.Cmd.Cancel`/`WaitDelay`, so restic can remove its repository lock),
+  sequential mode starts no further project, waits end early.
 - A project that stopped its services restarts them with its own context
   (`context.WithoutCancel`, bounded by `start_timeout` + 3 min).
 - `main` waits at most `shutdownTimeout` (5 min) after the signal, then exits 1.
@@ -263,12 +271,20 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   (`.env`, `.yaml`/`.yml`, `.json`; other extensions are tried in that order) + inline
   `environments` (highest priority). `$VAR`, `${VAR}` and `${VAR:-default}` in env values,
   global settings and project fields (paths, units, hooks, options, retention) are expanded
-  once at load time from the **process** env (not from the env file).
+  once at load time from the **process** env (not from the env file); `$$` is a literal
+  `$`. `.env` files: `KEY=value` per line (`export ` prefix allowed, a line without `=` is
+  an error), `"…"` and `'…'` values are taken as is (single-quoted ones are not expanded),
+  an unquoted value ends at ` #`.
+- Relative `env_file`, `compose_file` and `sources` are resolved against the directory of
+  the config file (systemd runs restor in `/`); hooks are not (they are commands).
 - Validation (all problems at once, with field paths): `mode` is `sequential` (default) or
   `parallel`; per project `service_manager` and `sources` are required; `compose_file` for
   the compose managers, `systemd_units` for systemd; `systemd_scope` is `system` (default)
-  or `user`; `stop_timeout`/`start_timeout` (seconds) are ≥ 0 and > 0 when services are
-  stopped. Unknown keys are ignored.
+  or `user`; `services` of a systemd project are among its `systemd_units`;
+  `stop_timeout`/`start_timeout` (seconds) are ≥ 0 and > 0 when services are
+  stopped. Unknown keys are ignored. Startup warns about them
+  (typos such as `stop_service`), about a `retention_policy` without `auto_prune` and
+  about a missing repository (`restic_repo`, `RESTIC_REPOSITORY`, `RESTIC_REPOSITORY_FILE`).
 - `stop_services: false` backs up without stopping anything. Hooks: global
   `pre_backup_cmd`/`post_backup_cmd` are the default of every project, overridden per
   project.
@@ -285,21 +301,28 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 ### Service managers
 - Compose: `<docker|podman> compose -f <file> …`; services from `config --services` when
   not listed; stop with `stop -t <stop_timeout> <services>` (ignores "no containers to
-  stop"), start with `up -d <services>`. Running = `ps --format json` reports the service
+  stop"), start with `start <services>` (not `up`: a backup never recreates containers
+  from a changed compose file). Running = `ps --format json` reports the service
   with `State` `running` (Docker JSON lines or a JSON array; podman-compose via the
   `com.docker.compose.service` label).
 - systemd: `systemctl [--user] stop|start <units>` (stop ignores "not running"/"not
-  loaded"); state from `systemctl is-active <units>`. Stopped = no unit `active`,
-  `activating`, `deactivating`, `reloading` or `refreshing`; started = all `active`.
-  `services` filters `systemd_units`; if none match, all units are used.
+  loaded"); state from `systemctl is-active <units>`. Up (running before the backup, and
+  not yet stopped) = `active`, `activating`, `deactivating`, `reloading` or `refreshing`;
+  started = all `active`.
+  `services` selects some of `systemd_units` (a name that is not one of them is a
+  validation error); empty means all units.
 - noop: no services; every operation succeeds.
-- Stop and start poll every 500 ms until the expected state or the timeout.
+- Stop and start poll every 500 ms until the expected state or the timeout; a failed
+  status query is retried, and its error counts only when the last poll failed.
 
 ### restic
 - The repository is passed as `RESTIC_REPOSITORY` (not `-r`), so it never shows up in
   arguments or logs; with an empty `restic_repo` a `RESTIC_REPOSITORY` from the env is used.
 - `restic backup [backup_options] --tag <project> <sources>`; the snapshot ID is parsed
-  from `snapshot <id> saved` (logged; a missing ID is a warning, not an error).
+  from `snapshot <id> saved` (logged; a missing ID is a warning, not an error); the summary
+  lines (`Files:`, `Dirs:`, `Added to the repository:`, `processed`) are logged at info.
+  Exit code 3 returns the ID with a `*restic.IncompleteError`; `backup` matches it through
+  an `Incomplete() bool` interface, so it does not import `restic`.
 - `restic forget [forget_options] --tag <project> <retention_policy split on whitespace>`.
 - `restic [prune_options] prune` and `restic [prune_options] unlock`.
 - Every list option is passed as one argument per item: write `["-o", "s3.connections=10"]`
@@ -331,8 +354,10 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   (no viper) because viper lowercases map keys, which broke environment variable names.
 - **Forget and prune after all backups, sequentially:** they take exclusive repository locks
   and would fail or block concurrent backups; one repository-wide prune is cheaper than one
-  per project. They are skipped when a project failed, so a broken run never thins out
-  the snapshot history.
+  per project. After a failed project, forget still runs for the projects that have a
+  fresh snapshot (a permanently broken project must not stop retention for all others),
+  but the failed project keeps its history and prune is skipped, so a broken run never
+  deletes data.
 - **Restart services even when the backup failed or the run was cancelled:** a failed
   backup must not leave production services down.
 - **Tag = lowercase project name:** keeps each project's retention separate in a shared
@@ -363,7 +388,6 @@ Design decisions that are not obvious from the code go here, not into long code 
 // Declared in package backup, next to the code that calls it.
 type Locker interface {
     Lock(key string) (release func() error, err error)
-    CleanupStale() error
 }
 ```
 
@@ -394,13 +418,13 @@ func CreateServiceManager(p config.Project, d servicemanager.Deps) (backup.Servi
   typed answer, not a panic and not a generic error.
 
 ```go
-var ErrMissingDependency = errors.New("lock: missing dependency")
+var ErrMissingDependency = errors.New("servicemanager: missing dependency")
 
-func New(s Settings, d Deps) (*Locker, error) {
+func NewCompose(s ComposeSettings, d Deps) (*Compose, error) {
     if err := util.RequireAll(ErrMissingDependency,
-        util.Requirement{Name: "Dir", OK: s.Dir != ""},
+        util.Requirement{Name: "Runner", OK: d.Runner != nil},
         util.Requirement{Name: "Clock", OK: d.Clock != nil},
-        util.Requirement{Name: "Processes", OK: d.Processes != nil},
+        util.Requirement{Name: "File", OK: s.File != ""},
     ); err != nil {
         return nil, err // *util.DependencyError naming the field, wrapping the sentinel
     }
@@ -449,9 +473,10 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
   gets `log.With().Str("component", name).Logger()` (plus `project` where it applies).
 - Log with context fields, not formatted strings:
   `.Str("project", name).Err(err).Msg("backup failed")`.
-- Levels: `debug` for command lines and per-step detail, `info` for lifecycle (run start,
+- Levels: `debug` for command lines, the last output lines of successful commands and
+  per-step detail, `info` for lifecycle (run start,
   project done, snapshot ID), `warn` for recovered problems (services not stopped/started
-  in time, stop command failed, stale lock removed, missing binary), `error` for failures
+  in time, stop command failed, missing binary, suspicious config), `error` for failures
   that need attention (project failed, forget/prune/unlock failed, post-backup hook
   failed).
 - Never log secrets: no restic password, S3 keys, env file contents or repository URLs

@@ -180,3 +180,33 @@ func TestWarnMissingBinaries(t *testing.T) {
 	assert.Contains(t, buf.String(), `"binary":"podman"`)
 	assert.NotContains(t, buf.String(), `"binary":"docker"`)
 }
+
+func TestWarnConfig(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	cfg := &config.Config{UnknownKeys: []string{"projects[web].stop_service"}}
+	projects := []config.Project{{Name: "web", RetentionPolicy: "--keep-last 1"}}
+
+	warnConfig(zerolog.New(&buf), cfg, projects, []string{
+		"RESTIC_REPOSITORY=/r",
+		"RESTIC_REPOSITORY=",
+	})
+
+	out := buf.String()
+	assert.Contains(t, out, `"key":"projects[web].stop_service"`)
+	assert.Contains(t, out, "retention_policy is ignored")
+	assert.Contains(t, out, "no restic repository", "the later, empty value wins")
+}
+
+func TestWarnConfig_Quiet(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	projects := []config.Project{{Name: "web", RetentionPolicy: "--keep-last 1"}}
+	log := zerolog.New(&buf)
+
+	warnConfig(log, &config.Config{Global: config.GlobalConfig{AutoPrune: true}}, projects,
+		[]string{"RESTIC_REPOSITORY_FILE=/etc/repo"})
+	warnConfig(log, &config.Config{Global: config.GlobalConfig{ResticRepo: "/r"}}, nil, nil)
+
+	assert.Empty(t, buf.String())
+}

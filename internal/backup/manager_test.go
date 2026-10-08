@@ -7,8 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-
-	"github.com/dombyte/restor/internal/backup/mocks"
 )
 
 // fileProject is a project without services or hooks.
@@ -46,8 +44,10 @@ func TestManager_RunParallel(t *testing.T) {
 	f.expectBackup("a", nil)
 	f.expectBackup("b", assert.AnError)
 	f.expectBackup("c", nil)
+	f.restic.EXPECT().Forget(mock.Anything, "a", "--keep-last 1", []string(nil)).
+		Return(nil).Once()
 	m := f.manager(t, Settings{Parallel: true, AutoPrune: true},
-		fileProject(f, t, "a", "--keep-last 1"), fileProject(f, t, "b", ""),
+		fileProject(f, t, "a", "--keep-last 1"), fileProject(f, t, "b", "--keep-last 1"),
 		fileProject(f, t, "c", ""))
 
 	err := m.Run(context.Background())
@@ -55,8 +55,8 @@ func TestManager_RunParallel(t *testing.T) {
 	require.ErrorIs(t, err, ErrProjectsFailed)
 	assert.Contains(t, err.Error(), "1 of 3")
 	assert.Len(t, f.rec.list(), 9)
-	f.restic.AssertNotCalled(t, "Forget", mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything)
+	// Only the backed-up project a is forgotten: b failed, and prune/unlock are skipped
+	// (the restic mock fails the test on any unexpected call).
 }
 
 func TestManager_Maintenance(t *testing.T) {
@@ -123,16 +123,4 @@ func TestManager_RunCancelled(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, []string{"lock a", "release a"}, f.rec.list(),
 		"b is not started after the cancel, no maintenance")
-}
-
-func TestManager_CleanupFailsIsLogged(t *testing.T) {
-	t.Parallel()
-	f := &fixture{
-		rec: &recorder{}, restic: mocks.NewMockRestic(t), locker: mocks.NewMockLocker(t),
-		hooks: mocks.NewMockRunner(t),
-	}
-	f.locker.EXPECT().CleanupStale().Return(assert.AnError).Once()
-	m := f.manager(t, Settings{})
-
-	require.NoError(t, m.Run(context.Background()))
 }

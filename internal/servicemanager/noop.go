@@ -24,8 +24,8 @@ func NewNoop(s NoopSettings) *Noop {
 // LockKey returns the configured key.
 func (n *Noop) LockKey() string { return n.lockKey }
 
-// Services returns no services.
-func (n *Noop) Services(context.Context, []string) ([]string, error) { return nil, nil }
+// Running returns no services.
+func (n *Noop) Running(context.Context, []string) ([]string, error) { return nil, nil }
 
 // Stop does nothing.
 func (n *Noop) Stop(context.Context, []string, time.Duration) (bool, error) { return true, nil }

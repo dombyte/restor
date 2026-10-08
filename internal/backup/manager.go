@@ -32,11 +32,13 @@ type Restic interface {
 	Unlock(ctx context.Context, opts []string) error
 }
 
-// Services stops and starts the services of one project. Stop and Start report false
-// when the services did not reach the expected state within the timeout.
+// Services stops and starts the services of one project. Running returns the services
+// among requested (all when empty) that run now: only those are stopped and started
+// again. Stop and Start report false when the services did not reach the expected state
+// within the timeout.
 type Services interface {
 	LockKey() string
-	Services(ctx context.Context, requested []string) ([]string, error)
+	Running(ctx context.Context, requested []string) ([]string, error)
 	Stop(ctx context.Context, services []string, timeout time.Duration) (bool, error)
 	Start(ctx context.Context, services []string, timeout time.Duration) (bool, error)
 }
@@ -44,7 +46,6 @@ type Services interface {
 // Locker keeps two runs from working on the same services at the same time.
 type Locker interface {
 	Lock(key string) (release func() error, err error)
-	CleanupStale() error
 }
 
 // Runner executes the hook commands.
@@ -101,32 +102,32 @@ func NewManager(s Settings, projects []Project, d Deps) (*Manager, error) {
 	return &Manager{s: s, projects: projects, d: d}, nil
 }
 
-// Run backs up every project, then runs forget, prune and unlock when AutoPrune is set
-// and every project succeeded. Project failures are logged here and summarized in the
+// Run backs up every project. With AutoPrune it then runs forget for the projects that
+// were backed up, and prune and unlock only when every project succeeded. A cancelled
+// run does no maintenance. Project failures are logged here and summarized in the
 // returned ErrProjectsFailed; forget, prune and unlock failures are only logged.
 func (m *Manager) Run(ctx context.Context) error {
-	if err := m.d.Locker.CleanupStale(); err != nil {
-		m.d.Log.Warn().Err(err).Msg("cannot clean up stale locks")
-	}
 	m.d.Log.Info().Bool("parallel", m.s.Parallel).Int("projects", len(m.projects)).
 		Msg("starting backup run")
 
-	failed := m.runProjects(ctx)
+	succeeded, failed := m.runProjects(ctx)
+	if ctx.Err() == nil {
+		m.maintain(ctx, succeeded, failed == 0)
+	}
 	if failed > 0 {
 		return fmt.Errorf("%w: %d of %d", ErrProjectsFailed, failed, len(m.projects))
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("backup: %w", err)
 	}
-	m.maintain(ctx)
 	return nil
 }
 
-// forget runs forget for every project with a retention policy and reports whether there
-// was one.
-func (m *Manager) forget(ctx context.Context) bool {
+// forget runs forget for every one of projects with a retention policy and reports
+// whether there was one.
+func (m *Manager) forget(ctx context.Context, projects []Project) bool {
 	forgot := false
-	for _, p := range m.projects {
+	for _, p := range projects {
 		s := p.Settings
 		if s.RetentionPolicy == "" {
 			continue
@@ -142,36 +143,59 @@ func (m *Manager) forget(ctx context.Context) bool {
 	return forgot
 }
 
-// runProjects runs the projects in the configured mode and returns how many failed.
-func (m *Manager) runProjects(ctx context.Context) int {
+// runProjects runs the projects in the configured mode and returns those that succeeded
+// (in their configured order) and how many failed; projects skipped after a cancel are
+// neither.
+func (m *Manager) runProjects(ctx context.Context) ([]Project, int) {
+	ok := make([]bool, len(m.projects)) // each run writes only its own index
 	var failed atomic.Int32
-	run := func(p Project) {
+	run := func(i int) {
+		p := m.projects[i]
 		if err := m.runProject(ctx, p); err != nil {
 			failed.Add(1)
 			m.d.Log.Error().Err(err).Str("project", p.Settings.Name).Msg("project backup failed")
+			return
 		}
+		ok[i] = true
 	}
 	if m.s.Parallel {
 		var wg sync.WaitGroup
-		for _, p := range m.projects {
-			wg.Go(func() { run(p) })
+		for i := range m.projects {
+			wg.Go(func() { run(i) })
 		}
 		wg.Wait()
-		return int(failed.Load())
-	}
-	for _, p := range m.projects {
-		if ctx.Err() != nil {
-			break
+	} else {
+		for i := range m.projects {
+			if ctx.Err() != nil {
+				break
+			}
+			run(i)
 		}
-		run(p)
 	}
-	return int(failed.Load())
+	return m.selected(ok), int(failed.Load())
 }
 
-// maintain runs forget for every project with a retention policy, then one prune and
-// unlock. They run after all backups because they need exclusive repository locks.
-func (m *Manager) maintain(ctx context.Context) {
-	if !m.s.AutoPrune || !m.forget(ctx) {
+// selected returns the projects whose index is true in ok, in their configured order.
+func (m *Manager) selected(ok []bool) []Project {
+	var out []Project
+	for i, p := range m.projects {
+		if ok[i] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// maintain runs forget for the projects with a retention policy among succeeded, then
+// one prune and unlock when allSucceeded. They run after all backups because they need
+// exclusive repository locks. Forget only touches projects with a new snapshot; prune is
+// skipped after a failure, so a broken run never removes data.
+func (m *Manager) maintain(ctx context.Context, succeeded []Project, allSucceeded bool) {
+	if !m.s.AutoPrune || !m.forget(ctx, succeeded) {
+		return
+	}
+	if !allSucceeded {
+		m.d.Log.Warn().Msg("prune skipped because a project failed")
 		return
 	}
 	if err := m.d.Restic.Prune(ctx, m.s.PruneOptions); err != nil {

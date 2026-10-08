@@ -9,17 +9,22 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
 )
 
-// waitDelay bounds how long Run waits for a cancelled program's output pipes to close
-// after the context killed it.
-const waitDelay = 5 * time.Second
-
-// maxOutputLines is how much of a failed program's output an error carries.
-const maxOutputLines = 20
+const (
+	// waitDelay is how long a cancelled program gets to exit after SIGTERM (restic removes
+	// its repository lock) before it is killed.
+	waitDelay = 10 * time.Second
+	// maxOutputLines is how much of a program's output an error or debug log carries.
+	maxOutputLines = 20
+	// maxOutput bounds the output Run keeps in memory; a long restic run keeps its last
+	// part, which holds the summary and the snapshot ID.
+	maxOutput = 1 << 20
+)
 
 // ErrEmptyCommand is returned when Run is called without a program name.
 var ErrEmptyCommand = errors.New("command: empty command")
@@ -35,8 +40,10 @@ func New(env []string, log zerolog.Logger) *Runner {
 	return &Runner{env: env, log: log}
 }
 
-// Run executes name with args and returns its combined stdout and stderr. A non-zero
-// exit returns the output too, with an error that carries the last lines of it.
+// Run executes name with args and returns its combined stdout and stderr (the last
+// maxOutput bytes). A non-zero exit returns the output too, with an error that carries
+// the last lines of it. When ctx ends, the program gets SIGTERM, then SIGKILL after
+// waitDelay.
 func (r *Runner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	if name == "" {
 		return nil, ErrEmptyCommand
@@ -47,12 +54,42 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) ([]byte, 
 	// they run directly, without a shell.
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // see above
 	cmd.Env = r.env
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = waitDelay
-	out, err := cmd.CombinedOutput()
+	buf := &tailBuffer{max: maxOutput}
+	cmd.Stdout, cmd.Stderr = buf, buf
+	err := cmd.Run()
+	out := buf.Bytes()
 	if err != nil {
 		return out, &Error{Program: name, Output: tail(out, maxOutputLines), Err: err}
 	}
+	r.log.Debug().Str("program", name).Str("output", tail(out, maxOutputLines)).
+		Msg("command finished")
 	return out, nil
+}
+
+// tailBuffer is an io.Writer that keeps only the last max bytes written to it.
+type tailBuffer struct {
+	max int
+	buf []byte
+}
+
+// Write appends p. The buffer is compacted only when it reaches twice max, so long
+// output costs linear time instead of one copy of max bytes per write.
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.buf = append(b.buf, p...)
+	if len(b.buf) >= 2*b.max {
+		b.buf = append(b.buf[:0], b.buf[len(b.buf)-b.max:]...)
+	}
+	return len(p), nil
+}
+
+// Bytes returns the last max bytes written.
+func (b *tailBuffer) Bytes() []byte {
+	if over := len(b.buf) - b.max; over > 0 {
+		return b.buf[over:]
+	}
+	return b.buf
 }
 
 // Error is a failed program run. The arguments are left out on purpose: they may carry

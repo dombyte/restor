@@ -78,8 +78,8 @@ func (m *Manager) backupProject(ctx context.Context, p Project, log zerolog.Logg
 	return nil
 }
 
-// stopServices stops the project's services and returns them. A failed or slow stop is
-// logged and the backup continues.
+// stopServices stops the project's running services and returns them, so that only
+// those are started again. A failed or slow stop is logged and the backup continues.
 func (m *Manager) stopServices(ctx context.Context, p Project, log zerolog.Logger) (
 	[]string, error,
 ) {
@@ -87,9 +87,13 @@ func (m *Manager) stopServices(ctx context.Context, p Project, log zerolog.Logge
 		log.Debug().Msg("service stop/start disabled")
 		return nil, nil
 	}
-	services, err := p.Services.Services(ctx, p.Settings.Services)
-	if err != nil || len(services) == 0 {
+	services, err := p.Services.Running(ctx, p.Settings.Services)
+	if err != nil {
 		return nil, err
+	}
+	if len(services) == 0 {
+		log.Debug().Msg("no services running, nothing to stop")
+		return nil, nil
 	}
 	log.Info().Strs("services", services).Msg("stopping services")
 	stopped, err := p.Services.Stop(ctx, services, p.Settings.StopTimeout)
@@ -125,8 +129,16 @@ func (m *Manager) startServices(ctx context.Context, p Project, services []strin
 	return nil
 }
 
+// backup runs restic. An incomplete snapshot (some source files unreadable) is saved, so
+// it is logged as a warning and the project counts as backed up.
 func (m *Manager) backup(ctx context.Context, s ProjectSettings, log zerolog.Logger) error {
 	id, err := m.d.Restic.Backup(ctx, s.Name, s.Sources, s.BackupOptions)
+	var incomplete interface{ Incomplete() bool }
+	if errors.As(err, &incomplete) && incomplete.Incomplete() {
+		log.Warn().Err(err).Str("snapshot_id", id).
+			Msg("backup completed, but some source files could not be read")
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("backup: %s: %w", s.Name, err)
 	}

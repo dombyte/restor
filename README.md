@@ -76,11 +76,17 @@ them all at once), `restic_repo`, `auto_prune`, `prune_options`, `pre_backup_cmd
 **Per project (optional):** `services`, `systemd_scope`, `stop_services`,
 `retention_policy`, `backup_options`, `forget_options`, `pre_backup_cmd`, `post_backup_cmd`
 
-restor checks the whole file at startup and lists every problem with its field path.
+Only the services that are running when a project's backup starts are stopped, and only
+those are started again afterwards.
+
+Relative `env_file`, `compose_file` and `sources` paths are resolved against the directory
+of the config file. restor checks the whole file at startup and lists every problem with
+its field path; unknown keys (typos) are reported as warnings.
 
 **Environment:** `env_file` and inline `environments` are passed to restic, the service
 managers and the hooks (inline wins). `$VAR`, `${VAR}` and `${VAR:-default}` are expanded
-from the process environment when the config is loaded.
+from the process environment when the config is loaded; write `$$` for a literal `$`
+(e.g. in a password). In `.env` files a value in single quotes is never expanded.
 
 **Project names** are case-insensitive; the lowercase name is the restic tag.
 

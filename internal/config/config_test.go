@@ -188,6 +188,7 @@ projects:
   c: {}
   d: {service_manager: kubernetes}
   e: {service_manager: noop}
+  f: {service_manager: systemd, systemd_units: [a.service], services: [b.service]}
 `,
 			want: []string{
 				"projects.a.compose_file: required for service_manager docker-compose",
@@ -198,6 +199,7 @@ projects:
 				`projects.b.systemd_scope: must be "system" or "user"`,
 				"projects.c.service_manager: required",
 				`projects.d.service_manager: unsupported value "kubernetes"`,
+				`projects.f.services: "b.service" is not in systemd_units`,
 			},
 		},
 	}
@@ -277,4 +279,50 @@ func TestLoad_ExampleConfig(t *testing.T) {
 	require.NoError(t, err, "the shipped template must stay valid")
 	assert.NotEmpty(t, cfg.ResolvedProjects())
 	assert.Contains(t, cfg.EnvPairs(), "AWS_DEFAULT_REGION=eu-central-1")
+}
+
+func TestLoad_RelativePathsAreResolvedAgainstTheConfigDir(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, dir, "restor.env", "A=1\n")
+	path := writeFile(t, dir, "config.yaml", `
+env_file: ${NAME}.env
+projects:
+  web:
+    service_manager: docker-compose
+    compose_file: web/compose.yml
+    services: ["${SVC}"]
+    sources: [data, /abs]
+    stop_timeout: 1
+    start_timeout: 1
+`)
+	cfg, err := Load(path, getenv(map[string]string{"NAME": "restor", "SVC": "app"}))
+	require.NoError(t, err)
+
+	assert.Equal(t, filepath.Join(dir, "restor.env"), cfg.EnvFile)
+	assert.Equal(t, []string{"A=1"}, cfg.EnvPairs())
+	p := cfg.ResolvedProjects()[0]
+	assert.Equal(t, filepath.Join(dir, "web/compose.yml"), p.ComposeFile)
+	assert.Equal(t, []string{filepath.Join(dir, "data"), "/abs"}, p.Sources)
+	assert.Equal(t, []string{"app"}, p.Services)
+}
+
+func TestLoad_UnknownKeys(t *testing.T) {
+	t.Parallel()
+	path := writeFile(t, t.TempDir(), "config.yaml", `
+modus: parallel
+global: {restic_repo: /r, auto_purne: true}
+projects:
+  Web:
+    service_manager: noop
+    sources: [/a]
+    stop_service: false
+    retension_policy: --keep-last 1
+`)
+	cfg, err := Load(path, getenv(nil))
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"global.auto_purne", "modus", "projects[Web].retension_policy",
+		"projects[Web].stop_service",
+	}, cfg.UnknownKeys)
 }

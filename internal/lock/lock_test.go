@@ -4,106 +4,107 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
-	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-
-	"github.com/dombyte/restor/internal/lock/mocks"
-	"github.com/dombyte/restor/internal/util/clocktest"
 )
 
-var start = time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
-
-func newLocker(t *testing.T) (*Locker, *mocks.MockProcesses, *clocktest.Clock) {
+func newLocker(t *testing.T) *Locker {
 	t.Helper()
-	procs := mocks.NewMockProcesses(t)
-	clock := clocktest.New(start)
-	l, err := New(Settings{Dir: filepath.Join(t.TempDir(), "locks")},
-		Deps{Clock: clock, Processes: procs, Log: zerolog.Nop()})
+	l, err := New(Settings{Dir: filepath.Join(t.TempDir(), "locks")})
 	require.NoError(t, err)
-	return l, procs, clock
-}
-
-func writeLock(t *testing.T, l *Locker, key, content string) string {
-	t.Helper()
-	require.NoError(t, os.MkdirAll(l.dir, dirMode))
-	path := l.path(key)
-	require.NoError(t, os.WriteFile(path, []byte(content), fileMode))
-	return path
+	return l
 }
 
 func TestNew_MissingDependencies(t *testing.T) {
 	t.Parallel()
-	_, err := New(Settings{}, Deps{})
+	_, err := New(Settings{})
 	require.ErrorIs(t, err, ErrMissingDependency)
 }
 
 func TestLocker_LockAndRelease(t *testing.T) {
 	t.Parallel()
-	l, _, _ := newLocker(t)
+	l := newLocker(t)
 
 	release, err := l.Lock("/srv/app/compose.yml")
 	require.NoError(t, err)
 
-	path := filepath.Join(l.dir, "_srv_app_compose_yml.lock")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(l.path("/srv/app/compose.yml"))
 	require.NoError(t, err)
-	assert.Equal(t, strconv.Itoa(os.Getpid())+"\n"+strconv.FormatInt(start.Unix(), 10),
-		string(data))
+	assert.Equal(t, strconv.Itoa(os.Getpid())+"\n/srv/app/compose.yml\n", string(data))
 
 	require.NoError(t, release())
-	assert.NoFileExists(t, path)
 	require.NoError(t, release(), "releasing twice is harmless")
+
+	release, err = l.Lock("/srv/app/compose.yml")
+	require.NoError(t, err, "a released lock can be taken again")
+	require.NoError(t, release())
 }
 
-func TestLocker_LockHeldByLiveProcess(t *testing.T) {
+func TestLocker_LockHeld(t *testing.T) {
 	t.Parallel()
-	l, procs, _ := newLocker(t)
-	writeLock(t, l, "units", "4242\n1")
-	procs.EXPECT().Alive(4242).Return(true).Once()
+	l := newLocker(t)
+	release, err := l.Lock("units")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, release()) }()
 
-	_, err := l.Lock("units")
+	_, err = l.Lock("units")
 
 	require.ErrorIs(t, err, ErrLocked)
 }
 
-func TestLocker_LockReplacesStaleLock(t *testing.T) {
+func TestLocker_LockIgnoresLeftoverFile(t *testing.T) {
 	t.Parallel()
-	l, procs, _ := newLocker(t)
-	path := writeLock(t, l, "units", "4242\n1")
-	procs.EXPECT().Alive(4242).Return(false).Once()
+	l := newLocker(t)
+	require.NoError(t, os.MkdirAll(l.dir, dirMode))
+	// A file left by a crashed run (or an earlier version): nobody holds a flock on it.
+	require.NoError(t, os.WriteFile(l.path("units"), []byte("4242\nold content\n"), fileMode))
 
 	release, err := l.Lock("units")
 
 	require.NoError(t, err)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(l.path("units"))
 	require.NoError(t, err)
-	assert.Contains(t, string(data), strconv.Itoa(os.Getpid()))
+	assert.Equal(t, strconv.Itoa(os.Getpid())+"\nunits\n", string(data))
 	require.NoError(t, release())
 }
 
-func TestLocker_LockUnreadable(t *testing.T) {
+func TestLocker_DistinctKeysDoNotCollide(t *testing.T) {
 	t.Parallel()
-	l, _, clock := newLocker(t)
-	path := writeLock(t, l, "units", "garbage")
-	require.NoError(t, os.Chtimes(path, start, start))
+	l := newLocker(t)
+	long := strings.Repeat("unit.service,", 100) // longer than a file name may be
+	var releases []func() error
+	for _, key := range []string{"/srv/a_b.yml", "/srv/a/b.yml", "/srv/a.b.yml", long} {
+		release, err := l.Lock(key)
+		require.NoError(t, err, key)
+		releases = append(releases, release)
+	}
+	for _, release := range releases {
+		require.NoError(t, release())
+	}
+}
+
+func TestLocker_LockRefusesSymlinkedFile(t *testing.T) {
+	t.Parallel()
+	l := newLocker(t)
+	require.NoError(t, os.MkdirAll(l.dir, dirMode))
+	target := filepath.Join(t.TempDir(), "victim")
+	require.NoError(t, os.WriteFile(target, []byte("keep"), fileMode))
+	require.NoError(t, os.Symlink(target, l.path("units")))
 
 	_, err := l.Lock("units")
-	require.ErrorIs(t, err, ErrLocked, "a fresh unreadable lock is respected")
 
-	clock.After(2 * unreadableGrace)
-	release, err := l.Lock("units")
-	require.NoError(t, err, "an old unreadable lock is stale")
-	require.NoError(t, release())
+	require.Error(t, err)
+	data, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "keep", string(data))
 }
 
 func TestLocker_LockDirFails(t *testing.T) {
 	t.Parallel()
-	l, _, _ := newLocker(t)
+	l := newLocker(t)
 	require.NoError(t, os.WriteFile(l.dir, nil, fileMode)) // a file where the dir belongs
 
 	_, err := l.Lock("units")
@@ -112,55 +113,28 @@ func TestLocker_LockDirFails(t *testing.T) {
 	assert.NotErrorIs(t, err, ErrLocked)
 }
 
-func TestLocker_CleanupStale(t *testing.T) {
+func TestLocker_LockRefusesWritableDir(t *testing.T) {
 	t.Parallel()
-	l, procs, _ := newLocker(t)
-	live := writeLock(t, l, "live", "1\n1")
-	dead := writeLock(t, l, "dead", "2\n1")
-	procs.EXPECT().Alive(1).Return(true).Once()
-	procs.EXPECT().Alive(2).Return(false).Once()
+	l := newLocker(t)
+	require.NoError(t, os.MkdirAll(l.dir, dirMode))
+	require.NoError(t, os.Chmod(l.dir, 0o777))
 
-	require.NoError(t, l.CleanupStale())
+	_, err := l.Lock("units")
 
-	assert.FileExists(t, live)
-	assert.NoFileExists(t, dead)
+	require.ErrorIs(t, err, ErrUnsafeDir)
 }
 
-func TestLocker_CleanupStaleNoDir(t *testing.T) {
+func TestLocker_LockRefusesSymlinkedDir(t *testing.T) {
 	t.Parallel()
-	l, _, _ := newLocker(t)
-	require.NoError(t, l.CleanupStale())
-}
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "locks")
+	require.NoError(t, os.Symlink(real, link))
+	l, err := New(Settings{Dir: link})
+	require.NoError(t, err)
 
-func TestLocker_CleanupStaleUnreadableFile(t *testing.T) {
-	t.Parallel()
-	l, procs, _ := newLocker(t)
-	require.NoError(t, os.MkdirAll(filepath.Join(l.dir, "dir.lock"), dirMode))
-	procs.AssertNotCalled(t, "Alive", mock.Anything)
+	_, err = l.Lock("units")
 
-	require.Error(t, l.CleanupStale(), "a directory cannot be read as a lock file")
-}
-
-func TestLocker_Path(t *testing.T) {
-	t.Parallel()
-	l := &Locker{dir: "/locks"}
-	tests := map[string]string{
-		"/srv/app/docker-compose.yml": "/locks/_srv_app_docker-compose_yml.lock",
-		"a.service,b.service":         "/locks/a_service,b_service.lock",
-		`C:\x`:                        "/locks/C__x.lock",
-	}
-	for key, want := range tests {
-		assert.Equal(t, want, l.path(key), key)
-	}
-}
-
-func TestOSProcesses_Alive(t *testing.T) {
-	t.Parallel()
-	p := OSProcesses{}
-	assert.True(t, p.Alive(os.Getpid()))
-	assert.False(t, p.Alive(0))
-	assert.False(t, p.Alive(-1))
-	assert.False(t, p.Alive(1<<22+12345), "PIDs above the Linux maximum do not exist")
+	require.ErrorIs(t, err, ErrUnsafeDir)
 }
 
 func TestDefaultDir(t *testing.T) {
@@ -192,15 +166,4 @@ func TestDefaultDir(t *testing.T) {
 			assert.Equal(t, tt.want, DefaultDir(tt.user))
 		})
 	}
-}
-
-func TestLocker_LockRefusesWritableDir(t *testing.T) {
-	t.Parallel()
-	l, _, _ := newLocker(t)
-	require.NoError(t, os.MkdirAll(l.dir, dirMode))
-	require.NoError(t, os.Chmod(l.dir, 0o777))
-
-	_, err := l.Lock("units")
-
-	require.ErrorIs(t, err, ErrUnsafeDir)
 }

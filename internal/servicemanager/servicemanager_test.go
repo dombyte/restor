@@ -78,9 +78,30 @@ func TestWaitUntil_Timeout(t *testing.T) {
 
 func TestWaitUntil_Error(t *testing.T) {
 	t.Parallel()
-	_, err := waitUntil(context.Background(), clocktest.New(time.Unix(0, 0)), time.Second,
-		func(context.Context) (bool, error) { return false, assert.AnError })
-	require.ErrorIs(t, err, assert.AnError)
+	calls := 0
+	ok, err := waitUntil(context.Background(), clocktest.New(time.Unix(0, 0)), time.Second,
+		func(context.Context) (bool, error) {
+			calls++
+			return false, assert.AnError
+		})
+	assert.False(t, ok)
+	require.ErrorIs(t, err, assert.AnError, "the last poll failed")
+	assert.Equal(t, 3, calls, "failed polls are retried until the timeout")
+}
+
+func TestWaitUntil_TransientError(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	ok, err := waitUntil(context.Background(), clocktest.New(time.Unix(0, 0)), time.Second,
+		func(context.Context) (bool, error) {
+			calls++
+			if calls == 1 {
+				return false, assert.AnError
+			}
+			return true, nil
+		})
+	require.NoError(t, err)
+	assert.True(t, ok)
 }
 
 func TestWaitUntil_Cancelled(t *testing.T) {
@@ -106,7 +127,7 @@ func TestNoop(t *testing.T) {
 	ctx := context.Background()
 
 	assert.Equal(t, "noop_files", n.LockKey())
-	services, err := n.Services(ctx, []string{"a"})
+	services, err := n.Running(ctx, []string{"a"})
 	require.NoError(t, err)
 	assert.Empty(t, services)
 	ok, err := n.Stop(ctx, []string{"a"}, time.Second)
