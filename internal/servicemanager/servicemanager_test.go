@@ -106,7 +106,7 @@ func TestNoop(t *testing.T) {
 	ctx := context.Background()
 
 	assert.Equal(t, "noop_files", n.LockKey())
-	services, err := n.Services(ctx, []string{"a"})
+	services, err := n.Running(ctx, []string{"a"})
 	require.NoError(t, err)
 	assert.Empty(t, services)
 	ok, err := n.Stop(ctx, []string{"a"}, time.Second)

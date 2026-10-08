@@ -91,12 +91,12 @@ func (_c *MockServices_LockKey_Call) RunAndReturn(run func() string) *MockServic
 	return _c
 }
 
-// Services provides a mock function for the type MockServices
-func (_mock *MockServices) Services(ctx context.Context, requested []string) ([]string, error) {
+// Running provides a mock function for the type MockServices
+func (_mock *MockServices) Running(ctx context.Context, requested []string) ([]string, error) {
 	ret := _mock.Called(ctx, requested)
 
 	if len(ret) == 0 {
-		panic("no return value specified for Services")
+		panic("no return value specified for Running")
 	}
 
 	var r0 []string
@@ -119,19 +119,19 @@ func (_mock *MockServices) Services(ctx context.Context, requested []string) ([]
 	return r0, r1
 }
 
-// MockServices_Services_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Services'
-type MockServices_Services_Call struct {
+// MockServices_Running_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Running'
+type MockServices_Running_Call struct {
 	*mock.Call
 }
 
-// Services is a helper method to define mock.On call
+// Running is a helper method to define mock.On call
 //   - ctx context.Context
 //   - requested []string
-func (_e *MockServices_Expecter) Services(ctx any, requested any) *MockServices_Services_Call {
-	return &MockServices_Services_Call{Call: _e.mock.On("Services", ctx, requested)}
+func (_e *MockServices_Expecter) Running(ctx any, requested any) *MockServices_Running_Call {
+	return &MockServices_Running_Call{Call: _e.mock.On("Running", ctx, requested)}
 }
 
-func (_c *MockServices_Services_Call) Run(run func(ctx context.Context, requested []string)) *MockServices_Services_Call {
+func (_c *MockServices_Running_Call) Run(run func(ctx context.Context, requested []string)) *MockServices_Running_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -149,12 +149,12 @@ func (_c *MockServices_Services_Call) Run(run func(ctx context.Context, requeste
 	return _c
 }
 
-func (_c *MockServices_Services_Call) Return(strings []string, err error) *MockServices_Services_Call {
+func (_c *MockServices_Running_Call) Return(strings []string, err error) *MockServices_Running_Call {
 	_c.Call.Return(strings, err)
 	return _c
 }
 
-func (_c *MockServices_Services_Call) RunAndReturn(run func(ctx context.Context, requested []string) ([]string, error)) *MockServices_Services_Call {
+func (_c *MockServices_Running_Call) RunAndReturn(run func(ctx context.Context, requested []string) ([]string, error)) *MockServices_Running_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -34,20 +34,30 @@ func TestCompose_LockKey(t *testing.T) {
 	assert.Equal(t, composeFile, c.LockKey())
 }
 
-func TestCompose_Services(t *testing.T) {
+func TestCompose_Running(t *testing.T) {
 	t.Parallel()
+	ps := []byte(`{"Service":"web","State":"running"}` + "\n" +
+		`{"Service":"db","State":"exited"}`)
 	c, r := newCompose(t)
-	got, err := c.Services(context.Background(), []string{"web"})
+	expectCompose(r, "ps", "--format", "json").Return(ps, nil).Once()
+	requested := []string{"web", "db"}
+	got, err := c.Running(context.Background(), requested)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"web"}, got)
+	assert.Equal(t, []string{"web", "db"}, requested, "requested is not modified")
+
+	expectCompose(r, "config", "--services").Return([]byte("web\ndb\njob\n\n"), nil).Once()
+	expectCompose(r, "ps", "--format", "json").Return(ps, nil).Once()
+	got, err = c.Running(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"web"}, got)
 
-	expectCompose(r, "config", "--services").Return([]byte("web\ndb\n\n"), nil).Once()
-	got, err = c.Services(context.Background(), nil)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"web", "db"}, got)
-
 	expectCompose(r, "config", "--services").Return(nil, assert.AnError).Once()
-	_, err = c.Services(context.Background(), nil)
+	_, err = c.Running(context.Background(), nil)
+	require.ErrorIs(t, err, assert.AnError)
+
+	expectCompose(r, "ps", "--format", "json").Return(nil, assert.AnError).Once()
+	_, err = c.Running(context.Background(), []string{"web"})
 	require.ErrorIs(t, err, assert.AnError)
 }
 
@@ -128,7 +138,7 @@ func TestCompose_StartAndStopNothing(t *testing.T) {
 func TestCompose_StartFails(t *testing.T) {
 	t.Parallel()
 	c, r := newCompose(t)
-	expectCompose(r, "up", "-d", "web").Return(nil, assert.AnError).Once()
+	expectCompose(r, "start", "web").Return(nil, assert.AnError).Once()
 
 	_, err := c.Start(context.Background(), []string{"web"}, time.Second)
 
@@ -179,7 +189,7 @@ func TestParseComposePs(t *testing.T) {
 func TestCompose_Start(t *testing.T) {
 	t.Parallel()
 	c, r := newCompose(t)
-	expectCompose(r, "up", "-d", "web", "db").Return(nil, nil).Once()
+	expectCompose(r, "start", "web", "db").Return(nil, nil).Once()
 	expectCompose(r, "ps", "--format", "json").
 		Return([]byte(`{"Service":"web","State":"running"}`), nil).Once()
 	expectCompose(r, "ps", "--format", "json").
@@ -195,7 +205,7 @@ func TestCompose_Start(t *testing.T) {
 func TestCompose_StartTimeout(t *testing.T) {
 	t.Parallel()
 	c, r := newCompose(t)
-	expectCompose(r, "up", "-d", "web").Return(nil, nil).Once()
+	expectCompose(r, "start", "web").Return(nil, nil).Once()
 	expectCompose(r, "ps", "--format", "json").
 		Return([]byte(`{"Service":"web","State":"restarting"}`), nil)
 

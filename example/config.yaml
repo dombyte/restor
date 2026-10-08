@@ -198,6 +198,7 @@ global:
 #     * When false: Services continue running during backup (read-only mode)
 #     * Useful for databases, high-availability services, or when using filesystem snapshots
 #   - services: List of specific services to stop/start (default: all from service manager;
+#     only the ones running at backup time are stopped and started again;
 #     for systemd every name must be one of systemd_units)
 #   - systemd_scope: For systemd only - "system" (default) or "user" for user-level services
 #   - backup_options: Additional restic options for backup command only
