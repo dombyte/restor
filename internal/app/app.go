@@ -99,9 +99,7 @@ func createManager(cfg *config.Config, projects []config.Project, d managerDeps)
 	if err != nil {
 		return nil, err
 	}
-	locker, err := lock.New(lock.Settings{Dir: d.lockDir}, lock.Deps{
-		Clock: d.clock, Processes: lock.OSProcesses{}, Log: component(d.log, "lock"),
-	})
+	locker, err := lock.New(lock.Settings{Dir: d.lockDir})
 	if err != nil {
 		return nil, err
 	}

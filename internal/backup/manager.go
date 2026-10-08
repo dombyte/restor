@@ -44,7 +44,6 @@ type Services interface {
 // Locker keeps two runs from working on the same services at the same time.
 type Locker interface {
 	Lock(key string) (release func() error, err error)
-	CleanupStale() error
 }
 
 // Runner executes the hook commands.
@@ -105,9 +104,6 @@ func NewManager(s Settings, projects []Project, d Deps) (*Manager, error) {
 // and every project succeeded. Project failures are logged here and summarized in the
 // returned ErrProjectsFailed; forget, prune and unlock failures are only logged.
 func (m *Manager) Run(ctx context.Context) error {
-	if err := m.d.Locker.CleanupStale(); err != nil {
-		m.d.Log.Warn().Err(err).Msg("cannot clean up stale locks")
-	}
 	m.d.Log.Info().Bool("parallel", m.s.Parallel).Int("projects", len(m.projects)).
 		Msg("starting backup run")
 

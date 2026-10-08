@@ -47,7 +47,6 @@ func newFixture(t *testing.T) *fixture {
 		locker: mocks.NewMockLocker(t),
 		hooks:  mocks.NewMockRunner(t),
 	}
-	f.locker.EXPECT().CleanupStale().Return(nil).Maybe()
 	return f
 }
 

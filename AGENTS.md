@@ -118,7 +118,7 @@ internal/backup/           orchestration: Manager (mode, per-project run, forget
                            declares Restic, Services, Locker, Runner
 internal/restic/           restic CLI client: backup, forget, prune, unlock
 internal/servicemanager/   Compose (docker/podman), Systemd, Noop; status polling
-internal/lock/             lock files per key (PID + time), stale lock cleanup
+internal/lock/             flock(2) lock files per key, lock dir safety checks
 internal/command/          the only os/exec user: runs a program with a fixed env and ctx
 internal/util/             RequireAll/DependencyError, Clock; clocktest (fake clock)
 internal/<pkg>/mocks/      mockery output (never hand-edited)
@@ -148,7 +148,7 @@ internal/app           → config, backup, restic, servicemanager, lock, command
 internal/backup        → util, zerolog
 internal/restic        → util
 internal/servicemanager → util
-internal/lock          → util, zerolog
+internal/lock          → util
 internal/command       → zerolog
 internal/config        → mapstructure, go-toml, yaml
 internal/util          → stdlib only
@@ -168,7 +168,7 @@ Rules:
   `exec.LookPath` for the startup warning).
 - External clients never import `config` or `backup`, and never each other.
 - Nothing imports `cmd` or `internal/app`.
-- Exported shared interface: `util.Clock` (used by `servicemanager` and `lock`). Every
+- Exported shared interface: `util.Clock` (used by `servicemanager`). Every
   other interface is declared by its consumer.
 
 ---
@@ -182,14 +182,16 @@ restor itself has no data store. What it writes, and who writes it:
   parallel mode concurrently; restic allows concurrent backups). `forget`, `prune` and
   `unlock` run **only in `Manager`, sequentially, after all backups**, because they need
   exclusive repository locks.
-- **Lock files:** `lock.Locker` owns `<lock dir>/<key>.lock` (content: PID and Unix
-  time), created atomically (`O_EXCL`). The lock dir is per user (`lock.DefaultDir`):
+- **Lock files:** `lock.Locker` holds an `flock(2)` on `<lock dir>/<sha256 of key>.lock`
+  (opened with `O_NOFOLLOW`; content: PID and key, for humans only). The kernel releases
+  the lock when the holder exits, so there are no stale locks; the files are never
+  removed (removing one would let two processes lock different inodes of the same path).
+  Two `Lock` calls of one process conflict too. The lock dir is per user (`lock.DefaultDir`):
   `/run/restor` for root on Linux, `$XDG_RUNTIME_DIR/restor` for other users, else
   `restor-<uid>` in the temp dir; it is refused unless it is a real directory owned by the
   user and not writable by others (`ErrUnsafeDir`). The key comes from the service manager: the
-  compose file path, the systemd unit names joined with commas, or `noop-<project>`. A lock
-  is valid while its PID is alive (an unreadable file for one minute); stale locks are
-  removed at startup and when a lock is taken. The locks stop two runs (two processes or
+  compose file path, the systemd unit names joined with commas, or `noop-<project>`. The
+  locks stop two runs (two processes or
   two projects) from stopping and backing up the same compose file / units at once.
   Runs of different users do not see each other's locks (rare: root and a `docker` group
   member backing up the same compose file).
@@ -207,7 +209,7 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
    level; `signal.NotifyContext` for SIGINT/SIGTERM; build info is logged.
 2. `app.New`: `config.Load` (file + env file + inline env, expansion, validation) and
    wiring. Any error ends the run (exit 1).
-3. `Manager.Run`: clean up stale locks, run all projects (sequential or parallel); when
+3. `Manager.Run`: run all projects (sequential or parallel); when
    every project succeeded and `global.auto_prune` is set: forget per project with a
    `retention_policy`, then one prune + unlock (only if at least one project forgot).
 4. Exit code: 0 when every project backed up; 1 when config failed, any project failed or
@@ -366,7 +368,6 @@ Design decisions that are not obvious from the code go here, not into long code 
 // Declared in package backup, next to the code that calls it.
 type Locker interface {
     Lock(key string) (release func() error, err error)
-    CleanupStale() error
 }
 ```
 
@@ -397,13 +398,13 @@ func CreateServiceManager(p config.Project, d servicemanager.Deps) (backup.Servi
   typed answer, not a panic and not a generic error.
 
 ```go
-var ErrMissingDependency = errors.New("lock: missing dependency")
+var ErrMissingDependency = errors.New("servicemanager: missing dependency")
 
-func New(s Settings, d Deps) (*Locker, error) {
+func NewCompose(s ComposeSettings, d Deps) (*Compose, error) {
     if err := util.RequireAll(ErrMissingDependency,
-        util.Requirement{Name: "Dir", OK: s.Dir != ""},
+        util.Requirement{Name: "Runner", OK: d.Runner != nil},
         util.Requirement{Name: "Clock", OK: d.Clock != nil},
-        util.Requirement{Name: "Processes", OK: d.Processes != nil},
+        util.Requirement{Name: "File", OK: s.File != ""},
     ); err != nil {
         return nil, err // *util.DependencyError naming the field, wrapping the sentinel
     }
@@ -454,7 +455,7 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
   `.Str("project", name).Err(err).Msg("backup failed")`.
 - Levels: `debug` for command lines and per-step detail, `info` for lifecycle (run start,
   project done, snapshot ID), `warn` for recovered problems (services not stopped/started
-  in time, stop command failed, stale lock removed, missing binary), `error` for failures
+  in time, stop command failed, missing binary), `error` for failures
   that need attention (project failed, forget/prune/unlock failed, post-backup hook
   failed).
 - Never log secrets: no restic password, S3 keys, env file contents or repository URLs
