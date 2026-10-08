@@ -8,9 +8,8 @@ follow it; there is no external document to consult.
 - Keywords: **MUST** = blocker if violated, **SHOULD** = fix unless there is a written
   reason, **MAY** = allowed option.
 - When code and this file disagree, fix one of them in the same change.
-- **Current state:** the code predates these rules. The gaps are listed under
-  "Migration backlog" (section 17); new code follows the rules, and existing code is
-  migrated in dedicated `refactor/` branches (with user confirmation), not inside feature
+- Known gaps between the code and these rules are listed under "Migration backlog"
+  (section 17) and fixed in dedicated `refactor/` or `fix/` branches, not inside feature
   work.
 
 ---
@@ -26,8 +25,8 @@ restor orchestrates **restic** backups of several **projects** on one host.
   → start services → post-backup hook.
 - **After all projects:** `restic forget --tag <project> <retention_policy>` per project,
   then one repository-wide `restic prune` and `restic unlock` (only with `auto_prune`).
-- **Modes:** `sequential` (one project after another) or `parallel` (one goroutine per
-  project).
+- **Modes:** `sequential` (one project after another, sorted by name) or `parallel` (one
+  goroutine per project).
 - **Runtime:** a single CLI binary that runs **on the host** as a oneshot systemd service,
   triggered by a systemd timer (`example/restor.service`, `example/restor.timer`). It
   shells out to `restic`, `docker compose`, `podman compose` and `systemctl`; it has no
@@ -38,9 +37,9 @@ restor orchestrates **restic** backups of several **projects** on one host.
 | Area | Rule |
 |---|---|
 | Dependencies | Injected through the constructor as interfaces declared by the consumer |
-| Wiring | One composition root names concrete types (`Create*` factories) |
+| Wiring | One composition root (`internal/app`) names concrete types (`Create*` factories) |
 | Global state | Forbidden (only `Err…` sentinels and linker-set build info) |
-| Required deps | Validated in the constructor; a missing one fails startup with a typed error |
+| Required deps | Validated in the constructor (`util.RequireAll`); a missing one fails startup |
 | Optional deps | None; optional *settings* via functional options |
 | Errors | Wrap with `%w` and context; sentinels + custom types; never swallow |
 | Panic | Never; `main` turns errors into exit codes |
@@ -75,22 +74,25 @@ golangci-lint run --config .golangci.yml                  # full linter set (sec
 go run golang.org/x/tools/cmd/deadcode@v0.51.0 -test ./... # unused exported code
 go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...     # known vulnerabilities
 go test -race ./...                                       # all unit tests, as in CI
+go tool mockery                                           # regenerate mocks (.mockery.yaml)
 make build                                                # ./restor with version info (ldflags)
 ./restor --config config.yaml [--debug]                   # run one backup cycle
-./restor version                                          # build info (also --version)
+./restor version                                          # build info (also --version, -v)
 ```
 
 - CI: `.github/workflows/checks.yml` (push to main, PRs, reused by the release).
 - Release: push a `vX.Y.Z` tag on `main`; `release.yml` runs the checks, then goreleaser
   (`.goreleaser.yaml`) builds archives (linux/darwin, amd64/arm64/armv7) that contain the
   binary, `README.md`, `LICENSE` and the templates from `example/`. No container image.
-- Build info is injected into `github.com/dombyte/restor/cmd.{Version,GitCommit,BuildDate}`
-  (Makefile and goreleaser); see Migration backlog for the move to `main`.
-- A real run needs `restic` and the service manager binaries on `PATH`; unit tests must not.
-- There is no mockery setup yet (see Migration backlog). Once added, mockery v3 is a
-  `tool` directive in `go.mod` (`go get -tool github.com/vektra/mockery/v3@vX.Y.Z`),
-  mocks are generated with `go tool mockery` from `.mockery.yaml`, and CI checks them for
-  drift (not part of `make check`).
+- Build info: `main.{Version,Commit,BuildDate,GoVersion}`, set via ldflags by the Makefile
+  and goreleaser (`GOVERSION` comes from `release.yml`); printed by `version` and logged
+  at startup.
+- A real run needs `restic` and the service manager binaries on `PATH` (missing ones are
+  warned about at startup); unit tests must not.
+- Mocks: mockery v3 is a `tool` directive in `go.mod` (bump with
+  `go get -tool github.com/vektra/mockery/v3@vX.Y.Z`); `go tool mockery` generates them
+  from `.mockery.yaml` into `internal/<pkg>/mocks`. CI checks them for drift (not part of
+  `make check`); regenerate after changing an interface.
 - Tool versions are pinned (pinned `go run` commands, golangci-lint action `version:`,
   mockery in `go.mod`) and bumped deliberately, the same version locally and in CI.
   mockery is a `go tool` rather than a pinned `go run` because `go run` checks its ~20
@@ -102,28 +104,23 @@ make build                                                # ./restor with versio
 ## 3. Project Structure
 
 ```
-main.go                  calls cmd.Execute()
-cmd/                     cobra root + version command, flags, logger, signals; wiring
-config/                  Config structs (viper/mapstructure), LoadConfig, env files, ToProjects
-backup/                  Manager (mode, forget, prune), ProjectBackup (one project), Locker
-  restic/                restic CLI wrapper: backup, forget, prune, unlock
-  servicemanager/        ServiceManager interface, Factory; docker compose, podman compose,
-                         systemd, noop implementations
-example/                 config.yaml (full reference), restor.env (env file template),
-                         restor.service + restor.timer (systemd units)
-scripts/pre-commit.sh    local checks (make check)
-```
-
-Target layout, reached through the migration backlog:
-
-```
-cmd/main.go                main package: flags, logger, signal context, exit code only
-internal/app/              composition root: Create* factories, run, exit code
-internal/config/           YAML + env files, Defaults() → Validate() without side effects
-internal/backup/           orchestration: manager (mode, forget/prune), project run, locker
-internal/restic/           restic CLI client
-internal/servicemanager/   service manager contract; compose (docker/podman), systemd, noop
-internal/<pkg>/mocks/      mockery output
+cmd/main.go                main package: cobra commands, logger, signal context, shutdown
+                           deadline, exit code, build info
+internal/app/              composition root: config → Settings, CreateServiceManager,
+                           wiring of all components, startup warnings
+internal/config/           file (YAML/JSON/TOML) + env file + inline env, Defaults → expand
+                           → Validate, ResolvedProjects
+internal/backup/           orchestration: Manager (mode, per-project run, forget/prune/unlock);
+                           declares Restic, Services, Locker, Runner
+internal/restic/           restic CLI client: backup, forget, prune, unlock
+internal/servicemanager/   Compose (docker/podman), Systemd, Noop; status polling
+internal/lock/             lock files per key (PID + time), stale lock cleanup
+internal/command/          the only os/exec user: runs a program with a fixed env and ctx
+internal/util/             RequireAll/DependencyError, Clock; clocktest (fake clock)
+internal/<pkg>/mocks/      mockery output (never hand-edited)
+example/                   config.yaml (full reference, kept valid by a test), restor.env,
+                           restor.service + restor.timer (systemd units)
+scripts/pre-commit.sh      local checks (make check)
 ```
 
 Layout rules:
@@ -131,39 +128,41 @@ Layout rules:
   second binary appears).
 - `internal/` holds **all** project code; at most 3 levels below `internal/`.
 - `pkg/` only for code meant for other modules, and only with user confirmation.
-- Root files: `AGENTS.md`, `README.md`, `.golangci.yml`, `.goreleaser.yaml`, `Makefile`,
-  `renovate.json`, `scripts/pre-commit.sh`, `example/`.
+- Root files: `AGENTS.md`, `README.md`, `.golangci.yml`, `.goreleaser.yaml`,
+  `.mockery.yaml`, `Makefile`, `renovate.json`, `scripts/pre-commit.sh`, `example/`.
 
 ---
 
 ## 4. Dependency Direction
 
-Current imports:
-
 ```
-main                  → cmd
-cmd                   → backup, config, cobra, zerolog
-backup                → backup/restic, backup/servicemanager, config, zerolog
-backup/restic         → zerolog
-backup/servicemanager → zerolog
-config                → viper, yaml, zerolog
+cmd/main               → internal/app, cobra, zerolog
+internal/app           → config, backup, restic, servicemanager, lock, command, util
+internal/backup        → util, zerolog
+internal/restic        → util
+internal/servicemanager → util
+internal/lock          → util, zerolog
+internal/command       → zerolog
+internal/config        → mapstructure, go-toml, yaml
+internal/util          → stdlib only
 ```
 
-Layers: `cmd / composition root → backup (orchestration) → restic, servicemanager
-(external clients)`. Dependencies flow down only; no import cycles.
+Layers: `cmd → app (composition root) → backup (orchestration) → restic, servicemanager,
+lock, command (external clients)`. Dependencies flow down only; no import cycles.
 
 Rules:
-- `restic` and `servicemanager` are external-client wrappers: stdlib, `os/exec`, an injected
-  logger (and later a `Clock`) only. They never import `config` or `backup`, and never
-  each other.
-- `backup` talks to restic and to service managers only through interfaces it declares
-  itself; the concrete types are chosen by the composition root.
-- Nothing imports `main`/`cmd`/`internal/app`.
-- Target: only the composition root imports `config`; `backup`, `restic` and
-  `servicemanager` declare their own `Settings` structs, mapped from config by the root.
-  This keeps the packages independent of the config file format.
-- Exported shared interface: `servicemanager.ServiceManager` (one contract implemented by
-  every manager). Every other interface is declared by its consumer.
+- Only `internal/app` imports `config` and names concrete types. `backup`, `restic`,
+  `servicemanager` and `lock` declare their own `Settings`/`Deps` structs; `app` maps the
+  config onto them.
+- `backup` talks to restic, the service managers, the locker and the hook runner only
+  through interfaces it declares itself (`Restic`, `Services`, `Locker`, `Runner`).
+- `restic` and `servicemanager` run their CLIs through a `Runner` interface they declare;
+  `command.Runner` implements it. Only `command` imports `os/exec` (`app` uses
+  `exec.LookPath` for the startup warning).
+- External clients never import `config` or `backup`, and never each other.
+- Nothing imports `cmd` or `internal/app`.
+- Exported shared interface: `util.Clock` (used by `servicemanager` and `lock`). Every
+  other interface is declared by its consumer.
 
 ---
 
@@ -176,11 +175,12 @@ restor itself has no data store. What it writes, and who writes it:
   parallel mode concurrently; restic allows concurrent backups). `forget`, `prune` and
   `unlock` run **only in `Manager`, sequentially, after all backups**, because they need
   exclusive repository locks.
-- **Lock files:** `Locker` owns `/tmp/restor-locks/<key>.lock` (content: PID and Unix time).
-  The key comes from the service manager: the compose file path, the systemd unit names,
-  or `noop`. A lock is valid while its PID is alive; stale locks are removed at startup and
-  when checked. The locks stop two runs (two processes or two projects) from stopping and
-  backing up the same compose file / units at the same time.
+- **Lock files:** `lock.Locker` owns `/tmp/restor-locks/<key>.lock` (content: PID and Unix
+  time), created atomically (`O_EXCL`). The key comes from the service manager: the
+  compose file path, the systemd unit names joined with commas, or `noop-<project>`. A lock
+  is valid while its PID is alive (an unreadable file for one minute); stale locks are
+  removed at startup and when a lock is taken. The locks stop two runs (two processes or
+  two projects) from stopping and backing up the same compose file / units at once.
 - **Services:** a project stops and restarts only the services it lists (`services`), or
   all services of its compose file / its `systemd_units` when the list is empty.
 
@@ -191,115 +191,107 @@ restor itself has no data store. What it writes, and who writes it:
 restor is a **oneshot** process: one run = one backup cycle, then exit.
 
 ### Run
-1. cobra parses flags; logger = console writer on stderr, `--debug` = debug level.
-2. `config.LoadConfig` (file + env file + inline env) and `ToProjects` (defaults and
-   per-project validation). Any error ends the run (exit 1).
-3. `Manager.Run`: clean up stale locks, run all projects (sequential or parallel), then
-   forget per project and one prune + unlock (only with `global.auto_prune` and at least
-   one `retention_policy`).
-4. Exit code: 0 when every project backed up; 1 when config failed or any project failed.
-   Forget, prune, unlock and post-backup hook failures are logged but do **not** change the
-   exit code.
+1. `cmd/main`: cobra parses flags; logger = console writer on stderr, `--debug` = debug
+   level; `signal.NotifyContext` for SIGINT/SIGTERM; build info is logged.
+2. `app.New`: `config.Load` (file + env file + inline env, expansion, validation) and
+   wiring. Any error ends the run (exit 1).
+3. `Manager.Run`: clean up stale locks, run all projects (sequential or parallel); when
+   every project succeeded and `global.auto_prune` is set: forget per project with a
+   `retention_policy`, then one prune + unlock (only if at least one project forgot).
+4. Exit code: 0 when every project backed up; 1 when config failed, any project failed or
+   the run was cancelled. Forget, prune, unlock and post-backup hook failures are logged
+   but do **not** change the exit code; after a failed project they are skipped.
 
 ### Failure handling per project
+- Lock held by a live process → project fails.
 - Pre-backup hook fails → project fails; services are not touched.
-- Stopping services fails → logged, the backup still runs (services may be running).
+- Listing the services fails → project fails.
+- Stopping services fails → warning, the backup still runs (services may be running).
 - Services not stopped within `stop_timeout` → warning, the backup still runs.
 - `restic backup` fails → services are restarted, project fails.
-- Restarting services fails → project fails.
-- Other projects always continue; errors are collected and reported at the end.
+- Restarting services fails → project fails; not running within `start_timeout` →
+  warning.
+- Other projects always continue; each failure is logged once by `Manager` with the
+  project, and `main` logs the summary (`backup: projects failed: N of M`).
 
 ### Shutdown and supervision
-- SIGINT/SIGTERM cancel the run context. Sequential mode stops before the next project;
-  waits (service stop polling) end early. **Current behaviour:** the external commands are
-  not bound to the context, so a running `restic`/compose/`systemctl` call finishes first
-  (see Migration backlog).
+- SIGINT/SIGTERM cancel the run context: running commands are killed (`exec.
+  CommandContext`), sequential mode starts no further project, waits end early.
+- A project that stopped its services restarts them with its own context
+  (`context.WithoutCancel`, bounded by `start_timeout` + 3 min).
+- `main` waits at most `shutdownTimeout` (5 min) after the signal, then exits 1.
+  `example/restor.service` sets `TimeoutStopSec` above that so systemd does not kill
+  restor while it restarts services. No second-signal "force" mode: the deadline is the
+  force.
 - There is no in-process retry and no restart: systemd records the failed run, and the
   next timer run is the retry (`Persistent=true` catches up missed runs).
 
 ### Rules (MUST)
 - Every goroutine has an owner that starts it and waits for it to end (`Manager` owns the
-  per-project goroutines in parallel mode; use `sync.WaitGroup`/`errgroup`, not
-  sleep-polling).
-- Loops that wait (service stop/start polling) use an injected `Clock` so tests can drive
-  time; capture `now` once per iteration and derive everything from it.
-- `main` builds the signal context with `signal.NotifyContext` (SIGINT, SIGTERM). After
-  cancellation, a project that already stopped its services restarts them with a
-  separate, bounded context. The whole shutdown has one hard deadline; after it, `main`
-  exits 1. No second-signal "force" mode: the deadline is the force.
-- `log.Fatal`/`os.Exit` only in `main`; everything else returns errors.
-- Every external command has a timeout (context or explicit deadline).
-
-Target shape of `main`:
-
-```go
-func main() { os.Exit(run()) }
-
-func run() int {
-    ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-    defer stop()
-
-    a, err := app.New(cfg, log) // wires everything, starts nothing
-    if err != nil {
-        log.Error().Err(err).Msg("startup failed")
-        return 1
-    }
-    if err := a.Run(ctx); err != nil { // one backup cycle; bounded cleanup on cancel
-        log.Error().Err(err).Msg("backup run failed")
-        return 1
-    }
-    return 0
-}
-```
+  per-project goroutines in parallel mode via `sync.WaitGroup`).
+- Loops that wait (service stop/start polling) use the injected `util.Clock`; tests use
+  `util/clocktest`.
+- `os.Exit` only in `main`; everything else returns errors.
+- Service manager commands have timeouts: status queries 30 s, stop/start the configured
+  timeout + 2 min. `restic` and hooks are bounded only by the run context (a backup can
+  legitimately take hours).
 
 ---
 
 ## 7. Behaviour Reference
 
 ### Configuration
-- One file (`--config`, required), read by viper: YAML, JSON or TOML by extension. Template
-  with every option: `example/config.yaml`.
+- One file (`--config`, required): YAML (`.yaml`/`.yml`), JSON or TOML by extension.
+  Template with every option: `example/config.yaml`.
+- Keys keep their case (environment variable names are case-sensitive). Config field names
+  match case-insensitively; scalars are converted loosely (`"30"` → 30, `"a,b"` → list).
+  Project names are case-insensitive and used in lowercase (also as the restic tag);
+  names that differ only in case are an error.
 - Environment for restic, service managers and hooks = process env + `env_file`
-  (`.env`, `.yaml`/`.yml`, `.json`) + inline `environments` (highest priority). `${VAR}` in
-  inline env values and in all project fields (paths, repo, units, hooks, options) is
-  expanded once at load time from the **process** env (not from the env file).
-- Required per project: `service_manager`, `sources`, `stop_timeout`, `start_timeout`
-  (seconds); `compose_file` for the compose managers, `systemd_units` for systemd;
-  `systemd_scope` is `system` (default) or `user`.
+  (`.env`, `.yaml`/`.yml`, `.json`; other extensions are tried in that order) + inline
+  `environments` (highest priority). `$VAR`, `${VAR}` and `${VAR:-default}` in env values,
+  global settings and project fields (paths, units, hooks, options, retention) are expanded
+  once at load time from the **process** env (not from the env file).
+- Validation (all problems at once, with field paths): `mode` is `sequential` (default) or
+  `parallel`; per project `service_manager` and `sources` are required; `compose_file` for
+  the compose managers, `systemd_units` for systemd; `systemd_scope` is `system` (default)
+  or `user`; `stop_timeout`/`start_timeout` (seconds) are ≥ 0 and > 0 when services are
+  stopped. Unknown keys are ignored.
 - `stop_services: false` backs up without stopping anything. Hooks: global
-  `pre_backup_cmd`/`post_backup_cmd`, overridden per project.
+  `pre_backup_cmd`/`post_backup_cmd` are the default of every project, overridden per
+  project.
+- `example/config.yaml` stays complete, commented and valid (`TestLoad_ExampleConfig`);
+  every new option is added there in the same change.
 - Secrets (restic password, S3 keys) come from the env file or the process env, never from
   `example/`; the real `config.yaml` and `env.yaml` are gitignored.
 
-### Configuration rules (target)
-- Order: `Defaults()` → file → env → `Validate()`. Validation runs once at startup and
-  returns **all** problems with the field path (`projects.web.stop_timeout: must be > 0`).
-- An invalid env override is an error, never silently ignored.
-- Rules owned by another package (e.g. which service managers exist) MAY be injected into
-  validation by the composition root, so config stays free of domain imports.
-- `example/config.yaml` stays complete and commented; every new option is added there in
-  the same change.
-
 ### Hooks
-- Split on whitespace and executed directly (no shell): no quoting, pipes or redirects;
-  `${VAR}` is only expanded at config load (see above). Use a script for anything more.
-- Run with the project environment and the run context.
+- Split on whitespace and executed directly (no shell): no quoting, pipes or redirects.
+  Use a script for anything more.
+- Run with the merged environment and the run context.
 
 ### Service managers
-- Compose: `docker compose -f <file>` / `podman compose -f <file>`; services from
-  `config --services` when not listed; stop with `stop -t <stop_timeout>`, start with
-  `up -d <services>`.
-- systemd: `systemctl [--user] stop|start <units>`, waits for the units to reach the
-  expected state within the timeout.
-- noop: every operation succeeds and does nothing.
-- "Is it still running?" is detected from `ps`/status text (`Up`, `Running`,
-  `active (running)`).
+- Compose: `<docker|podman> compose -f <file> …`; services from `config --services` when
+  not listed; stop with `stop -t <stop_timeout> <services>` (ignores "no containers to
+  stop"), start with `up -d <services>`. Running = `ps --format json` reports the service
+  with `State` `running` (Docker JSON lines or a JSON array; podman-compose via the
+  `com.docker.compose.service` label).
+- systemd: `systemctl [--user] stop|start <units>` (stop ignores "not running"/"not
+  loaded"); state from `systemctl is-active <units>`. Stopped = no unit `active`,
+  `activating`, `deactivating`, `reloading` or `refreshing`; started = all `active`.
+  `services` filters `systemd_units`; if none match, all units are used.
+- noop: no services; every operation succeeds.
+- Stop and start poll every 500 ms until the expected state or the timeout.
 
 ### restic
-- `restic -r <repo> backup [backup_options] --tag <project> <sources>`; the snapshot ID is
-  parsed from `snapshot <id> saved` in the output (logged; missing ID is not an error).
-- `forget [forget_options] --tag <project> <retention_policy split on spaces>`.
-- `prune` uses `global.prune_options` as global restic options.
+- The repository is passed as `RESTIC_REPOSITORY` (not `-r`), so it never shows up in
+  arguments or logs; with an empty `restic_repo` a `RESTIC_REPOSITORY` from the env is used.
+- `restic backup [backup_options] --tag <project> <sources>`; the snapshot ID is parsed
+  from `snapshot <id> saved` (logged; a missing ID is a warning, not an error).
+- `restic forget [forget_options] --tag <project> <retention_policy split on whitespace>`.
+- `restic [prune_options] prune` and `restic [prune_options] unlock`.
+- Every list option is passed as one argument per item: write `["-o", "s3.connections=10"]`
+  or `["--option=s3.connections=10"]`, not `["-o s3.connections=10"]`.
 
 ---
 
@@ -316,13 +308,23 @@ func run() int {
   and no in-process restart.
 - **Shell out to the CLIs instead of using libraries/APIs:** restic has no stable Go API,
   and the compose/systemctl CLIs behave the same for Docker, Podman and systemd scopes.
+- **YAML, JSON and TOML config:** kept for existing users. The file is decoded directly
+  (no viper) because viper lowercases map keys, which broke environment variable names.
 - **Forget and prune after all backups, sequentially:** they take exclusive repository locks
   and would fail or block concurrent backups; one repository-wide prune is cheaper than one
-  per project.
-- **Restart services even when the backup failed:** a failed backup must not leave
-  production services down.
-- **Tag = project name:** keeps each project's retention separate in a shared repository.
-  Renaming a project starts a new snapshot series (the old one is no longer forgotten).
+  per project. They are skipped when a project failed, so a broken run never thins out
+  the snapshot history.
+- **Restart services even when the backup failed or the run was cancelled:** a failed
+  backup must not leave production services down.
+- **Tag = lowercase project name:** keeps each project's retention separate in a shared
+  repository; lowercase keeps the tags of snapshots made by earlier versions (viper
+  lowercased the names). Renaming a project starts a new snapshot series (the old one is
+  no longer forgotten).
+- **Sequential order = sorted by name:** the config's `projects` map has no order once
+  decoded; sorting makes runs reproducible. Prefix names (`10-db`, `20-web`) to control it.
+- **Repository in the environment:** `RESTIC_REPOSITORY` instead of `-r` keeps
+  credentials in repository URLs out of debug logs and command errors (errors carry only
+  the program name and the last 20 output lines).
 
 Design decisions that are not obvious from the code go here, not into long code comments.
 
@@ -340,27 +342,25 @@ Design decisions that are not obvious from the code go here, not into long code 
 
 ```go
 // Declared in package backup, next to the code that calls it.
-type Snapshotter interface {
-    Backup(ctx context.Context, tag string, sources []string) (string, error)
+type Locker interface {
+    Lock(key string) (release func() error, err error)
+    CleanupStale() error
 }
 ```
 
 ### 9.2 Composition root (MUST)
-- Exactly one place wires the application (`cmd` today, `internal/app` in the target
-  layout). It is the only code that names concrete types and creates them through
-  `Create*` factory functions.
+- Exactly one place wires the application: `internal/app`. It is the only code that
+  names concrete types and creates them through `Create*` factory functions.
 
 ```go
-func CreateServiceManager(s ProjectSettings, log zerolog.Logger) (backup.Services, error) {
-    switch s.ServiceManager {
-    case "docker-compose":
-        return servicemanager.NewDockerCompose(s.Compose, log)
-    case "systemd":
-        return servicemanager.NewSystemd(s.Systemd, log)
-    case "noop":
-        return servicemanager.NewNoop(), nil
+func CreateServiceManager(p config.Project, d servicemanager.Deps) (backup.Services, error) {
+    switch p.ServiceManager {
+    case config.ManagerDockerCompose:
+        return servicemanager.NewCompose(
+            servicemanager.ComposeSettings{Binary: "docker", File: p.ComposeFile}, d)
+    // … podman-compose, systemd, noop
     default:
-        return nil, fmt.Errorf("app: service manager %q: %w", s.ServiceManager, ErrUnknownType)
+        return nil, fmt.Errorf("%w: %q", ErrUnknownType, p.ServiceManager)
     }
 }
 ```
@@ -375,27 +375,19 @@ func CreateServiceManager(s ProjectSettings, log zerolog.Logger) (backup.Service
   typed answer, not a panic and not a generic error.
 
 ```go
-var ErrMissingDependency = errors.New("backup: missing dependency")
+var ErrMissingDependency = errors.New("lock: missing dependency")
 
-func NewProjectBackup(d Deps) (*ProjectBackup, error) {
-    missing := []string{}
-    if d.Restic == nil {
-        missing = append(missing, "Restic")
+func New(s Settings, d Deps) (*Locker, error) {
+    if err := util.RequireAll(ErrMissingDependency,
+        util.Requirement{Name: "Dir", OK: s.Dir != ""},
+        util.Requirement{Name: "Clock", OK: d.Clock != nil},
+        util.Requirement{Name: "Processes", OK: d.Processes != nil},
+    ); err != nil {
+        return nil, err // *util.DependencyError naming the field, wrapping the sentinel
     }
-    if d.Services == nil {
-        missing = append(missing, "Services")
-    }
-    if d.Clock == nil {
-        missing = append(missing, "Clock")
-    }
-    if len(missing) > 0 {
-        return nil, fmt.Errorf("%w: %s", ErrMissingDependency, strings.Join(missing, ", "))
-    }
-    return &ProjectBackup{d: d}, nil
+    …
 }
 ```
-
-Move this check into a small shared helper once a second constructor needs it.
 
 ### 9.4 Functional options (MAY)
 For optional **settings** with a sensible default, when there are three or more of them.
@@ -423,8 +415,9 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
 - **Wrap with `%w`** and context, prefixed with the package:
   `fmt.Errorf("restic: backup %s: %w", project, err)`.
 - **Sentinels** (`var ErrLocked = errors.New("lock: already locked")`) for conditions
-  callers branch on; **custom types** (`*ValidationError{Field, Err}`) when callers need
-  data. Both work with `errors.Is`/`errors.As`.
+  callers branch on; **custom types** (`*config.FieldError{Path, Problem}`,
+  `*command.Error`, `*util.DependencyError`) when callers need data. Both work with
+  `errors.Is`/`errors.As`.
 - **Never swallow** an error: handle it, return it, or log it with the reason it is safe to
   continue. `_ = f()` needs a `//nolint` with explanation.
 - **Log once**, at the boundary that handles the error; lower layers return, they do not
@@ -438,8 +431,10 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
 - Log with context fields, not formatted strings:
   `.Str("project", name).Err(err).Msg("backup failed")`.
 - Levels: `debug` for command lines and per-step detail, `info` for lifecycle (run start,
-  project done, snapshot ID), `warn` for recovered problems (services not stopped in time,
-  forget/prune failure), `error` for failures that need attention.
+  project done, snapshot ID), `warn` for recovered problems (services not stopped/started
+  in time, stop command failed, stale lock removed, missing binary), `error` for failures
+  that need attention (project failed, forget/prune/unlock failed, post-backup hook
+  failed).
 - Never log secrets: no restic password, S3 keys, env file contents or repository URLs
   with credentials. Be careful when logging environments or full command lines.
 
@@ -449,9 +444,10 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
 
 - Secrets: env vars (preferred) or the env file; both gitignored; never logged.
 - Input validation at the boundary (config load), with field paths.
-- External commands are executed directly with argument lists (`exec.Command`, no shell);
-  never build a shell string from config values.
-- Timeouts on every external call (context with deadline).
+- External commands are executed directly with argument lists (`internal/command`,
+  `exec.CommandContext`, no shell); never build a shell string from config values.
+- Timeouts on service manager calls; restic and hooks are bound to the run context
+  (section 6).
 - Dependencies: Renovate (section 14) and `govulncheck` in CI and in the pre-commit
   script. GitHub's vulnerability alerts stay enabled; Renovate's `vulnerabilityAlerts`
   reads them (no Dependabot).
@@ -481,13 +477,13 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
 | Element | Convention | Example |
 |---|---|---|
 | Packages | lowercase, singular, compound allowed, never plural | `servicemanager` |
-| Files | lowercase, underscores | `docker_compose.go`, `docker_compose_test.go` |
-| Exported | PascalCase | `NewRestic`, `ProjectBackup` |
-| Unexported | camelCase | `waitForStopped`, `lockPath` |
-| Receivers | one letter, consistent per type | `m *Manager`, `p *ProjectBackup` |
+| Files | lowercase, underscores | `compose.go`, `compose_test.go` |
+| Exported | PascalCase | `NewCompose`, `ProjectSettings` |
+| Unexported | camelCase | `waitUntil`, `parseComposePs` |
+| Receivers | one letter, consistent per type | `m *Manager`, `c *Compose` |
 | Acronyms | stdlib style | `ID`, `URL`, `PID`, `snapshotID` |
-| Errors | `Err…` sentinels, `…Error` types | `ErrLocked`, `ValidationError` |
-| Functions | verb + noun | `StopServices`, `ParseSnapshotID` |
+| Errors | `Err…` sentinels, `…Error` types | `ErrLocked`, `FieldError` |
+| Functions | verb + noun | `stopServices`, `parseSnapshotID` |
 
 ### Documentation
 - Package doc and doc comments on exported types: MUST. On exported functions: SHOULD.
@@ -675,67 +671,24 @@ change keeps its own branch and merge commit:
 ```
 
 ### Adding a service manager
-1. New file in `servicemanager` implementing `ServiceManager` (services, stop, start,
-   status, lock key); the lock key must be unique per managed unit set.
-2. Config: add the type constant, its fields in `ProjectConfig`, validation, and a
-   commented example in `example/config.yaml`.
-3. Composition root / factory: add the `case`. Nothing else may reference the new type.
+1. New file in `servicemanager` with a `…Settings` struct and a constructor that takes
+   `Deps` (Runner, Clock) and validates them; it implements `backup.Services`: `LockKey`
+   (unique per managed unit set), `Services`, and `Stop`/`Start` that wait with
+   `waitUntil` and return false when the timeout passes.
+2. Config: add the `Manager…` constant, its fields in `ProjectConfig`/`Project`,
+   validation in `validator.serviceManager` (and `stopsServices` if it stops services), and
+   a commented example in `example/config.yaml`.
+3. `internal/app`: add the `case` in `CreateServiceManager` and its binary in
+   `warnMissingBinaries`. Nothing else may reference the new type.
 4. Document the commands it runs in section 7.
-5. Tests with a fake command runner only (no real Docker, Podman or systemd).
+5. Tests with the mocked runner and `clocktest` only (no real tools).
 6. README: user-facing documentation.
 
 ---
 
 ## 17. Migration Backlog
 
-Known gaps between the current code and the rules above, in suggested order. Each item is
-its own `refactor/…` or `fix/…` branch; update this list when an item is done.
+Known gaps between the code and the rules above, in suggested order. Each item is its own
+`refactor/…` or `fix/…` branch; update this list when an item is done.
 
-1. **Make `make check` green:** `golangci-lint fmt` (1 file), 89 lint findings (mostly
-   `lll`, `gocyclo`, `gochecknoglobals`, `perfsprint`, `mnd`), and deadcode
-   (`servicemanager.GetBinaryPath`, `CheckRequiredBinary`).
-2. **Bug – sequential order:** `projects` is a map, so `ToProjects` returns them in random
-   order although `sequential` promises config order. Make the order deterministic (sorted
-   by name, or a list in config) and document it.
-3. **Bug – shared `noop` lock:** every `noop` project uses the lock key `noop`, so in
-   parallel mode only one of them can run; key noop projects by project name.
-4. **Context for external commands:** `restic`, compose and `systemctl` use `exec.Command`
-   without the context. Use `exec.CommandContext` with timeouts, and restart stopped
-   services with a separate, bounded context after cancellation.
-5. **Tests:** there are none. Add table-driven tests for config (env merge, defaults,
-   validation), snapshot ID parsing, the project run sequence (with mocked restic and
-   service manager) and the locker (`t.TempDir()`).
-6. **Dependency injection:** `backup` creates restic wrappers, service managers
-   (`servicemanager.NewFactory()` inside `ProjectBackup.Run`) and the locker itself. Declare
-   small consumer interfaces in `backup`, build the concrete types in `Create*` factories in
-   the composition root, add mockery (`go get -tool github.com/vektra/mockery/v3@…`),
-   `.mockery.yaml`, the mocks, and the "Mocks up to date" step in `checks.yml`
-   (`go tool mockery` + `git diff --exit-code -- '*/mocks/*'`).
-7. **Required dependencies:** `NewRestic`, `NewDockerCompose`, … take an optional variadic
-   logger and fall back to the global `log.Logger`; make the logger required and scope it
-   with `component`. Remove all uses of the global `zerolog/log`.
-8. **Globals in `cmd`:** `rootCmd`, `versionCmd`, flag variables and `init()` → build the
-   commands in a function. Move build info to `main` as `Version`, `Commit`, `BuildDate`,
-   `GoVersion` with `//nolint:gochecknoglobals`, then update the ldflags: `Makefile`
-   (`GOVERSION := $(shell go version | awk '{print $$3}')`, `-X main.…`, build `./cmd`)
-   and `.goreleaser.yaml` (`main: ./cmd`, `-X main.GoVersion={{ envOrDefault "GOVERSION"
-   "unknown" }}`; `release.yml` already exports `GOVERSION`). Log the build info at
-   startup.
-9. **Lifecycle (section 6):** `signal.NotifyContext`, `run() int` with exit code instead
-   of `cobra.CheckErr`/`os.Exit` in `PersistentPreRun`; one hard deadline for the cleanup
-   after a signal.
-10. **Errors:** package-prefixed, wrapped messages; sentinels/typed errors for "already
-    locked" and validation; no swallowed errors (`os.Remove` of stale locks, deferred
-    `Unlock`); log once at the handling boundary (restic and `ProjectBackup` currently both
-    log and return).
-11. **Config (section 7):** validation of all fields at load time with field paths
-    (today some checks run in `ToProjects`, some in `servicemanager`); `Defaults()` step;
-    the leftover `DOCKER_BACKUP_` env prefix: remove or rename to `RESTOR_` (breaking, `!`);
-    decide whether JSON/TOML support stays (then record it in Design Decisions) or config
-    becomes YAML only (breaking, `!`).
-12. **Injected `Clock`:** `waitForStopped`/`waitForRunning` poll with `time.Now` and
-    `time.After`; the locker writes `time.Now()`.
-13. **Status detection:** "is running" matches output text; use `docker compose ps --format
-    json` / `systemctl is-active` instead.
-14. **Layout:** move to `cmd/` + `internal/…` (section 3 target), with the composition
-    root in `internal/app` and per-package `Settings` structs.
+None at the moment: the migration to these rules is complete.

@@ -4,6 +4,9 @@ Description=Restic Backup Orchestrator
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/restor --config /etc/restor/config.yaml
+# On stop, restor restarts the services it stopped and exits within 5 minutes; give it
+# longer than that before systemd kills it.
+TimeoutStopSec=330
 StandardOutput=journal
 StandardError=journal
 

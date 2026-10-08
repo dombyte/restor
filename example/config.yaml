@@ -18,7 +18,7 @@
 #     * Faster for independent projects
 #     * Higher resource usage (memory, I/O, network)
 #     * Use when projects don't share dependencies
-#   - "sequential": Projects backup one after another in order
+#   - "sequential": Projects backup one after another, sorted by project name
 #     * Lower resource usage
 #     * Slower overall but more controlled
 #     * Use when projects share resources or have dependencies
@@ -145,28 +145,29 @@ global:
   # When false: You must manually run prune, or use restic's auto-prune features
   auto_prune: true
 
-  # GLOBAL: Restic options for the repository-wide prune command
+  # GLOBAL: Restic options for the repository-wide prune (and unlock) command
   # These options are ONLY used for the global prune operation (not for individual backups)
   # Useful for performance tuning and repository maintenance
+  # Every list item is passed as ONE argument: write "--option=key=value" (or two items
+  # "-o" and "key=value"), never "-o key=value" in one item.
   prune_options:
     # Cache directory for restic (improves performance)
     - "--cache-dir=/tmp/restic-cache"
 
-    # Parallel upload/download connections
-    - "-o upload.concurrent=4"
-    - "-o download.concurrent=2"
+    # Backend options, e.g. parallel S3 connections
+    - "--option=s3.connections=10"
 
-    # AWS-specific options
-    - "-o AWS.connections=50"
-    - "-o AWS.retries=3"
+    # Bandwidth limits in KiB/s
+    # - "--limit-upload=51200"
+    # - "--limit-download=51200"
 
-    # Memory limits
-    # - "-o memory.limit-upload=50"  # Limit upload to 50 MiB/s
-    # - "-o memory.limit-download=50"  # Limit download to 50 MiB/s
-
-  # Optional: Global commands to run before/after ALL backups
-  # These run once at the start/end of the entire backup process
-  # Return code 0 = success, non-zero = failure (stops backup process)
+  # Optional: default pre/post-backup hooks for EVERY project
+  # A project's own pre_backup_cmd/post_backup_cmd replaces them for that project.
+  # They run once per project, around its backup:
+  #   pre_backup_cmd fails (non-zero exit) -> the project fails, its services are not touched
+  #   post_backup_cmd fails -> logged, the project still counts as backed up
+  # Commands are split on spaces and run without a shell (no quotes, pipes or redirects);
+  # use a script for anything more.
   # pre_backup_cmd: "/usr/local/bin/global-pre-backup-hook.sh"
   # post_backup_cmd: "/usr/local/bin/global-post-backup-hook.sh"
 
@@ -182,11 +183,14 @@ global:
 #   - For systemd: systemd_units (list of systemd unit names)
 #   - For noop: No additional service configuration needed (file-only backups)
 #   - sources: List of directories/files to backup with restic
-#   - stop_timeout: Timeout in seconds for stopping services
-#   - start_timeout: Timeout in seconds for starting services
-#   - retention_policy: Retention policy for snapshots (used with forget)
+#   - stop_timeout: Timeout in seconds for stopping services (> 0 when services are stopped)
+#   - start_timeout: Timeout in seconds for starting services (> 0 when services are stopped)
+#
+# Project names are case-insensitive; the lowercase name is the restic tag.
 #
 # OPTIONAL fields for each project:
+#   - retention_policy: Retention policy for snapshots (forget runs only with auto_prune;
+#     projects without one are never forgotten)
 #   - stop_services: true/false - Enable/disable service stop/start (default: true)
 #     * When false: Services continue running during backup (read-only mode)
 #     * Useful for databases, high-availability services, or when using filesystem snapshots
@@ -364,7 +368,7 @@ projects:
     # Performance options for time-series data
     backup_options:
       - "--exclude=*.tmp"
-      - "-o upload.concurrent=2"  # Slower upload for large files
+      - "--limit-upload=20480"  # Throttle uploads of large files (KiB/s)
 
   # ========================================
   # Example 6: Podman Compose application
