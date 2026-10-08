@@ -78,7 +78,7 @@ them all at once), `restic_repo`, `auto_prune`, `prune_options`, `pre_backup_cmd
 
 Relative `env_file`, `compose_file` and `sources` paths are resolved against the directory
 of the config file. restor checks the whole file at startup and lists every problem with
-its field path.
+its field path; unknown keys (typos) are reported as warnings.
 
 **Environment:** `env_file` and inline `environments` are passed to restic, the service
 managers and the hooks (inline wins). `$VAR`, `${VAR}` and `${VAR:-default}` are expanded

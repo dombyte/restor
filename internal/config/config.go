@@ -51,9 +51,11 @@ func Load(path string, getenv func(string) string) (*Config, error) {
 		return nil, err
 	}
 	cfg := Defaults()
-	if err := decode(raw, cfg); err != nil {
+	unknown, err := decode(raw, cfg)
+	if err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
+	cfg.UnknownKeys = unknown
 	dupErrs := cfg.lowerProjectNames()
 	cfg.expandAll(getenv)
 	if err := cfg.resolvePaths(path); err != nil {
@@ -94,18 +96,25 @@ func readFile(path string) (map[string]any, error) {
 	return raw, nil
 }
 
-// decode maps raw onto cfg. Field names match case-insensitively, and scalars are
-// converted loosely ("30" → 30, "a,b" → [a b]), as viper did before.
-func decode(raw map[string]any, cfg *Config) error {
+// decode maps raw onto cfg and returns the keys that match no field, sorted. Field names
+// match case-insensitively, and scalars are converted loosely ("30" → 30, "a,b" → [a b]),
+// as viper did before.
+func decode(raw map[string]any, cfg *Config) ([]string, error) {
+	var md mapstructure.Metadata
 	d, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		Result:           cfg,
+		Metadata:         &md,
 		WeaklyTypedInput: true,
 		DecodeHook:       mapstructure.StringToSliceHookFunc(","),
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return d.Decode(raw)
+	if err := d.Decode(raw); err != nil {
+		return nil, err
+	}
+	slices.Sort(md.Unused)
+	return md.Unused, nil
 }
 
 // lowerProjectNames makes project names lowercase: they are case-insensitive and the

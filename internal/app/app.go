@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"runtime"
 	"slices"
+	"strings"
 
 	"github.com/rs/zerolog"
 
@@ -53,9 +54,10 @@ func New(o Options) (*App, error) {
 	}
 	projects := cfg.ResolvedProjects()
 	logProjects(o.Log, projects)
+	env := append(slices.Clone(o.Environ), cfg.EnvPairs()...)
+	warnConfig(o.Log, cfg, projects, env)
 	warnMissingBinaries(o.Log, projects, exec.LookPath)
 
-	env := append(slices.Clone(o.Environ), cfg.EnvPairs()...)
 	runner := command.New(env, component(o.Log, "command"))
 	clock := util.NewRealClock()
 	manager, err := createManager(cfg, projects, managerDeps{
@@ -172,6 +174,41 @@ func logProjects(log zerolog.Logger, projects []config.Project) {
 			Strs("sources", p.Sources).Bool("stop_services", p.StopServices).
 			Msg("project configured")
 	}
+}
+
+// warnConfig warns about settings that load fine but are probably not what was meant.
+func warnConfig(log zerolog.Logger, cfg *config.Config, projects []config.Project,
+	env []string,
+) {
+	for _, key := range cfg.UnknownKeys {
+		log.Warn().Str("key", key).Msg("unknown configuration key ignored")
+	}
+	if !cfg.Global.AutoPrune {
+		warnIgnoredRetention(log, projects)
+	}
+	if len(projects) > 0 && cfg.Global.ResticRepo == "" && !hasRepository(env) {
+		log.Warn().Msg("no restic repository: set global.restic_repo or RESTIC_REPOSITORY")
+	}
+}
+
+// warnIgnoredRetention warns about each project with a retention policy.
+func warnIgnoredRetention(log zerolog.Logger, projects []config.Project) {
+	for _, p := range projects {
+		if p.RetentionPolicy != "" {
+			log.Warn().Str("project", p.Name).
+				Msg("retention_policy is ignored because global.auto_prune is off")
+		}
+	}
+}
+
+// hasRepository reports whether env (KEY=value, later entries win) names a repository.
+func hasRepository(env []string) bool {
+	vars := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		vars[k] = v
+	}
+	return vars["RESTIC_REPOSITORY"] != "" || vars["RESTIC_REPOSITORY_FILE"] != ""
 }
 
 // warnMissingBinaries warns about programs the run will need but PATH does not have.
