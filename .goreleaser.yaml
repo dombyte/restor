@@ -51,6 +51,54 @@ archives:
       - example/restor.service
       - example/restor.timer
 
+# .deb and .rpm for the linux builds (darwin is skipped), attached to the GitHub release.
+nfpms:
+  - id: packages
+    ids: [restor-multi-arch]
+    formats: [deb, rpm]
+    # restor_1.2.3_amd64.deb, restor-1.2.3-1.x86_64.rpm
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: dombyte
+    homepage: https://github.com/dombyte/restor
+    maintainer: Dominik <dom@ixsrv.de>
+    description: Restic backup orchestrator that stops and restarts compose and systemd services.
+    license: MIT
+    section: admin
+    bindir: /usr/bin
+    # CommitDate keeps rebuilds of the same tag byte-identical, as for the binaries.
+    mtime: "{{ .CommitDate }}"
+    # Not a hard dependency: many hosts install restic from the upstream binary.
+    recommends:
+      - restic
+    contents:
+      - src: packaging/restor.service
+        dst: /usr/lib/systemd/system/restor.service
+      - src: example/restor.timer
+        dst: /usr/lib/systemd/system/restor.timer
+      - src: packaging/restor-user.service
+        dst: /usr/lib/systemd/user/restor.service
+      - src: example/restor.timer
+        dst: /usr/lib/systemd/user/restor.timer
+      # Examples only: the real config is written by the admin, so nothing in /etc is
+      # replaced or removed by the package.
+      - src: example/config.yaml
+        dst: /usr/share/doc/restor/examples/config.yaml
+      - src: example/restor.env
+        dst: /usr/share/doc/restor/examples/restor.env
+      - src: README.md
+        dst: /usr/share/doc/restor/README.md
+      - src: LICENSE
+        dst: /usr/share/doc/restor/LICENSE
+      # Holds the config, env file and restic password: root only.
+      - dst: /etc/restor
+        type: dir
+        file_info:
+          mode: 0700
+    scripts:
+      postinstall: packaging/postinstall.sh
+      preremove: packaging/preremove.sh
+      postremove: packaging/postremove.sh
+
 changelog:
   sort: asc
   use: git

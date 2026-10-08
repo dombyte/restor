@@ -24,7 +24,44 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
    ./restor --config config.yaml
    ```
 
-## Systemd Installation
+## Install from a .deb or .rpm package
+
+Each [release](https://github.com/dombyte/restor/releases) has packages for amd64, arm64 and
+armv7 (`armhf` / `armv7hl`). They install `/usr/bin/restor`, the systemd units and the
+examples in `/usr/share/doc/restor/examples/`, and recommend `restic`.
+
+```bash
+sudo apt install ./restor_<version>_amd64.deb        # Debian, Ubuntu
+sudo dnf install ./restor-<version>-1.x86_64.rpm     # Fedora, RHEL, openSUSE (zypper)
+```
+
+The timer is not enabled automatically. Write the config, then enable it:
+
+```bash
+sudo cp /usr/share/doc/restor/examples/config.yaml /etc/restor/config.yaml
+sudoedit /etc/restor/config.yaml
+sudo systemctl enable --now restor.timer
+```
+
+Removing the package disables the timer and keeps `/etc/restor`.
+
+### Run as a normal user
+
+A user can back up what they can read and manage their own services (`systemd_scope: user`,
+rootless podman). The package also installs user units that read
+`~/.config/restor/config.yaml`:
+
+```bash
+mkdir -p ~/.config/restor
+cp /usr/share/doc/restor/examples/config.yaml ~/.config/restor/config.yaml
+systemctl --user enable --now restor.timer
+sudo loginctl enable-linger "$USER"   # keep the timer running while logged out
+```
+
+Each user has their own lock directory (`/run/restor` for root, `$XDG_RUNTIME_DIR/restor`
+otherwise), so runs of different users never block each other.
+
+## Manual Installation (release archive)
 
 ### 1. Install binary
 
