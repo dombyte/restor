@@ -146,7 +146,7 @@ Layout rules:
 cmd/main               → internal/app, cobra, zerolog
 internal/app           → config, backup, restic, servicemanager, lock, command, util
 internal/backup        → util, zerolog
-internal/restic        → util
+internal/restic        → util, zerolog
 internal/servicemanager → util
 internal/lock          → util
 internal/command       → zerolog
@@ -224,7 +224,8 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 - Finding the running services fails → project fails.
 - Stopping services fails → warning, the backup still runs (services may be running).
 - Services not stopped within `stop_timeout` → warning, the backup still runs.
-- `restic backup` fails → services are restarted, project fails.
+- `restic backup` fails → services are restarted, project fails. Exit code 3 (snapshot
+  saved, some source files unreadable) → warning, the project counts as backed up.
 - Restarting services fails → project fails; not running within `start_timeout` →
   warning.
 - Other projects always continue; each failure is logged once by `Manager` with the
@@ -314,7 +315,10 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 - The repository is passed as `RESTIC_REPOSITORY` (not `-r`), so it never shows up in
   arguments or logs; with an empty `restic_repo` a `RESTIC_REPOSITORY` from the env is used.
 - `restic backup [backup_options] --tag <project> <sources>`; the snapshot ID is parsed
-  from `snapshot <id> saved` (logged; a missing ID is a warning, not an error).
+  from `snapshot <id> saved` (logged; a missing ID is a warning, not an error); the summary
+  lines (`Files:`, `Dirs:`, `Added to the repository:`, `processed`) are logged at info.
+  Exit code 3 returns the ID with a `*restic.IncompleteError`; `backup` matches it through
+  an `Incomplete() bool` interface, so it does not import `restic`.
 - `restic forget [forget_options] --tag <project> <retention_policy split on whitespace>`.
 - `restic [prune_options] prune` and `restic [prune_options] unlock`.
 - Every list option is passed as one argument per item: write `["-o", "s3.connections=10"]`

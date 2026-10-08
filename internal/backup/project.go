@@ -129,8 +129,16 @@ func (m *Manager) startServices(ctx context.Context, p Project, services []strin
 	return nil
 }
 
+// backup runs restic. An incomplete snapshot (some source files unreadable) is saved, so
+// it is logged as a warning and the project counts as backed up.
 func (m *Manager) backup(ctx context.Context, s ProjectSettings, log zerolog.Logger) error {
 	id, err := m.d.Restic.Backup(ctx, s.Name, s.Sources, s.BackupOptions)
+	var incomplete interface{ Incomplete() bool }
+	if errors.As(err, &incomplete) && incomplete.Incomplete() {
+		log.Warn().Err(err).Str("snapshot_id", id).
+			Msg("backup completed, but some source files could not be read")
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("backup: %s: %w", s.Name, err)
 	}

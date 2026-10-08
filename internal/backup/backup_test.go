@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -111,6 +112,12 @@ func (f *fixture) expectStart(s *mocks.MockServices, ok bool, err error) {
 		}).Once()
 }
 
+// incompleteError is what restic returns for a snapshot without unreadable files.
+type incompleteError struct{}
+
+func (incompleteError) Error() string    { return "snapshot incomplete" }
+func (incompleteError) Incomplete() bool { return true }
+
 func project(name string, s Services) Project {
 	return Project{Settings: ProjectSettings{
 		Name: name, Sources: []string{"/data/" + name}, StopServices: true,
@@ -204,6 +211,20 @@ func TestRunProject_FailureHandling(t *testing.T) {
 			},
 			wantErr: true,
 			want:    []string{"lock key", "hook pre", "stop", "backup web", "start", "release key"},
+		},
+		{
+			name: "incomplete snapshot: warning only, post hook runs",
+			setup: func(f *fixture, s *mocks.MockServices) {
+				f.expectHook("pre", nil)
+				f.expectStop(s, true, nil)
+				f.expectBackup("web", fmt.Errorf("wrapped: %w", incompleteError{}))
+				f.expectStart(s, true, nil)
+				f.expectHook("post", nil)
+			},
+			want: []string{
+				"lock key", "hook pre", "stop", "backup web", "start", "hook post",
+				"release key",
+			},
 		},
 		{
 			name: "restart fails: project fails",
