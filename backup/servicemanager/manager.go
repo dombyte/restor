@@ -48,8 +48,8 @@ func (sc *ServiceConfig) Validate() error {
 		}
 		if sc.SystemdScope != "" && sc.SystemdScope != ScopeSystem && sc.SystemdScope != ScopeUser {
 			return &ConfigValidationError{
-				Field:    "systemd_scope",
-				Message:  "systemd_scope must be 'system' or 'user'",
+				Field:   "systemd_scope",
+				Message: "systemd_scope must be 'system' or 'user'",
 			}
 		}
 	case TypeNoop:
@@ -57,8 +57,8 @@ func (sc *ServiceConfig) Validate() error {
 		// It's used for file-only backups without any services to manage
 	default:
 		return &ConfigValidationError{
-			Field:    "service_manager",
-			Message:  "unsupported service manager type: " + sc.ServiceManagerType,
+			Field:   "service_manager",
+			Message: "unsupported service manager type: " + sc.ServiceManagerType,
 		}
 	}
 	return nil

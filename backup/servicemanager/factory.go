@@ -74,7 +74,7 @@ func (f *Factory) CreateServiceManager(config *ServiceConfig, env []string, logg
 // validateBinaries checks if the required binaries exist and logs warnings
 func (f *Factory) validateBinaries(config *ServiceConfig) {
 	binary := ""
-	
+
 	switch config.ServiceManagerType {
 	case TypeDockerCompose:
 		binary = BinaryDocker
@@ -99,19 +99,19 @@ func binaryExists(binaryName string) bool {
 	// Try to find the binary using 'which' or 'command -v'
 	cmd := exec.Command("command", "-v", binaryName)
 	output, err := cmd.Output()
-	
+
 	// If command succeeds, the binary exists
 	if err == nil && len(output) > 0 {
 		return true
 	}
-	
+
 	// Try with 'which' as a fallback
 	cmd = exec.Command("which", binaryName)
 	output, err = cmd.Output()
 	if err == nil && len(output) > 0 {
 		return true
 	}
-	
+
 	return false
 }
 

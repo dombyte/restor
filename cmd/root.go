@@ -25,8 +25,8 @@ var BuildDate = ""
 var GitCommit = ""
 
 var (
-	configFlag string
-	debugFlag  bool
+	configFlag  string
+	debugFlag   bool
 	versionFlag bool
 )
 

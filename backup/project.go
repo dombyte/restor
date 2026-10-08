@@ -66,7 +66,7 @@ func (pb *ProjectBackup) Run(ctx context.Context) error {
 		SystemdUnits:       pb.project.SystemdUnits,
 		SystemdScope:       pb.project.SystemdScope,
 	}
-	
+
 	factory := servicemanager.NewFactory()
 	var err error
 	pb.serviceMgr, err = factory.CreateServiceManager(serviceConfig, config.GetEnvArray(pb.project.Environment), logger)
@@ -235,7 +235,7 @@ func (pb *ProjectBackup) isServiceRunning(ctx context.Context, service string) b
 	// Check if the service appears in the output and is running
 	// Different service managers have different output formats, but we can check for common patterns
 	return strings.Contains(output, service) &&
-		(strings.Contains(output, "Up") || 
-		 strings.Contains(output, "Running") ||
-		 strings.Contains(output, "active (running)"))
+		(strings.Contains(output, "Up") ||
+			strings.Contains(output, "Running") ||
+			strings.Contains(output, "active (running)"))
 }

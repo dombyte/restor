@@ -13,10 +13,10 @@ import (
 
 // Systemd wraps the systemctl CLI for managing systemd services
 type Systemd struct {
-	units       []string
-	scope       string
-	env         []string
-	logger      zerolog.Logger
+	units  []string
+	scope  string
+	env    []string
+	logger zerolog.Logger
 }
 
 // NewSystemd creates a new Systemd wrapper

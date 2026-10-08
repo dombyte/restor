@@ -24,16 +24,16 @@ type GlobalConfig struct {
 
 // ProjectConfig contains configuration for a single project
 type ProjectConfig struct {
-	ServiceManager  string   `mapstructure:"service_manager"`   // Required: "docker-compose", "podman-compose", or "systemd"
-	ComposeFile     string   `mapstructure:"compose_file"`     // Required for docker-compose and podman-compose
-	SystemdUnits    []string `mapstructure:"systemd_units"`    // Required for systemd
-	SystemdScope    string   `mapstructure:"systemd_scope"`    // Optional for systemd: "system" (default) or "user"
+	ServiceManager  string   `mapstructure:"service_manager"` // Required: "docker-compose", "podman-compose", or "systemd"
+	ComposeFile     string   `mapstructure:"compose_file"`    // Required for docker-compose and podman-compose
+	SystemdUnits    []string `mapstructure:"systemd_units"`   // Required for systemd
+	SystemdScope    string   `mapstructure:"systemd_scope"`   // Optional for systemd: "system" (default) or "user"
 	Services        []string `mapstructure:"services"`
 	Sources         []string `mapstructure:"sources"`
 	StopTimeout     int      `mapstructure:"stop_timeout"`     // Required per project
 	StartTimeout    int      `mapstructure:"start_timeout"`    // Required per project
 	RetentionPolicy string   `mapstructure:"retention_policy"` // Per project
-	StopServices   *bool    `mapstructure:"stop_services"`   // Enable/disable service stop/start (null = true)
+	StopServices    *bool    `mapstructure:"stop_services"`    // Enable/disable service stop/start (null = true)
 	BackupOptions   []string `mapstructure:"backup_options"`   // Per-project restic options for backup command only
 	ForgetOptions   []string `mapstructure:"forget_options"`   // Per-project restic options for forget command only
 	PreBackupCmd    string   `mapstructure:"pre_backup_cmd"`   // Per-project (overrides global)
@@ -53,7 +53,7 @@ type Project struct {
 	StopTimeout     time.Duration
 	StartTimeout    time.Duration
 	RetentionPolicy string
-	StopServices   bool              // Per project - enable/disable service stop/start (defaults to true)
+	StopServices    bool              // Per project - enable/disable service stop/start (defaults to true)
 	AutoPrune       bool              // From global settings
 	BackupOptions   []string          // Per-project restic options for backup command only
 	ForgetOptions   []string          // Per-project restic options for forget command only

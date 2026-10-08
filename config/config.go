@@ -358,9 +358,7 @@ func (c *Config) validateServiceManagerConfig(name string, projectConfig Project
 func GetEnvArray(envVars map[string]string) []string {
 	var env []string
 	// Start with current environment
-	for _, e := range os.Environ() {
-		env = append(env, e)
-	}
+	env = append(env, os.Environ()...)
 	// Override with configured environment variables
 	for k, v := range envVars {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))

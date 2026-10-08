@@ -5,7 +5,7 @@ const (
 	TypeDockerCompose = "docker-compose"
 	TypePodmanCompose = "podman-compose"
 	TypeSystemd       = "systemd"
-	TypeNoop         = "noop"
+	TypeNoop          = "noop"
 )
 
 // Systemd scope constants
@@ -19,9 +19,9 @@ const DefaultSystemdScope = ScopeSystem
 
 // Binary names for each service manager type
 const (
-	BinaryDocker     = "docker"
-	BinaryPodman     = "podman"
-	BinarySystemctl  = "systemctl"
+	BinaryDocker    = "docker"
+	BinaryPodman    = "podman"
+	BinarySystemctl = "systemctl"
 )
 
 // Service manager display names for logging
