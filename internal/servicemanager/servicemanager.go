@@ -51,19 +51,20 @@ func (d Deps) validate() error {
 	)
 }
 
-// waitUntil polls done every pollInterval until it reports true (true), it fails, ctx
-// ends, or timeout has passed (false, nil).
+// waitUntil polls done every pollInterval until it reports true (true), ctx ends, or
+// timeout has passed (false). A failed poll (e.g. a status query that timed out) is
+// retried; its error is returned only when the last poll before the timeout failed.
 func waitUntil(ctx context.Context, clock util.Clock, timeout time.Duration,
 	done func(ctx context.Context) (bool, error),
 ) (bool, error) {
 	deadline := clock.Now().Add(timeout)
 	for {
 		ok, err := done(ctx)
-		if err != nil || ok {
-			return ok, err
+		if err == nil && ok {
+			return true, nil
 		}
 		if !clock.Now().Before(deadline) {
-			return false, nil
+			return false, err
 		}
 		select {
 		case <-ctx.Done():
