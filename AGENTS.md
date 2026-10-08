@@ -30,7 +30,8 @@ restor orchestrates **restic** backups of several **projects** on one host.
 - **Runtime:** a single CLI binary that runs **on the host** as a oneshot systemd service,
   triggered by a systemd timer (`example/restor.service`, `example/restor.timer`). It
   shells out to `restic`, `docker compose`, `podman compose` and `systemctl`; it has no
-  server, no database and is not a container. Shipped as release archives only.
+  server, no database and is not a container. Shipped as release archives and `.deb`/
+  `.rpm` packages.
 
 ### Quick reference
 
@@ -83,7 +84,10 @@ make build                                                # ./restor with versio
 - CI: `.github/workflows/checks.yml` (push to main, PRs, reused by the release).
 - Release: push a `vX.Y.Z` tag on `main`; `release.yml` runs the checks, then goreleaser
   (`.goreleaser.yaml`) builds archives (linux/darwin, amd64/arm64/armv7) that contain the
-  binary, `README.md`, `LICENSE` and the templates from `example/`. No container image.
+  binary, `README.md`, `LICENSE` and the templates from `example/`, and `.deb`/`.rpm`
+  packages (linux only, nfpm) with the files from `packaging/`. No container image.
+- Local release dry run: `goreleaser release --snapshot --clean --skip=publish` (output in
+  `dist/`).
 - Build info: `main.{Version,Commit,BuildDate,GoVersion}`, set via ldflags by the Makefile
   and goreleaser (`GOVERSION` comes from `release.yml`); printed by `version` and logged
   at startup.
@@ -120,6 +124,8 @@ internal/util/             RequireAll/DependencyError, Clock; clocktest (fake cl
 internal/<pkg>/mocks/      mockery output (never hand-edited)
 example/                   config.yaml (full reference, kept valid by a test), restor.env,
                            restor.service + restor.timer (systemd units)
+packaging/                 .deb/.rpm only: system + user units (/usr/bin/restor) and the
+                           install/remove scripts (nfpm in .goreleaser.yaml)
 scripts/pre-commit.sh      local checks (make check)
 ```
 
@@ -129,7 +135,8 @@ Layout rules:
 - `internal/` holds **all** project code; at most 3 levels below `internal/`.
 - `pkg/` only for code meant for other modules, and only with user confirmation.
 - Root files: `AGENTS.md`, `README.md`, `.golangci.yml`, `.goreleaser.yaml`,
-  `.mockery.yaml`, `Makefile`, `renovate.json`, `scripts/pre-commit.sh`, `example/`.
+  `.mockery.yaml`, `Makefile`, `renovate.json`, `scripts/pre-commit.sh`, `example/`,
+  `packaging/`.
 
 ---
 
@@ -305,8 +312,15 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 - **Runs on the host, not in a container:** restor has to stop/start the host's compose
   projects and systemd units and read their data paths directly; a container would need
   the Docker/Podman socket, systemd access and every source path mounted. Therefore there
-  is no `Dockerfile`, no `.dockerignore` and no image: releases ship archives only (no
-  `dockers_v2` in goreleaser, no ghcr login in `release.yml`).
+  is no `Dockerfile`, no `.dockerignore` and no image: releases ship archives and
+  `.deb`/`.rpm` packages only (no `dockers_v2` in goreleaser, no ghcr login in
+  `release.yml`).
+- **Packages as release assets, not a repository:** the `.deb`/`.rpm` files are attached
+  to the GitHub release; hosting an apt/yum repository would need an external service or
+  goreleaser Pro. Packages install to `/usr/bin` (so `packaging/` has its own unit; the
+  `example/` unit targets manual installs in `/usr/local/bin`), never write into
+  `/etc/restor` beyond creating it 0700, do not enable the timer (a run would fail before
+  the config is written), and only *recommend* `restic` (often installed upstream).
 - **Oneshot + systemd timer instead of a daemon:** scheduling, logging (journal), failure
   state and catch-up of missed runs come from systemd; restor stays a plain CLI. A failed
   run exits 1 and the next timer run is the retry; there is no container runtime restart
@@ -523,7 +537,7 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
 | `Makefile` | `build` (ldflags build info), `check` (runs the script), `clean`, `run` |
 | `.github/workflows/checks.yml` | on push to main, PRs and `workflow_call`: tidy check, build, race tests, deadcode, govulncheck, mock drift, golangci-lint; a `gate` job skips them on a push to main that is a PR's merge commit (15.5); `concurrency` cancels superseded PR runs only |
 | `.github/workflows/release.yml` | on `vX.Y.Z` / `vX.Y.Z-*` tags: a `guard` job verifies the exact tag format and that the tag is on `main`, then reuses `checks.yml` (granted `pull-requests: read` for the gate); passes `GOVERSION` to goreleaser; `concurrency` runs one release per tag, never cancelled |
-| `.goreleaser.yaml` | `go mod verify` only (never rewrites), `-trimpath`, reproducible (`CommitDate`), `goamd64: v1`, grouped changelog, archives only (section 8) |
+| `.goreleaser.yaml` | `go mod verify` only (never rewrites), `-trimpath`, reproducible (`CommitDate`), `goamd64: v1`, grouped changelog, archives + nfpm `.deb`/`.rpm` (`mtime` = `CommitDate`), no image (section 8) |
 | `.gitignore` | never commit local config (`config.yaml`, `env.yaml`), secrets or build output |
 | `renovate.json` | fitted to the project (below), semantic commits, grouped by manager |
 
