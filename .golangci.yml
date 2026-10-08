@@ -56,7 +56,7 @@ linters:
         - pattern: ^panic$
           msg: "no panic at runtime; return an error"
 
-    # Line length linter - hard limit of 100 chars per Global Plan
+    # Line length linter - hard limit of 100 chars (AGENTS.md "Code Style")
     lll:
       line-length: 100
       tab-width: 4
