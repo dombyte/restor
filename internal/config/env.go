@@ -32,9 +32,21 @@ func mergeEnvironments(envFile string, inline map[string]string,
 	}
 	maps.Copy(env, inline)
 	for k, v := range env {
-		env[k] = os.Expand(v, getenv)
+		env[k] = expand(v, getenv)
 	}
 	return env, nil
+}
+
+// expand replaces $VAR and ${VAR} with getenv(VAR); ${VAR:-default} uses default when
+// VAR is unset or empty.
+func expand(s string, getenv func(string) string) string {
+	return os.Expand(s, func(name string) string {
+		name, def, hasDefault := strings.Cut(name, ":-")
+		if v := getenv(name); v != "" || !hasDefault {
+			return v
+		}
+		return def
+	})
 }
 
 // loadEnvFile parses a .env, .yaml/.yml or .json file; other extensions are tried in

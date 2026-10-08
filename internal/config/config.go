@@ -59,7 +59,7 @@ func Load(path string, getenv func(string) string) (*Config, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	cfg.Environments = env
-	cfg.expand(getenv)
+	cfg.expandAll(getenv)
 	if err := errors.Join(append(dupErrs, cfg.Validate())...); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
@@ -217,9 +217,9 @@ func (v *validator) check(ok bool, field, problem string) {
 	}
 }
 
-// expand replaces ${VAR} references in the project and global fields with getenv.
-func (c *Config) expand(getenv func(string) string) {
-	x := func(s string) string { return os.Expand(s, getenv) }
+// expandAll replaces ${VAR} references in the project and global fields with getenv.
+func (c *Config) expandAll(getenv func(string) string) {
+	x := func(s string) string { return expand(s, getenv) }
 	xs := func(list []string) {
 		for i := range list {
 			list[i] = x(list[i])

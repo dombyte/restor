@@ -60,3 +60,21 @@ func TestMergeEnvironments(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"A": "x", "B": "inline-x"}, got)
 }
+
+func TestExpand(t *testing.T) {
+	t.Parallel()
+	env := getenv(map[string]string{"SET": "value", "EMPTY": ""})
+	tests := map[string]string{
+		"${SET}":                   "value",
+		"$SET/x":                   "value/x",
+		"${MISSING}":               "",
+		"${MISSING:-eu-central-1}": "eu-central-1",
+		"${EMPTY:-fallback}":       "fallback",
+		"${SET:-fallback}":         "value",
+		"${MISSING:-}":             "",
+		"a ${SET} b ${NOPE:-c}":    "a value b c",
+	}
+	for in, want := range tests {
+		assert.Equal(t, want, expand(in, env), in)
+	}
+}
