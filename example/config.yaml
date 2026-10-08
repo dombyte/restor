@@ -69,7 +69,7 @@ env_file: ""
 
 # Inline environment variables (override external file values)
 # These are passed to both restic and docker compose commands
-# Use ${VAR_NAME} syntax to reference system environment variables
+# Use ${VAR_NAME} syntax to reference system environment variables; $$ is a literal $
 environments:
   # ========================================
   # Restic Authentication (choose ONE method)

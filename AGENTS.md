@@ -263,7 +263,10 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   (`.env`, `.yaml`/`.yml`, `.json`; other extensions are tried in that order) + inline
   `environments` (highest priority). `$VAR`, `${VAR}` and `${VAR:-default}` in env values,
   global settings and project fields (paths, units, hooks, options, retention) are expanded
-  once at load time from the **process** env (not from the env file).
+  once at load time from the **process** env (not from the env file); `$$` is a literal
+  `$`. `.env` files: `KEY=value` per line (`export ` prefix allowed, a line without `=` is
+  an error), `"…"` and `'…'` values are taken as is (single-quoted ones are not expanded),
+  an unquoted value ends at ` #`.
 - Validation (all problems at once, with field paths): `mode` is `sequential` (default) or
   `parallel`; per project `service_manager` and `sources` are required; `compose_file` for
   the compose managers, `systemd_units` for systemd; `systemd_scope` is `system` (default)

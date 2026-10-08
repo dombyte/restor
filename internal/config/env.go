@@ -14,8 +14,14 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
-// ErrEnvFormat is returned for an env file that none of the supported formats can parse.
-var ErrEnvFormat = errors.New("unsupported env file format")
+var (
+	// ErrEnvFormat is returned for an env file that none of the supported formats can
+	// parse.
+	ErrEnvFormat = errors.New("unsupported env file format")
+
+	errDotEnvLine  = errors.New(`expected KEY=value`)
+	errDotEnvQuote = errors.New("unterminated quote")
+)
 
 // mergeEnvironments returns the env file's variables overridden by the inline ones. All
 // values are expanded with getenv.
@@ -38,9 +44,12 @@ func mergeEnvironments(envFile string, inline map[string]string,
 }
 
 // expand replaces $VAR and ${VAR} with getenv(VAR); ${VAR:-default} uses default when
-// VAR is unset or empty.
+// VAR is unset or empty, and $$ is a literal $.
 func expand(s string, getenv func(string) string) string {
 	return os.Expand(s, func(name string) string {
+		if name == "$" {
+			return "$"
+		}
 		name, def, hasDefault := strings.Cut(name, ":-")
 		if v := getenv(name); v != "" || !hasDefault {
 			return v
@@ -74,26 +83,57 @@ func loadEnvFile(path string) (map[string]string, error) {
 	return nil, ErrEnvFormat
 }
 
-// parseDotEnv parses KEY=value lines; blank lines and # comments are skipped, and one
-// pair of surrounding quotes is removed from values.
+// parseDotEnv parses KEY=value lines. Blank lines and # comments are skipped, and an
+// "export " prefix is ignored. A value in double quotes is taken as is; a value in single
+// quotes is also kept literal by expand (its $ are escaped). An unquoted value ends at " #".
+// A line without "=" is an error, so a mistyped secret is not silently dropped.
 func parseDotEnv(data []byte) (map[string]string, error) {
 	env := map[string]string{}
 	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for scanner.Scan() {
+	for n := 1; scanner.Scan(); n++ {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
+		key, value, err := dotEnvLine(line)
+		if err != nil {
+			return nil, fmt.Errorf("parse .env: line %d: %w", n, err)
 		}
-		env[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(value), `"'`)
+		env[key] = value
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("parse .env: %w", err)
 	}
 	return env, nil
+}
+
+// dotEnvLine splits one non-comment .env line into key and unquoted value.
+func dotEnvLine(line string) (key, value string, err error) {
+	key, value, ok := strings.Cut(strings.TrimPrefix(line, "export "), "=")
+	key = strings.TrimSpace(key)
+	if !ok || key == "" || strings.ContainsAny(key, " \t") {
+		return "", "", errDotEnvLine
+	}
+	value, err = dotEnvValue(strings.TrimSpace(value))
+	return key, value, err
+}
+
+// dotEnvValue unquotes one .env value (see parseDotEnv).
+func dotEnvValue(value string) (string, error) {
+	if value == "" || (value[0] != '"' && value[0] != '\'') {
+		v, _, _ := strings.Cut(value, " #")
+		return strings.TrimSpace(v), nil
+	}
+	quote := value[0]
+	end := strings.IndexByte(value[1:], quote)
+	if end < 0 {
+		return "", errDotEnvQuote
+	}
+	v := value[1 : end+1]
+	if quote == '\'' {
+		v = strings.ReplaceAll(v, "$", "$$")
+	}
+	return v, nil
 }
 
 func parseYAMLEnv(data []byte) (map[string]string, error) {

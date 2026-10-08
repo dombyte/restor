@@ -80,7 +80,8 @@ restor checks the whole file at startup and lists every problem with its field p
 
 **Environment:** `env_file` and inline `environments` are passed to restic, the service
 managers and the hooks (inline wins). `$VAR`, `${VAR}` and `${VAR:-default}` are expanded
-from the process environment when the config is loaded.
+from the process environment when the config is loaded; write `$$` for a literal `$`
+(e.g. in a password). In `.env` files a value in single quotes is never expanded.
 
 **Project names** are case-insensitive; the lowercase name is the restic tag.
 
