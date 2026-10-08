@@ -8,6 +8,11 @@ ExecStart=/usr/bin/restor --config %h/.config/restor/config.yaml
 # On stop, restor restarts the services it stopped and exits within 5 minutes; give it
 # longer than that before systemd kills it.
 TimeoutStopSec=330
+# Back up at a lower CPU and I/O priority than the services (best-effort, not idle: an
+# idle backup could starve under load while the services are stopped).
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
 StandardOutput=journal
 StandardError=journal
 
