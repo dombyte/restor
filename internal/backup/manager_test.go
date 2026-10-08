@@ -7,8 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-
-	"github.com/dombyte/restor/internal/backup/mocks"
 )
 
 // fileProject is a project without services or hooks.
@@ -123,16 +121,4 @@ func TestManager_RunCancelled(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, []string{"lock a", "release a"}, f.rec.list(),
 		"b is not started after the cancel, no maintenance")
-}
-
-func TestManager_CleanupFailsIsLogged(t *testing.T) {
-	t.Parallel()
-	f := &fixture{
-		rec: &recorder{}, restic: mocks.NewMockRestic(t), locker: mocks.NewMockLocker(t),
-		hooks: mocks.NewMockRunner(t),
-	}
-	f.locker.EXPECT().CleanupStale().Return(assert.AnError).Once()
-	m := f.manager(t, Settings{})
-
-	require.NoError(t, m.Run(context.Background()))
 }

@@ -2,8 +2,8 @@ package util
 
 import "time"
 
-// Clock abstracts time so loops that wait (service stop/start polling) and lock files
-// can be driven by a fake clock in tests.
+// Clock abstracts time so loops that wait (service stop/start polling) can be driven by a
+// fake clock in tests.
 type Clock interface {
 	// Now returns the current time.
 	Now() time.Time

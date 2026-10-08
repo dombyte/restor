@@ -20,9 +20,6 @@ packages:
   github.com/dombyte/restor/internal/servicemanager:
     interfaces:
       Runner:
-  github.com/dombyte/restor/internal/lock:
-    interfaces:
-      Processes:
   github.com/dombyte/restor/internal/util:
     interfaces:
       Clock:
