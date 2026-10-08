@@ -1,6 +1,6 @@
 module github.com/dombyte/restor
 
-go 1.26.5
+go 1.26.8
 
 require (
 	github.com/go-viper/mapstructure/v2 v2.5.0
