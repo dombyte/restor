@@ -211,12 +211,14 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
    level; `signal.NotifyContext` for SIGINT/SIGTERM; build info is logged.
 2. `app.New`: `config.Load` (file + env file + inline env, expansion, validation) and
    wiring. Any error ends the run (exit 1).
-3. `Manager.Run`: run all projects (sequential or parallel); when
-   every project succeeded and `global.auto_prune` is set: forget per project with a
-   `retention_policy`, then one prune + unlock (only if at least one project forgot).
+3. `Manager.Run`: run all projects (sequential or parallel); when the run was not
+   cancelled and `global.auto_prune` is set: forget each project that was backed up and
+   has a `retention_policy`, then, only when every project succeeded, one prune + unlock
+   (only if at least one project forgot).
 4. Exit code: 0 when every project backed up; 1 when config failed, any project failed or
    the run was cancelled. Forget, prune, unlock and post-backup hook failures are logged
-   but do **not** change the exit code; after a failed project they are skipped.
+   but do **not** change the exit code; after a failed project only prune and unlock are
+   skipped (a warning), and a cancelled run does no maintenance.
 
 ### Failure handling per project
 - Lock held by a live process → project fails.
@@ -350,8 +352,10 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   (no viper) because viper lowercases map keys, which broke environment variable names.
 - **Forget and prune after all backups, sequentially:** they take exclusive repository locks
   and would fail or block concurrent backups; one repository-wide prune is cheaper than one
-  per project. They are skipped when a project failed, so a broken run never thins out
-  the snapshot history.
+  per project. After a failed project, forget still runs for the projects that have a
+  fresh snapshot (a permanently broken project must not stop retention for all others),
+  but the failed project keeps its history and prune is skipped, so a broken run never
+  deletes data.
 - **Restart services even when the backup failed or the run was cancelled:** a failed
   backup must not leave production services down.
 - **Tag = lowercase project name:** keeps each project's retention separate in a shared

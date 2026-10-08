@@ -44,8 +44,10 @@ func TestManager_RunParallel(t *testing.T) {
 	f.expectBackup("a", nil)
 	f.expectBackup("b", assert.AnError)
 	f.expectBackup("c", nil)
+	f.restic.EXPECT().Forget(mock.Anything, "a", "--keep-last 1", []string(nil)).
+		Return(nil).Once()
 	m := f.manager(t, Settings{Parallel: true, AutoPrune: true},
-		fileProject(f, t, "a", "--keep-last 1"), fileProject(f, t, "b", ""),
+		fileProject(f, t, "a", "--keep-last 1"), fileProject(f, t, "b", "--keep-last 1"),
 		fileProject(f, t, "c", ""))
 
 	err := m.Run(context.Background())
@@ -53,8 +55,8 @@ func TestManager_RunParallel(t *testing.T) {
 	require.ErrorIs(t, err, ErrProjectsFailed)
 	assert.Contains(t, err.Error(), "1 of 3")
 	assert.Len(t, f.rec.list(), 9)
-	f.restic.AssertNotCalled(t, "Forget", mock.Anything, mock.Anything, mock.Anything,
-		mock.Anything)
+	// Only the backed-up project a is forgotten: b failed, and prune/unlock are skipped
+	// (the restic mock fails the test on any unexpected call).
 }
 
 func TestManager_Maintenance(t *testing.T) {
