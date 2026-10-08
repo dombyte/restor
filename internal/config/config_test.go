@@ -192,3 +192,16 @@ func TestRunMode(t *testing.T) {
 		assert.Equal(t, want, (&Config{Mode: mode}).RunMode(), mode)
 	}
 }
+
+func TestResolvedProjects_SortedByName(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{Projects: map[string]ProjectConfig{}}
+	for _, name := range []string{"m", "c", "x", "a", "q", "b", "z", "k"} {
+		cfg.Projects[name] = ProjectConfig{ServiceManager: ManagerNoop}
+	}
+	var names []string
+	for _, p := range cfg.ResolvedProjects() {
+		names = append(names, p.Name)
+	}
+	assert.Equal(t, []string{"a", "b", "c", "k", "m", "q", "x", "z"}, names)
+}
