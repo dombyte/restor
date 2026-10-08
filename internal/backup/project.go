@@ -78,8 +78,8 @@ func (m *Manager) backupProject(ctx context.Context, p Project, log zerolog.Logg
 	return nil
 }
 
-// stopServices stops the project's services and returns them. A failed or slow stop is
-// logged and the backup continues.
+// stopServices stops the project's running services and returns them, so that only
+// those are started again. A failed or slow stop is logged and the backup continues.
 func (m *Manager) stopServices(ctx context.Context, p Project, log zerolog.Logger) (
 	[]string, error,
 ) {
@@ -87,9 +87,13 @@ func (m *Manager) stopServices(ctx context.Context, p Project, log zerolog.Logge
 		log.Debug().Msg("service stop/start disabled")
 		return nil, nil
 	}
-	services, err := p.Services.Services(ctx, p.Settings.Services)
-	if err != nil || len(services) == 0 {
+	services, err := p.Services.Running(ctx, p.Settings.Services)
+	if err != nil {
 		return nil, err
+	}
+	if len(services) == 0 {
+		log.Info().Msg("no services running, nothing to stop")
+		return nil, nil
 	}
 	log.Info().Strs("services", services).Msg("stopping services")
 	stopped, err := p.Services.Stop(ctx, services, p.Settings.StopTimeout)

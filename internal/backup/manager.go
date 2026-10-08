@@ -32,11 +32,13 @@ type Restic interface {
 	Unlock(ctx context.Context, opts []string) error
 }
 
-// Services stops and starts the services of one project. Stop and Start report false
-// when the services did not reach the expected state within the timeout.
+// Services stops and starts the services of one project. Running returns the services
+// among requested (all when empty) that run now: only those are stopped and started
+// again. Stop and Start report false when the services did not reach the expected state
+// within the timeout.
 type Services interface {
 	LockKey() string
-	Services(ctx context.Context, requested []string) ([]string, error)
+	Running(ctx context.Context, requested []string) ([]string, error)
 	Stop(ctx context.Context, services []string, timeout time.Duration) (bool, error)
 	Start(ctx context.Context, services []string, timeout time.Duration) (bool, error)
 }

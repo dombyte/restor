@@ -44,18 +44,30 @@ func NewSystemd(s SystemdSettings, d Deps) (*Systemd, error) {
 // LockKey returns the unit names joined with commas.
 func (s *Systemd) LockKey() string { return strings.Join(s.s.Units, ",") }
 
-// Services returns requested, or all units when it is empty. A requested name that is not
-// a configured unit is an error: falling back to all units would stop more than asked.
-func (s *Systemd) Services(_ context.Context, requested []string) ([]string, error) {
-	if len(requested) == 0 {
-		return s.s.Units, nil
+// Running returns the units among requested (all units when it is empty) that are up
+// (active, activating, reloading, …). A requested name that is not a configured unit is
+// an error: falling back to all units would stop more than asked.
+func (s *Systemd) Running(ctx context.Context, requested []string) ([]string, error) {
+	units := s.s.Units
+	if len(requested) > 0 {
+		units = requested
 	}
-	for _, r := range requested {
-		if !slices.Contains(s.s.Units, r) {
-			return nil, fmt.Errorf("servicemanager: %w: %q", errUnknownUnit, r)
+	for _, u := range units {
+		if !slices.Contains(s.s.Units, u) {
+			return nil, fmt.Errorf("servicemanager: %w: %q", errUnknownUnit, u)
 		}
 	}
-	return requested, nil
+	states, err := s.states(ctx, units)
+	if err != nil {
+		return nil, err
+	}
+	var up []string
+	for i, u := range units {
+		if isUp(states[i]) {
+			up = append(up, u)
+		}
+	}
+	return up, nil
 }
 
 // Stop runs `systemctl stop <units>` and waits until none of them is active. It returns

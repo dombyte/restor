@@ -88,7 +88,7 @@ func (f *fixture) services(t *testing.T, key string, names ...string) *mocks.Moc
 	t.Helper()
 	s := mocks.NewMockServices(t)
 	s.EXPECT().LockKey().Return(key).Maybe()
-	s.EXPECT().Services(mock.Anything, mock.Anything).Return(names, nil).Maybe()
+	s.EXPECT().Running(mock.Anything, mock.Anything).Return(names, nil).Maybe()
 	return s
 }
 
@@ -279,12 +279,30 @@ func TestRunProject_NoServices(t *testing.T) {
 	assert.Equal(t, []string{"lock noop", "backup files", "release noop"}, f.rec.list())
 }
 
+func TestRunProject_RestartsOnlyRunningServices(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	svc := mocks.NewMockServices(t)
+	svc.EXPECT().LockKey().Return("key")
+	svc.EXPECT().Running(mock.Anything, []string{"web", "db", "job"}).
+		Return([]string{"web"}, nil).Once()
+	svc.EXPECT().Stop(mock.Anything, []string{"web"}, 10*time.Second).Return(true, nil).Once()
+	svc.EXPECT().Start(mock.Anything, []string{"web"}, 20*time.Second).Return(true, nil).Once()
+	f.expectLock("key")
+	f.expectBackup("web", nil)
+	p := project("web", svc)
+	p.Settings.Services = []string{"web", "db", "job"}
+	p.Settings.PreBackupCmd, p.Settings.PostBackupCmd = "", ""
+
+	require.NoError(t, f.manager(t, Settings{}).runProject(context.Background(), p))
+}
+
 func TestRunProject_ServicesFail(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	svc := mocks.NewMockServices(t)
 	svc.EXPECT().LockKey().Return("key")
-	svc.EXPECT().Services(mock.Anything, mock.Anything).Return(nil, assert.AnError)
+	svc.EXPECT().Running(mock.Anything, mock.Anything).Return(nil, assert.AnError)
 	f.expectLock("key")
 	p := project("web", svc)
 	p.Settings.PreBackupCmd = ""

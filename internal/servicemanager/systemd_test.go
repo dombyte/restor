@@ -30,31 +30,53 @@ func TestSystemd_LockKey(t *testing.T) {
 	assert.Equal(t, "a.service,b.service", s.LockKey())
 }
 
-func TestSystemd_Services(t *testing.T) {
+func TestSystemd_Running(t *testing.T) {
 	t.Parallel()
-	s, _ := newSystemd(t, false)
 	tests := []struct {
 		name      string
 		requested []string
+		states    string
 		want      []string
-		wantErr   bool
+		wantErr   error
 	}{
-		{name: "all by default", want: []string{"a.service", "b.service"}},
-		{name: "filtered", requested: []string{"b.service"}, want: []string{"b.service"}},
-		{name: "unknown", requested: []string{"b.service", "x.service"}, wantErr: true},
+		{name: "all by default", states: "active\ninactive\n", want: []string{"a.service"}},
+		{
+			name: "requested", requested: []string{"b.service"}, states: "activating\n",
+			want: []string{"b.service"},
+		},
+		{name: "none up", states: "failed\ninactive\n"},
+		{name: "unknown", requested: []string{"x.service"}, wantErr: errUnknownUnit},
+		{name: "status fails", states: "active\n", wantErr: assert.AnError},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := s.Services(context.Background(), tt.requested)
-			if tt.wantErr {
-				require.ErrorIs(t, err, errUnknownUnit)
+			s, r := newSystemd(t, false)
+			units := tt.requested
+			if len(units) == 0 {
+				units = []string{"a.service", "b.service"}
+			}
+			args := append([]any{"is-active"}, toAny(units)...)
+			expectSystemctl(r, args...).Return([]byte(tt.states), assert.AnError).Maybe()
+
+			got, err := s.Running(context.Background(), tt.requested)
+
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func toAny(list []string) []any {
+	out := make([]any, len(list))
+	for i, s := range list {
+		out[i] = s
+	}
+	return out
 }
 
 func TestSystemd_StopUserScope(t *testing.T) {

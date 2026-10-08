@@ -195,8 +195,10 @@ restor itself has no data store. What it writes, and who writes it:
   two projects) from stopping and backing up the same compose file / units at once.
   Runs of different users do not see each other's locks (rare: root and a `docker` group
   member backing up the same compose file).
-- **Services:** a project stops and restarts only the services it lists (`services`), or
-  all services of its compose file / its `systemd_units` when the list is empty.
+- **Services:** a project stops and restarts only those of its services (`services`, or
+  all services of its compose file / its `systemd_units` when the list is empty) that are
+  running when its backup starts. Services that were already stopped, and one-shot jobs
+  that have exited, stay as they were.
 
 ---
 
@@ -219,7 +221,7 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 ### Failure handling per project
 - Lock held by a live process → project fails.
 - Pre-backup hook fails → project fails; services are not touched.
-- Listing the services fails → project fails.
+- Finding the running services fails → project fails.
 - Stopping services fails → warning, the backup still runs (services may be running).
 - Services not stopped within `stop_timeout` → warning, the backup still runs.
 - `restic backup` fails → services are restarted, project fails.
@@ -295,12 +297,14 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 ### Service managers
 - Compose: `<docker|podman> compose -f <file> …`; services from `config --services` when
   not listed; stop with `stop -t <stop_timeout> <services>` (ignores "no containers to
-  stop"), start with `up -d <services>`. Running = `ps --format json` reports the service
+  stop"), start with `start <services>` (not `up`: a backup never recreates containers
+  from a changed compose file). Running = `ps --format json` reports the service
   with `State` `running` (Docker JSON lines or a JSON array; podman-compose via the
   `com.docker.compose.service` label).
 - systemd: `systemctl [--user] stop|start <units>` (stop ignores "not running"/"not
-  loaded"); state from `systemctl is-active <units>`. Stopped = no unit `active`,
-  `activating`, `deactivating`, `reloading` or `refreshing`; started = all `active`.
+  loaded"); state from `systemctl is-active <units>`. Up (running before the backup, and
+  not yet stopped) = `active`, `activating`, `deactivating`, `reloading` or `refreshing`;
+  started = all `active`.
   `services` selects some of `systemd_units` (a name that is not one of them is a
   validation error); empty means all units.
 - noop: no services; every operation succeeds.

@@ -76,6 +76,9 @@ them all at once), `restic_repo`, `auto_prune`, `prune_options`, `pre_backup_cmd
 **Per project (optional):** `services`, `systemd_scope`, `stop_services`,
 `retention_policy`, `backup_options`, `forget_options`, `pre_backup_cmd`, `post_backup_cmd`
 
+Only the services that are running when a project's backup starts are stopped, and only
+those are started again afterwards.
+
 Relative `env_file`, `compose_file` and `sources` paths are resolved against the directory
 of the config file. restor checks the whole file at startup and lists every problem with
 its field path; unknown keys (typos) are reported as warnings.

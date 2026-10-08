@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -48,10 +49,24 @@ func NewCompose(s ComposeSettings, d Deps) (*Compose, error) {
 // LockKey returns the compose file path.
 func (c *Compose) LockKey() string { return c.s.File }
 
-// Services returns requested, or every service of the compose file when it is empty.
-func (c *Compose) Services(ctx context.Context, requested []string) ([]string, error) {
+// Running returns the services among requested (every service of the compose file when
+// it is empty) that have a running container.
+func (c *Compose) Running(ctx context.Context, requested []string) ([]string, error) {
+	services, err := c.services(ctx, requested)
+	if err != nil {
+		return nil, err
+	}
+	running, err := c.running(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(services, func(s string) bool { return !running[s] }), nil
+}
+
+// services returns a copy of requested, or every service of the compose file.
+func (c *Compose) services(ctx context.Context, requested []string) ([]string, error) {
 	if len(requested) > 0 {
-		return requested, nil
+		return slices.Clone(requested), nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, statusTimeout)
 	defer cancel()
@@ -83,8 +98,9 @@ func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Dura
 	})
 }
 
-// Start runs `up -d <services>` and waits until all of them are running. It returns
-// false when some are not running after timeout.
+// Start runs `start <services>` and waits until all of them are running. It returns
+// false when some are not running after timeout. `start` (unlike `up`) restarts the
+// stopped containers as they were and never recreates them from a changed compose file.
 func (c *Compose) Start(ctx context.Context, services []string, timeout time.Duration) (
 	bool, error,
 ) {
@@ -93,7 +109,7 @@ func (c *Compose) Start(ctx context.Context, services []string, timeout time.Dur
 	}
 	cmdCtx, cancel := commandContext(ctx, timeout)
 	defer cancel()
-	if _, err := c.run(cmdCtx, append([]string{"up", "-d"}, services...)...); err != nil {
+	if _, err := c.run(cmdCtx, append([]string{"start"}, services...)...); err != nil {
 		return false, fmt.Errorf("servicemanager: start %s: %w", c.s.File, err)
 	}
 	return waitUntil(ctx, c.clock, timeout, func(ctx context.Context) (bool, error) {
