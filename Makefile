@@ -4,17 +4,15 @@ BINARY_NAME := restor
 VERSION := $(shell git describe --tags --always 2>/dev/null || echo "dev")
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 DATE := $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
-
-# Build info lives in package cmd (see AGENTS.md "Migration backlog")
-PKG := github.com/dombyte/restor/cmd
+GOVERSION := $(shell go version | awk '{print $$3}')
 
 # Build flags for small binary
 LDFLAGS := -s -w
-BUILD_FLAGS := -ldflags "-X $(PKG).Version=$(VERSION) -X $(PKG).GitCommit=$(COMMIT) -X $(PKG).BuildDate=$(DATE) $(LDFLAGS)"
+BUILD_FLAGS := -ldflags "-X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X main.BuildDate=$(DATE) -X main.GoVersion=$(GOVERSION) $(LDFLAGS)"
 
 .PHONY: build
 build:
-	CGO_ENABLED=0 go build $(BUILD_FLAGS) -o $(BINARY_NAME) .
+	CGO_ENABLED=0 go build $(BUILD_FLAGS) -o $(BINARY_NAME) ./cmd
 
 .PHONY: clean
 clean:

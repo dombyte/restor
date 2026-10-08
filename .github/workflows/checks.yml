@@ -66,6 +66,11 @@ jobs:
       - name: Vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
+      - name: Mocks up to date
+        run: |
+          go tool mockery
+          git diff --exit-code -- '*/mocks/*'
+
   golangci-lint:
     name: golangci-lint
     needs: gate
