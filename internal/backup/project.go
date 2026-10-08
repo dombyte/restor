@@ -92,7 +92,7 @@ func (m *Manager) stopServices(ctx context.Context, p Project, log zerolog.Logge
 		return nil, err
 	}
 	if len(services) == 0 {
-		log.Info().Msg("no services running, nothing to stop")
+		log.Debug().Msg("no services running, nothing to stop")
 		return nil, nil
 	}
 	log.Info().Strs("services", services).Msg("stopping services")
