@@ -232,6 +232,10 @@ func (v *validator) serviceManager(p ProjectConfig) {
 		v.check(len(p.SystemdUnits) > 0, "systemd_units", "required for service_manager systemd")
 		v.check(slices.Contains([]string{"", ScopeSystem, ScopeUser}, p.SystemdScope),
 			"systemd_scope", fmt.Sprintf("must be %q or %q", ScopeSystem, ScopeUser))
+		for _, s := range p.Services {
+			v.check(slices.Contains(p.SystemdUnits, s), "services",
+				fmt.Sprintf("%q is not in systemd_units", s))
+		}
 	case ManagerNoop:
 	case "":
 		v.check(false, "service_manager", "required")

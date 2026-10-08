@@ -28,6 +28,7 @@ var (
 	ErrMissingDependency = errors.New("servicemanager: missing dependency")
 
 	errUnexpectedOutput = errors.New("unexpected output")
+	errUnknownUnit      = errors.New("service is not one of the systemd units")
 )
 
 // Runner executes a program and returns its combined output, also on failure.

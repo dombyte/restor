@@ -37,21 +37,20 @@ func TestSystemd_Services(t *testing.T) {
 		name      string
 		requested []string
 		want      []string
+		wantErr   bool
 	}{
 		{name: "all by default", want: []string{"a.service", "b.service"}},
-		{
-			name: "filtered", requested: []string{"b.service", "x.service"},
-			want: []string{"b.service"},
-		},
-		{
-			name: "none matching", requested: []string{"x.service"},
-			want: []string{"a.service", "b.service"},
-		},
+		{name: "filtered", requested: []string{"b.service"}, want: []string{"b.service"}},
+		{name: "unknown", requested: []string{"b.service", "x.service"}, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := s.Services(context.Background(), tt.requested)
+			if tt.wantErr {
+				require.ErrorIs(t, err, errUnknownUnit)
+				return
+			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
