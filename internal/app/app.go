@@ -126,7 +126,9 @@ func CreateServiceManager(p config.Project, d servicemanager.Deps) (backup.Servi
 			Units: p.SystemdUnits, User: p.SystemdScope == config.ScopeUser,
 		}, d)
 	case config.ManagerNoop:
-		return servicemanager.NewNoop(servicemanager.NoopSettings{LockKey: "noop"}), nil
+		// Keyed by project: noop projects share no services and may run in parallel.
+		return servicemanager.NewNoop(servicemanager.NoopSettings{LockKey: "noop-" + p.Name}),
+			nil
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownType, p.ServiceManager)
 	}
