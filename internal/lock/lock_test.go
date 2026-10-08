@@ -162,3 +162,45 @@ func TestOSProcesses_Alive(t *testing.T) {
 	assert.False(t, p.Alive(-1))
 	assert.False(t, p.Alive(1<<22+12345), "PIDs above the Linux maximum do not exist")
 }
+
+func TestDefaultDir(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		user User
+		want string
+	}{
+		"root on linux": {
+			User{UID: 0, GOOS: "linux", RuntimeDir: "/run/user/1000", TempDir: "/tmp"},
+			"/run/restor",
+		},
+		"user with runtime dir": {
+			User{UID: 1000, GOOS: "linux", RuntimeDir: "/run/user/1000", TempDir: "/tmp"},
+			"/run/user/1000/restor",
+		},
+		"user without runtime dir": {
+			User{UID: 1000, GOOS: "linux", TempDir: "/tmp"},
+			"/tmp/restor-1000",
+		},
+		"root on darwin": {
+			User{UID: 0, GOOS: "darwin", TempDir: "/var/folders/x/T"},
+			"/var/folders/x/T/restor-0",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, DefaultDir(tt.user))
+		})
+	}
+}
+
+func TestLocker_LockRefusesWritableDir(t *testing.T) {
+	t.Parallel()
+	l, _, _ := newLocker(t)
+	require.NoError(t, os.MkdirAll(l.dir, dirMode))
+	require.NoError(t, os.Chmod(l.dir, 0o777))
+
+	_, err := l.Lock("units")
+
+	require.ErrorIs(t, err, ErrUnsafeDir)
+}

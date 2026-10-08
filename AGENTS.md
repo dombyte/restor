@@ -175,12 +175,17 @@ restor itself has no data store. What it writes, and who writes it:
   parallel mode concurrently; restic allows concurrent backups). `forget`, `prune` and
   `unlock` run **only in `Manager`, sequentially, after all backups**, because they need
   exclusive repository locks.
-- **Lock files:** `lock.Locker` owns `/tmp/restor-locks/<key>.lock` (content: PID and Unix
-  time), created atomically (`O_EXCL`). The key comes from the service manager: the
+- **Lock files:** `lock.Locker` owns `<lock dir>/<key>.lock` (content: PID and Unix
+  time), created atomically (`O_EXCL`). The lock dir is per user (`lock.DefaultDir`):
+  `/run/restor` for root on Linux, `$XDG_RUNTIME_DIR/restor` for other users, else
+  `restor-<uid>` in the temp dir; it is refused unless it is a real directory owned by the
+  user and not writable by others (`ErrUnsafeDir`). The key comes from the service manager: the
   compose file path, the systemd unit names joined with commas, or `noop-<project>`. A lock
   is valid while its PID is alive (an unreadable file for one minute); stale locks are
   removed at startup and when a lock is taken. The locks stop two runs (two processes or
   two projects) from stopping and backing up the same compose file / units at once.
+  Runs of different users do not see each other's locks (rare: root and a `docker` group
+  member backing up the same compose file).
 - **Services:** a project stops and restarts only the services it lists (`services`), or
   all services of its compose file / its `systemd_units` when the list is empty.
 

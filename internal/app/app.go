@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 
 	"github.com/rs/zerolog"
@@ -58,7 +60,7 @@ func New(o Options) (*App, error) {
 	clock := util.NewRealClock()
 	manager, err := createManager(cfg, projects, managerDeps{
 		runner: runner, resticRunner: resticRunner(env, cfg.Global.ResticRepo, o.Log),
-		clock: clock, log: o.Log,
+		clock: clock, lockDir: lockDir(o.Getenv), log: o.Log,
 	})
 	if err != nil {
 		return nil, err
@@ -78,7 +80,16 @@ func (a *App) Run(ctx context.Context) error {
 type managerDeps struct {
 	runner, resticRunner *command.Runner
 	clock                util.Clock
+	lockDir              string
 	log                  zerolog.Logger
+}
+
+// lockDir picks the lock directory of the user running restor.
+func lockDir(getenv func(string) string) string {
+	return lock.DefaultDir(lock.User{
+		UID: os.Getuid(), GOOS: runtime.GOOS,
+		RuntimeDir: getenv("XDG_RUNTIME_DIR"), TempDir: os.TempDir(),
+	})
 }
 
 func createManager(cfg *config.Config, projects []config.Project, d managerDeps) (
@@ -88,7 +99,7 @@ func createManager(cfg *config.Config, projects []config.Project, d managerDeps)
 	if err != nil {
 		return nil, err
 	}
-	locker, err := lock.New(lock.Settings{Dir: lock.DefaultDir}, lock.Deps{
+	locker, err := lock.New(lock.Settings{Dir: d.lockDir}, lock.Deps{
 		Clock: d.clock, Processes: lock.OSProcesses{}, Log: component(d.log, "lock"),
 	})
 	if err != nil {

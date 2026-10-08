@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -19,14 +20,16 @@ import (
 )
 
 const (
-	// DefaultDir is where lock files live unless configured otherwise.
-	DefaultDir = "/tmp/restor-locks"
+	// rootDir holds root's lock files on Linux: /run is a root-only tmpfs.
+	rootDir = "/run/restor"
 	// unreadableGrace is how long an unreadable lock file (e.g. just being written by
 	// another process) is respected before it counts as stale.
 	unreadableGrace = time.Minute
 
-	dirMode  fs.FileMode = 0o750
+	dirMode  fs.FileMode = 0o700
 	fileMode fs.FileMode = 0o600
+	// writableByOthers are the mode bits that let other users plant or remove locks.
+	writableByOthers fs.FileMode = 0o022
 )
 
 var (
@@ -34,7 +37,37 @@ var (
 	ErrMissingDependency = errors.New("lock: missing dependency")
 	// ErrLocked is returned by Lock when a live process holds the lock.
 	ErrLocked = errors.New("lock: already locked")
+	// ErrUnsafeDir is returned by Lock when the lock directory is a symlink, belongs to
+	// another user or is writable by others.
+	ErrUnsafeDir = errors.New("lock: unsafe lock directory")
 )
+
+// User describes the user a lock directory is chosen for.
+type User struct {
+	// UID is the user ID of the running process.
+	UID int
+	// GOOS is the operating system (runtime.GOOS).
+	GOOS string
+	// RuntimeDir is $XDG_RUNTIME_DIR; empty when unset.
+	RuntimeDir string
+	// TempDir is the temporary directory (os.TempDir).
+	TempDir string
+}
+
+// DefaultDir returns the lock directory for u: /run/restor for root on Linux, otherwise
+// restor in the user's runtime dir, or restor-<uid> in the temp dir without one. Each
+// user gets their own directory, so runs of different users never block each other on
+// file permissions.
+func DefaultDir(u User) string {
+	switch {
+	case u.UID == 0 && u.GOOS == "linux":
+		return rootDir
+	case u.RuntimeDir != "":
+		return filepath.Join(u.RuntimeDir, "restor")
+	default:
+		return filepath.Join(u.TempDir, "restor-"+strconv.Itoa(u.UID))
+	}
+}
 
 // Processes reports whether a process exists.
 type Processes interface {
@@ -61,6 +94,7 @@ type Deps struct {
 type Locker struct {
 	dir   string
 	pid   int
+	uid   int
 	clock util.Clock
 	procs Processes
 	log   zerolog.Logger
@@ -75,15 +109,17 @@ func New(s Settings, d Deps) (*Locker, error) {
 	); err != nil {
 		return nil, err
 	}
-	return &Locker{dir: s.Dir, pid: os.Getpid(), clock: d.Clock, procs: d.Processes, log: d.Log},
-		nil
+	return &Locker{
+		dir: s.Dir, pid: os.Getpid(), uid: os.Getuid(),
+		clock: d.Clock, procs: d.Processes, log: d.Log,
+	}, nil
 }
 
 // Lock takes the lock for key and returns the function that releases it. A lock held by
 // a live process returns ErrLocked; a stale one is replaced.
 func (l *Locker) Lock(key string) (func() error, error) {
-	if err := os.MkdirAll(l.dir, dirMode); err != nil {
-		return nil, fmt.Errorf("lock: create %s: %w", l.dir, err)
+	if err := l.ensureDir(); err != nil {
+		return nil, err
 	}
 	path := l.path(key)
 	err := l.create(path)
@@ -116,6 +152,25 @@ func (l *Locker) CleanupStale() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// ensureDir creates the lock directory and checks that only this user can change it; a
+// directory in the shared temp dir may have been created by someone else.
+func (l *Locker) ensureDir() error {
+	if err := os.MkdirAll(l.dir, dirMode); err != nil {
+		return fmt.Errorf("lock: create %s: %w", l.dir, err)
+	}
+	info, err := os.Lstat(l.dir)
+	if err != nil {
+		return fmt.Errorf("lock: %s: %w", l.dir, err)
+	}
+	if !info.IsDir() || info.Mode().Perm()&writableByOthers != 0 {
+		return fmt.Errorf("%w: %s (mode %s)", ErrUnsafeDir, l.dir, info.Mode())
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && int64(st.Uid) != int64(l.uid) {
+		return fmt.Errorf("%w: %s is owned by uid %d", ErrUnsafeDir, l.dir, st.Uid)
+	}
+	return nil
 }
 
 // create writes a new lock file; it fails with fs.ErrExist when the file exists.
