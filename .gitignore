@@ -1,3 +1,12 @@
+/restor
+/config.yaml
 env.yaml
-dbk
-config.yaml
+coverage.out
+coverage.html
+
+# OS
+.DS_Store
+Thumbs.db
+
+# goreleaser output
+/dist/

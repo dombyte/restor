@@ -1,0 +1,91 @@
+name: Checks
+
+on:
+  workflow_call: # reused by release.yml so a tag only ships after the checks pass
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency: # a newer push to a PR cancels its superseded run; main and tags always finish
+  group: checks-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # A push to main that is the merge commit of a PR skips the checks: the PR already
+  # ran them. Direct pushes, PRs and release tags always run.
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run=true
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+            merged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+              --jq "[.[] | select(.merge_commit_sha == \"$GITHUB_SHA\")] | length") || merged=0
+            if [ "$merged" -gt 0 ]; then run=false; fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  go:
+    name: Build, test, deadcode, govulncheck
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Verify module tidiness
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test (race)
+        run: go test -race -cover ./...
+
+      - name: Dead code
+        run: |
+          DEAD=$(go run golang.org/x/tools/cmd/deadcode@v0.51.0 -test ./...)
+          if [ -n "$DEAD" ]; then echo "$DEAD"; exit 1; fi
+
+      - name: Vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+      - name: Mocks up to date
+        run: |
+          go tool mockery
+          git diff --exit-code -- '*/mocks/*'
+
+  golangci-lint:
+    name: golangci-lint
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Lint + formatting (gofumpt, goimports) from .golangci.yml; covers function
+      # length, complexity, magic numbers, global state and the panic policy.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.14
+          args: --config .golangci.yml

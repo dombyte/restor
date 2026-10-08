@@ -3,12 +3,12 @@ version: 2
 project_name: restor
 before:
   hooks:
-    - go mod tidy
-    - go fmt ./...
+    # CI already enforces a tidy go.mod; verify only, never rewrite the tree mid-release.
+    - go mod verify
 
 builds:
-  - id: solis-multi-arch
-    main: ./main.go
+  - id: restor-multi-arch
+    main: ./cmd
     binary: restor
     goos:
       - linux
@@ -17,66 +17,91 @@ builds:
       - amd64
       - arm
       - arm64
+    # v1 runs on every x86-64 CPU (v3 needs AVX2, missing on many NAS/Celeron boxes).
     goamd64:
-      - v3
+      - v1
     goarm:
       - 7
     goarm64:
       - v8.0
     env:
       - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    # CommitDate (not Date) keeps rebuilds of the same tag byte-identical.
     ldflags:
-      - "-s -w -X github.com/dombyte/restor/cmd.Version={{.Version}} -X github.com/dombyte/restor/cmd.BuildDate={{.Date}} -X github.com/dombyte/restor/cmd.GitCommit={{.ShortCommit}}"
+      - >-
+        -s -w
+        -X main.Version={{ .Version }}
+        -X main.Commit={{ .ShortCommit }}
+        -X main.BuildDate={{ .CommitDate }}
+        -X main.GoVersion={{ envOrDefault "GOVERSION" "unknown" }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
   - formats: ["tar.gz"]
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
+    wrap_in_directory: true
     files:
-          - LICENSE
-          - README.md
+      - LICENSE
+      - README.md
+      - example/config.yaml
+      - example/restor.env
+      - example/restor.service
+      - example/restor.timer
 
 changelog:
   sort: asc
-  use: github
-  format: |
-    {{ .Message -}}
-        {{- if .Logins }} by {{ .Logins | englishJoin }}{{- end -}}
-        {{- if .SHA }}
-          {{- $sha := split .SHA "" -}}
-          {{- if .Logins }} in {{ else }} in {{ end }}[#{{ index $sha 0 }}{{ index $sha 1 }}{{ index $sha 2 }}{{ index $sha 3 }}{{ index $sha 4 }}{{ index $sha 5 }}{{ index $sha 6 }}]({{ .GitURL }}/commit/{{ .SHA }})
-        {{- end }}
+  use: git
+  abbrev: 7
   filters:
     exclude:
-      - "^test: "
-      - "^chore:"
-      - "Merge branch"
-      - "Merge pull request"
-      - "^test:"
-      - "^rebase:"
+      - "^Merge (branch|pull request|remote-tracking branch)"
+      - '^Revert "'
+      - "^WIP"
+  # Commit subjects follow Conventional Commits (see AGENTS.md "Commits"). A commit lands
+  # in the first group (list order) whose regexp matches; "order" sets the display order.
+  groups:
+    - title: Breaking changes
+      regexp: '^\w+(\(.+\))?!:'
+      order: 0
+    - title: Dependencies
+      regexp: '^\w+\(deps\):'
+      order: 6
+    - title: Features
+      regexp: '^feat(\(.+\))?:'
+      order: 1
+    - title: Bug fixes
+      regexp: '^fix(\(.+\))?:'
+      order: 2
+    - title: Performance
+      regexp: '^perf(\(.+\))?:'
+      order: 3
+    - title: Refactoring
+      regexp: '^refactor(\(.+\))?:'
+      order: 4
+    - title: Documentation
+      regexp: '^docs(\(.+\))?:'
+      order: 5
+    - title: Maintenance
+      regexp: '^(chore|build|ci|test|style)(\(.+\))?:'
+      order: 7
+    # Only for subjects without a type (commits from before the convention).
+    - title: Other changes
+      order: 999
 
 release:
-  name_template: "v{{.Version}}"
+  github:
+    owner: dombyte
+    name: restor
+  name_template: "v{{ .Version }}"
   prerelease: auto
   header: |
     {{- if .Prerelease }}
     > [!WARNING]
     > **This is a pre-release version. Use with caution and report any issues you encounter.**
-
-    **{{.TagContents}}**
-    {{ else }}
-    {{.ProjectName}} v{{.Version}} is available!
-
-    **{{.TagContents}}**
     {{- end }}
-
-  footer: |
-    {{- if and .PreviousTag .Tag -}}
-    **Full Changelog**: [{{ .PreviousTag }}...{{ .Tag }}]({{ .GitURL }}/compare/{{ .PreviousTag }}...{{ .Tag }})
-    {{- end -}}
-
-
-
 
 checksum:
   name_template: "checksums.txt"

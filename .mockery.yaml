@@ -1,0 +1,28 @@
+# Mock generation: go tool mockery
+# Mocks live next to the consumer package in internal/<pkg>/mocks and are never hand-edited.
+template: testify
+template-data:
+  unroll-variadic: true
+dir: "{{.InterfaceDir}}/mocks"
+structname: "Mock{{.InterfaceName}}"
+pkgname: mocks
+filename: "mock_{{.InterfaceName | snakecase}}.go"
+packages:
+  github.com/dombyte/restor/internal/backup:
+    interfaces:
+      Restic:
+      Services:
+      Locker:
+      Runner:
+  github.com/dombyte/restor/internal/restic:
+    interfaces:
+      Runner:
+  github.com/dombyte/restor/internal/servicemanager:
+    interfaces:
+      Runner:
+  github.com/dombyte/restor/internal/lock:
+    interfaces:
+      Processes:
+  github.com/dombyte/restor/internal/util:
+    interfaces:
+      Clock:
