@@ -278,3 +278,29 @@ func TestLoad_ExampleConfig(t *testing.T) {
 	assert.NotEmpty(t, cfg.ResolvedProjects())
 	assert.Contains(t, cfg.EnvPairs(), "AWS_DEFAULT_REGION=eu-central-1")
 }
+
+func TestLoad_RelativePathsAreResolvedAgainstTheConfigDir(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, dir, "restor.env", "A=1\n")
+	path := writeFile(t, dir, "config.yaml", `
+env_file: ${NAME}.env
+projects:
+  web:
+    service_manager: docker-compose
+    compose_file: web/compose.yml
+    services: ["${SVC}"]
+    sources: [data, /abs]
+    stop_timeout: 1
+    start_timeout: 1
+`)
+	cfg, err := Load(path, getenv(map[string]string{"NAME": "restor", "SVC": "app"}))
+	require.NoError(t, err)
+
+	assert.Equal(t, filepath.Join(dir, "restor.env"), cfg.EnvFile)
+	assert.Equal(t, []string{"A=1"}, cfg.EnvPairs())
+	p := cfg.ResolvedProjects()[0]
+	assert.Equal(t, filepath.Join(dir, "web/compose.yml"), p.ComposeFile)
+	assert.Equal(t, []string{filepath.Join(dir, "data"), "/abs"}, p.Sources)
+	assert.Equal(t, []string{"app"}, p.Services)
+}

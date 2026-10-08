@@ -42,8 +42,9 @@ func Defaults() *Config {
 	return &Config{Mode: ModeSequential}
 }
 
-// Load reads the file at path, merges the environment, expands ${VAR} references with
-// getenv and validates the result. All validation problems are returned together.
+// Load reads the file at path, expands ${VAR} references with getenv, resolves relative
+// paths against the file's directory, merges the environment and validates the result.
+// All validation problems are returned together.
 func Load(path string, getenv func(string) string) (*Config, error) {
 	raw, err := readFile(path)
 	if err != nil {
@@ -54,12 +55,15 @@ func Load(path string, getenv func(string) string) (*Config, error) {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	dupErrs := cfg.lowerProjectNames()
+	cfg.expandAll(getenv)
+	if err := cfg.resolvePaths(path); err != nil {
+		return nil, err
+	}
 	env, err := mergeEnvironments(cfg.EnvFile, cfg.Environments, getenv)
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	cfg.Environments = env
-	cfg.expandAll(getenv)
 	if err := errors.Join(append(dupErrs, cfg.Validate())...); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
@@ -248,6 +252,7 @@ func (c *Config) expandAll(getenv func(string) string) {
 			list[i] = x(list[i])
 		}
 	}
+	c.EnvFile = x(c.EnvFile)
 	c.Global.ResticRepo = x(c.Global.ResticRepo)
 	c.Global.PreBackupCmd = x(c.Global.PreBackupCmd)
 	c.Global.PostBackupCmd = x(c.Global.PostBackupCmd)
@@ -257,12 +262,37 @@ func (c *Config) expandAll(getenv func(string) string) {
 		p.SystemdScope, p.RetentionPolicy = x(p.SystemdScope), x(p.RetentionPolicy)
 		p.PreBackupCmd, p.PostBackupCmd = x(p.PreBackupCmd), x(p.PostBackupCmd)
 		for _, list := range [][]string{
-			p.SystemdUnits, p.Sources, p.BackupOptions, p.ForgetOptions,
+			p.SystemdUnits, p.Services, p.Sources, p.BackupOptions, p.ForgetOptions,
 		} {
 			xs(list)
 		}
 		c.Projects[name] = p
 	}
+}
+
+// resolvePaths makes env_file, compose_file and sources absolute, relative to the
+// directory of the configuration file at path: under systemd the working directory is /.
+func (c *Config) resolvePaths(path string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	dir := filepath.Dir(abs)
+	resolve := func(p string) string {
+		if p == "" || filepath.IsAbs(p) {
+			return p
+		}
+		return filepath.Join(dir, p)
+	}
+	c.EnvFile = resolve(c.EnvFile)
+	for name, p := range c.Projects {
+		p.ComposeFile = resolve(p.ComposeFile)
+		for i := range p.Sources {
+			p.Sources[i] = resolve(p.Sources[i])
+		}
+		c.Projects[name] = p
+	}
+	return nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {

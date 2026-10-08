@@ -180,10 +180,12 @@ global:
 #
 # REQUIRED fields for each project:
 #   - service_manager: Type of service manager ("docker-compose", "podman-compose", "systemd", or "noop")
-#   - For docker-compose/podman-compose: compose_file (absolute path to compose file)
+#   - For docker-compose/podman-compose: compose_file (path to the compose file)
 #   - For systemd: systemd_units (list of systemd unit names)
 #   - For noop: No additional service configuration needed (file-only backups)
 #   - sources: List of directories/files to backup with restic
+#   Relative env_file, compose_file and sources paths are resolved against the directory
+#   of this file.
 #   - stop_timeout: Timeout in seconds for stopping services (> 0 when services are stopped)
 #   - start_timeout: Timeout in seconds for starting services (> 0 when services are stopped)
 #
