@@ -92,7 +92,7 @@ func TestCreateServiceManager(t *testing.T) {
 		}, lockKey: "a,b"},
 		{
 			project: config.Project{Name: "files", ServiceManager: config.ManagerNoop},
-			lockKey: "noop",
+			lockKey: "noop-files",
 		},
 		{project: config.Project{ServiceManager: "nope"}, wantErr: ErrUnknownType},
 		{
