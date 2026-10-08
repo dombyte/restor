@@ -269,6 +269,8 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   `$`. `.env` files: `KEY=value` per line (`export ` prefix allowed, a line without `=` is
   an error), `"…"` and `'…'` values are taken as is (single-quoted ones are not expanded),
   an unquoted value ends at ` #`.
+- Relative `env_file`, `compose_file` and `sources` are resolved against the directory of
+  the config file (systemd runs restor in `/`); hooks are not (they are commands).
 - Validation (all problems at once, with field paths): `mode` is `sequential` (default) or
   `parallel`; per project `service_manager` and `sources` are required; `compose_file` for
   the compose managers, `systemd_units` for systemd; `systemd_scope` is `system` (default)
