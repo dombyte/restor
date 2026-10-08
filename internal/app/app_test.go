@@ -71,6 +71,20 @@ func TestApp_RunWithoutProjects(t *testing.T) {
 	assert.Contains(t, buf.String(), "no projects configured")
 }
 
+func TestLockDir_UsesRuntimeDir(t *testing.T) {
+	t.Parallel()
+	if os.Getuid() == 0 {
+		t.Skip("root always uses /run/restor")
+	}
+	getenv := func(k string) string {
+		if k == "XDG_RUNTIME_DIR" {
+			return "/run/user/1000"
+		}
+		return ""
+	}
+	assert.Equal(t, "/run/user/1000/restor", lockDir(getenv))
+}
+
 func TestCreateServiceManager(t *testing.T) {
 	t.Parallel()
 	d := servicemanager.Deps{
