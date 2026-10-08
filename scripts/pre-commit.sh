@@ -3,7 +3,7 @@
 # line/function length, complexity, gosec, staticcheck, global state and the panic
 # policy; only what it cannot do runs separately (deadcode, govulncheck, build, tests).
 # Check-only: it never rewrites or stages files. Fix formatting with
-# `golangci-lint fmt` and lint findings by hand.
+# `golangci-lint fmt` and lint findings by hand. Mock drift is checked in CI.
 
 set -u
 

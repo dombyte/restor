@@ -8,7 +8,7 @@ before:
 
 builds:
   - id: restor-multi-arch
-    main: .
+    main: ./cmd
     binary: restor
     goos:
       - linux
@@ -32,9 +32,10 @@ builds:
     ldflags:
       - >-
         -s -w
-        -X github.com/dombyte/restor/cmd.Version={{ .Version }}
-        -X github.com/dombyte/restor/cmd.GitCommit={{ .ShortCommit }}
-        -X github.com/dombyte/restor/cmd.BuildDate={{ .CommitDate }}
+        -X main.Version={{ .Version }}
+        -X main.Commit={{ .ShortCommit }}
+        -X main.BuildDate={{ .CommitDate }}
+        -X main.GoVersion={{ envOrDefault "GOVERSION" "unknown" }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:
