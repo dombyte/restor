@@ -60,6 +60,20 @@ func TestRun_EmptyConfig(t *testing.T) {
 	assert.Contains(t, stderr.String(), "no projects configured")
 }
 
+func TestNewLogger_NoColorWithoutTerminal(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	log := newLogger(&buf, false)
+	log.Info().Str("k", "v").Msg("hello")
+	assert.NotContains(t, buf.String(), "\x1b[")
+	assert.Contains(t, buf.String(), "hello k=v")
+
+	f, err := os.Create(filepath.Join(t.TempDir(), "log"))
+	require.NoError(t, err)
+	defer f.Close()
+	assert.False(t, isTerminal(f))
+}
+
 func TestWaitForRun(t *testing.T) {
 	t.Parallel()
 	done := make(chan error, 1)

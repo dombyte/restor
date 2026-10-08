@@ -103,12 +103,25 @@ its sources, starts the services again and applies the retention policies.`,
 	return root
 }
 
+// newLogger writes human-readable logs to w, colored only when w is a terminal: under
+// systemd, stderr goes to the journal, which would store the escape codes.
 func newLogger(w io.Writer, debug bool) zerolog.Logger {
 	level := zerolog.InfoLevel
 	if debug {
 		level = zerolog.DebugLevel
 	}
-	return zerolog.New(zerolog.ConsoleWriter{Out: w}).Level(level).With().Timestamp().Logger()
+	out := zerolog.ConsoleWriter{Out: w, NoColor: !isTerminal(w)}
+	return zerolog.New(out).Level(level).With().Timestamp().Logger()
+}
+
+// isTerminal reports whether w is a character device (a terminal).
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 // runBackup wires the application and runs one backup cycle. Errors are logged here.
