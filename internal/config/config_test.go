@@ -304,3 +304,23 @@ projects:
 	assert.Equal(t, []string{filepath.Join(dir, "data"), "/abs"}, p.Sources)
 	assert.Equal(t, []string{"app"}, p.Services)
 }
+
+func TestLoad_UnknownKeys(t *testing.T) {
+	t.Parallel()
+	path := writeFile(t, t.TempDir(), "config.yaml", `
+modus: parallel
+global: {restic_repo: /r, auto_purne: true}
+projects:
+  Web:
+    service_manager: noop
+    sources: [/a]
+    stop_service: false
+    retension_policy: --keep-last 1
+`)
+	cfg, err := Load(path, getenv(nil))
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"global.auto_purne", "modus", "projects[Web].retension_policy",
+		"projects[Web].stop_service",
+	}, cfg.UnknownKeys)
+}

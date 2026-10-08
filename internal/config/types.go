@@ -40,6 +40,9 @@ type Config struct {
 	Global GlobalConfig `mapstructure:"global"`
 	// Projects maps the project name (also the restic tag) to its settings.
 	Projects map[string]ProjectConfig `mapstructure:"projects"`
+	// UnknownKeys are the keys of the file that match no setting (typos), e.g.
+	// "projects[web].stop_service"; they are ignored.
+	UnknownKeys []string `mapstructure:"-"`
 }
 
 // GlobalConfig holds the settings shared by all projects.

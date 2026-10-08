@@ -275,7 +275,9 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   `parallel`; per project `service_manager` and `sources` are required; `compose_file` for
   the compose managers, `systemd_units` for systemd; `systemd_scope` is `system` (default)
   or `user`; `stop_timeout`/`start_timeout` (seconds) are ≥ 0 and > 0 when services are
-  stopped. Unknown keys are ignored.
+  stopped. Unknown keys are ignored. Startup warns about them
+  (typos such as `stop_service`), about a `retention_policy` without `auto_prune` and
+  about a missing repository (`restic_repo`, `RESTIC_REPOSITORY`, `RESTIC_REPOSITORY_FILE`).
 - `stop_services: false` backs up without stopping anything. Hooks: global
   `pre_backup_cmd`/`post_backup_cmd` are the default of every project, overridden per
   project.
@@ -457,7 +459,7 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
   `.Str("project", name).Err(err).Msg("backup failed")`.
 - Levels: `debug` for command lines and per-step detail, `info` for lifecycle (run start,
   project done, snapshot ID), `warn` for recovered problems (services not stopped/started
-  in time, stop command failed, missing binary), `error` for failures
+  in time, stop command failed, missing binary, suspicious config), `error` for failures
   that need attention (project failed, forget/prune/unlock failed, post-backup hook
   failed).
 - Never log secrets: no restic password, S3 keys, env file contents or repository URLs
