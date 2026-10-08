@@ -234,8 +234,9 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   project, and `main` logs the summary (`backup: projects failed: N of M`).
 
 ### Shutdown and supervision
-- SIGINT/SIGTERM cancel the run context: running commands are killed (`exec.
-  CommandContext`), sequential mode starts no further project, waits end early.
+- SIGINT/SIGTERM cancel the run context: running commands get SIGTERM and are killed 10 s
+  later (`exec.Cmd.Cancel`/`WaitDelay`, so restic can remove its repository lock),
+  sequential mode starts no further project, waits end early.
 - A project that stopped its services restarts them with its own context
   (`context.WithoutCancel`, bounded by `start_timeout` + 3 min).
 - `main` waits at most `shutdownTimeout` (5 min) after the signal, then exits 1.
@@ -471,7 +472,8 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
   gets `log.With().Str("component", name).Logger()` (plus `project` where it applies).
 - Log with context fields, not formatted strings:
   `.Str("project", name).Err(err).Msg("backup failed")`.
-- Levels: `debug` for command lines and per-step detail, `info` for lifecycle (run start,
+- Levels: `debug` for command lines, the last output lines of successful commands and
+  per-step detail, `info` for lifecycle (run start,
   project done, snapshot ID), `warn` for recovered problems (services not stopped/started
   in time, stop command failed, missing binary, suspicious config), `error` for failures
   that need attention (project failed, forget/prune/unlock failed, post-backup hook
