@@ -28,6 +28,14 @@ print_result() {
     fi
 }
 
+# Use the Go release from go.mod, as CI does (setup-go reads go-version-file). A distro
+# build (Fedora's go1.26.8-X:nodwarf5, GOTOOLCHAIN=local) would test another release, and
+# govulncheck cannot parse its version, so it silently skips the standard library.
+GOTOOLCHAIN="go$(awk '$1 == "go" { print $2; exit }' go.mod)"
+export GOTOOLCHAIN
+echo "Using $(go version)"
+echo ""
+
 if ! command -v golangci-lint &> /dev/null; then
     echo -e "${RED}✗${NC} golangci-lint not installed (https://golangci-lint.run)"
     exit 1

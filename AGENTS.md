@@ -102,6 +102,11 @@ make build                                                # ./restor with versio
   mockery is a `go tool` rather than a pinned `go run` because `go run` checks its ~20
   modules against sum.golang.org on every CI run, and a checksum-DB hiccup can fail the
   mock drift job.
+- Go itself is the `go` directive in `go.mod`: CI installs it (`go-version-file`), and
+  `scripts/pre-commit.sh` sets `GOTOOLCHAIN` to it, so `make check` uses the same release
+  even on a distro Go. A distro build's version (e.g. `go1.26.8-X:nodwarf5`) makes
+  govulncheck skip the standard library without a warning. Raise the directive when a Go
+  patch release fixes a standard-library vulnerability.
 
 ---
 
