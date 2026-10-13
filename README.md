@@ -90,8 +90,15 @@ its field path; unknown keys (typos) are reported as warnings.
 
 **Environment:** `env_file` and inline `environments` are passed to restic, the service
 managers and the hooks (inline wins). `$VAR`, `${VAR}` and `${VAR:-default}` are expanded
-from the process environment when the config is loaded; write `$$` for a literal `$`
-(e.g. in a password). In `.env` files a value in single quotes is never expanded.
+from the process environment when the config is loaded; write `$$` for a literal `$`.
+In `.env` files a value in single quotes is never expanded.
+
+> **Secrets containing `$`:** expansion also applies to values from the env file (YAML,
+> JSON and unquoted or double-quoted `.env` values). An unset variable becomes empty, and
+> `$` followed by a digit or one of `!*#@?-` is replaced too, so `RESTIC_PASSWORD: "pa$word"`
+> becomes `pa` and restic fails with a wrong password. Write `pa$$word`, use a single-quoted
+> `.env` value (`RESTIC_PASSWORD='pa$word'`), or better, keep the password in a file
+> (`RESTIC_PASSWORD_FILE`), which is never expanded.
 
 **Retention:** with `auto_prune`, each project with a `retention_policy` runs `forget`
 after all backups, then one `prune` runs for the repository. A project that failed, or

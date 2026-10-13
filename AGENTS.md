@@ -284,7 +284,8 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   `environments` (highest priority). `$VAR`, `${VAR}` and `${VAR:-default}` in env values,
   global settings and project fields (paths, units, hooks, options, retention) are expanded
   once at load time from the **process** env (not from the env file); `$$` is a literal
-  `$`. `.env` files: `KEY=value` per line (`export ` prefix allowed, a line without `=` is
+  `$`. Env file values are expanded too, so README warns that a secret containing `$`
+  must escape it (`os.Expand` also replaces `$!`, `$1`, …). `.env` files: `KEY=value` per line (`export ` prefix allowed, a line without `=` is
   an error), `"…"` and `'…'` values are taken as is (single-quoted ones are not expanded),
   an unquoted value ends at ` #`.
 - Relative `env_file`, `compose_file` and `sources` are resolved against the directory of
