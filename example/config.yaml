@@ -143,8 +143,9 @@ global:
   # GLOBAL: Enable/disable automatic pruning
   # When true: Each project with retention_policy runs 'forget', then ONE 'prune' runs for entire repo
   # This is efficient as prune only needs to run once after all forget operations
-  # When a project fails, only the projects that were backed up run 'forget'; prune is
-  # skipped until a run where every project succeeds
+  # When a project fails or its snapshot is incomplete (unreadable files, restic exit code
+  # 3), only the projects with a complete snapshot run 'forget'; prune is skipped until a
+  # run where every project has a complete snapshot
   # When false: You must manually run prune, or use restic's auto-prune features
   auto_prune: true
 

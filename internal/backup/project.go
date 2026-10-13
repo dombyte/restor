@@ -38,14 +38,15 @@ type ProjectSettings struct {
 	PostBackupCmd string
 }
 
-// runProject backs up one project. Services that were stopped are always restarted, also
-// when the backup failed or the run was cancelled.
-func (m *Manager) runProject(ctx context.Context, p Project) error {
+// runProject backs up one project and reports whether its snapshot is complete (see
+// backup). Services that were stopped are always restarted, also when the backup failed
+// or the run was cancelled.
+func (m *Manager) runProject(ctx context.Context, p Project) (bool, error) {
 	log := m.d.Log.With().Str("project", p.Settings.Name).Logger()
 	releases, err := m.lockAll(p.Services.LockKeys())
 	defer m.releaseAll(releases, log)
 	if err != nil {
-		return fmt.Errorf("backup: %s: %w", p.Settings.Name, err)
+		return false, fmt.Errorf("backup: %s: %w", p.Settings.Name, err)
 	}
 	log.Info().Msg("starting project backup")
 	return m.backupProject(ctx, p, log)
@@ -76,27 +77,29 @@ func (m *Manager) releaseAll(releases []func() error, log zerolog.Logger) {
 }
 
 // backupProject runs the hooks, the service stop/start and the backup of a locked project.
-func (m *Manager) backupProject(ctx context.Context, p Project, log zerolog.Logger) error {
+func (m *Manager) backupProject(ctx context.Context, p Project, log zerolog.Logger) (
+	bool, error,
+) {
 	s := p.Settings
 	if err := m.hook(ctx, s.PreBackupCmd); err != nil {
-		return fmt.Errorf("backup: %s: pre-backup hook: %w", s.Name, err)
+		return false, fmt.Errorf("backup: %s: pre-backup hook: %w", s.Name, err)
 	}
 	stopped, err := m.stopServices(ctx, p, log)
 	if err != nil {
-		return fmt.Errorf("backup: %s: %w", s.Name, err)
+		return false, fmt.Errorf("backup: %s: %w", s.Name, err)
 	}
-	backupErr := m.backup(ctx, s, log)
+	complete, backupErr := m.backup(ctx, s, log)
 	if err := m.startServices(ctx, p, stopped, log); err != nil {
-		return errors.Join(backupErr, fmt.Errorf("backup: %s: %w", s.Name, err))
+		return false, errors.Join(backupErr, fmt.Errorf("backup: %s: %w", s.Name, err))
 	}
 	if backupErr != nil {
-		return backupErr
+		return false, backupErr
 	}
 	if err := m.hook(ctx, s.PostBackupCmd); err != nil {
 		log.Error().Err(err).Msg("post-backup hook failed")
 	}
 	log.Info().Msg("project backup completed")
-	return nil
+	return complete, nil
 }
 
 // stopServices stops the project's running services and returns them, so that only
@@ -150,25 +153,29 @@ func (m *Manager) startServices(ctx context.Context, p Project, services []strin
 	return nil
 }
 
-// backup runs restic. An incomplete snapshot (some source files unreadable) is saved, so
-// it is logged as a warning and the project counts as backed up.
-func (m *Manager) backup(ctx context.Context, s ProjectSettings, log zerolog.Logger) error {
+// backup runs restic and reports whether the snapshot is complete. A snapshot without
+// some unreadable source files, or a run that names no snapshot (e.g. --dry-run), is
+// logged as a warning: the project counts as backed up, but is not complete, so forget
+// and prune leave the older snapshots alone.
+func (m *Manager) backup(ctx context.Context, s ProjectSettings, log zerolog.Logger) (
+	bool, error,
+) {
 	id, err := m.d.Restic.Backup(ctx, s.Name, s.Sources, s.BackupOptions)
 	var incomplete interface{ Incomplete() bool }
 	if errors.As(err, &incomplete) && incomplete.Incomplete() {
 		log.Warn().Err(err).Str("snapshot_id", id).
 			Msg("backup completed, but some source files could not be read")
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("backup: %s: %w", s.Name, err)
+		return false, fmt.Errorf("backup: %s: %w", s.Name, err)
 	}
 	if id == "" {
 		log.Warn().Msg("backup completed, but restic reported no snapshot ID")
-		return nil
+		return false, nil
 	}
 	log.Info().Str("snapshot_id", id).Msg("backup completed")
-	return nil
+	return true, nil
 }
 
 // hook runs command, split on whitespace; an empty command does nothing.

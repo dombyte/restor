@@ -218,13 +218,14 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 2. `app.New`: `config.Load` (file + env file + inline env, expansion, validation) and
    wiring. Any error ends the run (exit 1).
 3. `Manager.Run`: run all projects (sequential or parallel); when the run was not
-   cancelled and `global.auto_prune` is set: forget each project that was backed up and
-   has a `retention_policy`, then, only when every project succeeded, one prune + unlock
-   (only if at least one project forgot).
+   cancelled and `global.auto_prune` is set: forget each project that has a complete
+   snapshot and a `retention_policy`, then, only when every project has a complete
+   snapshot, one prune + unlock (only if at least one project forgot).
 4. Exit code: 0 when every project backed up; 1 when config failed, any project failed or
    the run was cancelled. Forget, prune, unlock and post-backup hook failures are logged
-   but do **not** change the exit code; after a failed project only prune and unlock are
-   skipped (a warning), and a cancelled run does no maintenance.
+   but do **not** change the exit code; after a failed or incomplete project only its
+   forget, prune and unlock are skipped (warnings), and a cancelled run does no
+   maintenance.
 
 ### Failure handling per project
 - Lock held by a live process → project fails.
@@ -233,7 +234,9 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 - Stopping services fails → warning, the backup still runs (services may be running).
 - Services not stopped within `stop_timeout` → warning, the backup still runs.
 - `restic backup` fails → services are restarted, project fails. Exit code 3 (snapshot
-  saved, some source files unreadable) → warning, the project counts as backed up.
+  saved, some source files unreadable) or no snapshot ID in the output (e.g. `--dry-run`)
+  → warning, the project counts as backed up but is **incomplete**: its forget and the
+  prune are skipped.
 - Restarting services fails → project fails; not running within `start_timeout` →
   warning.
 - Other projects always continue; each failure is logged once by `Manager` with the
@@ -361,9 +364,11 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 - **Forget and prune after all backups, sequentially:** they take exclusive repository locks
   and would fail or block concurrent backups; one repository-wide prune is cheaper than one
   per project. After a failed project, forget still runs for the projects that have a
-  fresh snapshot (a permanently broken project must not stop retention for all others),
-  but the failed project keeps its history and prune is skipped, so a broken run never
-  deletes data.
+  fresh complete snapshot (a permanently broken project must not stop retention for all
+  others), but the failed project keeps its history and prune is skipped, so a broken run
+  never deletes data. An incomplete snapshot is treated like a failure here: if files stay
+  unreadable for days, forgetting would rotate out every complete snapshot and keep only
+  incomplete ones.
 - **Restart services even when the backup failed or the run was cancelled:** a failed
   backup must not leave production services down.
 - **Tag = lowercase project name:** keeps each project's retention separate in a shared
