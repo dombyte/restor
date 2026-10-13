@@ -91,25 +91,25 @@ func TestCreateServiceManager(t *testing.T) {
 		Runner: nopRunner{}, Clock: clocktest.New(time.Unix(0, 0)),
 	}
 	tests := []struct {
-		project config.Project
-		lockKey string
-		wantErr error
+		project  config.Project
+		lockKeys []string
+		wantErr  error
 	}{
 		{
-			project: config.Project{ServiceManager: config.ManagerDockerCompose, ComposeFile: "/d"},
-			lockKey: "/d",
+			project:  config.Project{ServiceManager: config.ManagerDockerCompose, ComposeFile: "/d"},
+			lockKeys: []string{"/d"},
 		},
 		{
-			project: config.Project{ServiceManager: config.ManagerPodmanCompose, ComposeFile: "/p"},
-			lockKey: "/p",
+			project:  config.Project{ServiceManager: config.ManagerPodmanCompose, ComposeFile: "/p"},
+			lockKeys: []string{"/p"},
 		},
 		{project: config.Project{
-			ServiceManager: config.ManagerSystemd, SystemdUnits: []string{"a", "b"},
+			ServiceManager: config.ManagerSystemd, SystemdUnits: []string{"b", "a"},
 			SystemdScope: config.ScopeUser,
-		}, lockKey: "a,b"},
+		}, lockKeys: []string{"a", "b"}},
 		{
-			project: config.Project{Name: "files", ServiceManager: config.ManagerNoop},
-			lockKey: "noop-files",
+			project:  config.Project{Name: "files", ServiceManager: config.ManagerNoop},
+			lockKeys: []string{"noop-files"},
 		},
 		{project: config.Project{ServiceManager: "nope"}, wantErr: ErrUnknownType},
 		{
@@ -126,7 +126,7 @@ func TestCreateServiceManager(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tt.lockKey, s.LockKey())
+			assert.Equal(t, tt.lockKeys, s.LockKeys())
 		})
 	}
 }

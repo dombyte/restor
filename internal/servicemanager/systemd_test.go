@@ -24,10 +24,12 @@ func expectSystemctl(r *mocks.MockRunner, args ...any) *mock.Call {
 	return r.On("Run", append([]any{mock.Anything, "systemctl"}, args...)...)
 }
 
-func TestSystemd_LockKey(t *testing.T) {
+func TestSystemd_LockKeys(t *testing.T) {
 	t.Parallel()
-	s, _ := newSystemd(t, false)
-	assert.Equal(t, "a.service,b.service", s.LockKey())
+	d, _, _ := newDeps(t)
+	s, err := NewSystemd(SystemdSettings{Units: []string{"b", "a", "b"}}, d)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, s.LockKeys(), "one key per unit, sorted")
 }
 
 func TestSystemd_Running(t *testing.T) {

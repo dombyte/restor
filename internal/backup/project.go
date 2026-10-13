@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,17 +42,37 @@ type ProjectSettings struct {
 // when the backup failed or the run was cancelled.
 func (m *Manager) runProject(ctx context.Context, p Project) error {
 	log := m.d.Log.With().Str("project", p.Settings.Name).Logger()
-	release, err := m.d.Locker.Lock(p.Services.LockKey())
+	releases, err := m.lockAll(p.Services.LockKeys())
+	defer m.releaseAll(releases, log)
 	if err != nil {
 		return fmt.Errorf("backup: %s: %w", p.Settings.Name, err)
 	}
-	defer func() {
+	log.Info().Msg("starting project backup")
+	return m.backupProject(ctx, p, log)
+}
+
+// lockAll takes the locks for keys and returns the release functions of those it took,
+// also when a later one fails. The locks do not block, so the order cannot deadlock.
+func (m *Manager) lockAll(keys []string) ([]func() error, error) {
+	releases := make([]func() error, 0, len(keys))
+	for _, key := range keys {
+		release, err := m.d.Locker.Lock(key)
+		if err != nil {
+			return releases, err
+		}
+		releases = append(releases, release)
+	}
+	return releases, nil
+}
+
+// releaseAll releases the locks in reverse order; a failed release is only logged, the
+// kernel drops the lock when the process exits anyway.
+func (m *Manager) releaseAll(releases []func() error, log zerolog.Logger) {
+	for _, release := range slices.Backward(releases) {
 		if err := release(); err != nil {
 			log.Warn().Err(err).Msg("cannot release lock")
 		}
-	}()
-	log.Info().Msg("starting project backup")
-	return m.backupProject(ctx, p, log)
+	}
 }
 
 // backupProject runs the hooks, the service stop/start and the backup of a locked project.
