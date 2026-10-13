@@ -29,6 +29,7 @@ var (
 
 	errUnexpectedOutput = errors.New("unexpected output")
 	errUnknownUnit      = errors.New("service is not one of the systemd units")
+	errUnknownService   = errors.New("service is not in the compose file")
 )
 
 // Runner executes a program and returns its combined output, also on failure.
