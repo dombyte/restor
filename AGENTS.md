@@ -248,10 +248,13 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   sequential mode starts no further project, waits end early.
 - A project that stopped its services restarts them with its own context
   (`context.WithoutCancel`, bounded by `start_timeout` + 3 min).
-- `main` waits at most `shutdownTimeout` (5 min) after the signal, then exits 1.
-  `example/restor.service` sets `TimeoutStopSec` above that so systemd does not kill
-  restor while it restarts services. No second-signal "force" mode: the deadline is the
-  force.
+- `main` waits at most `Manager.ShutdownTimeout` after the signal, then exits 1: 1 min
+  plus the largest `start_timeout` + 3 min of the projects that stop services (only the
+  projects running at the signal restart, at the same time in parallel mode, so the
+  largest counts, not the sum; logged as `shutdown_timeout` at the start of a run). The
+  systemd units set `TimeoutStopSec=900` so systemd does not kill restor while it
+  restarts services; that covers a `start_timeout` up to 11 min, a larger one needs a
+  larger `TimeoutStopSec`. No second-signal "force" mode: the deadline is the force.
 - There is no in-process retry and no restart: systemd records the failed run, and the
   next timer run is the retry (`Persistent=true` catches up missed runs).
 

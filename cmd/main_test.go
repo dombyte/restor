@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -78,11 +79,16 @@ func TestWaitForRun(t *testing.T) {
 	t.Parallel()
 	done := make(chan error, 1)
 	done <- assert.AnError
-	require.ErrorIs(t, waitForRun(context.Background(), done, zerolog.Nop()), assert.AnError)
+	require.ErrorIs(t, waitForRun(context.Background(), done, time.Hour, zerolog.Nop()),
+		assert.AnError)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	done = make(chan error, 1)
 	done <- context.Canceled // the run ends after restarting services
-	require.ErrorIs(t, waitForRun(ctx, done, zerolog.Nop()), context.Canceled)
+	require.ErrorIs(t, waitForRun(ctx, done, time.Hour, zerolog.Nop()), context.Canceled)
+
+	// The run does not end after the cancel: give up after the timeout (0: at once).
+	require.ErrorIs(t, waitForRun(ctx, make(chan error), 0, zerolog.Nop()),
+		errShutdownDeadline)
 }

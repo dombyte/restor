@@ -60,6 +60,11 @@ sudo loginctl enable-linger "$USER"   # keep the timer running while logged out
 To run a backup by hand: `restor --config <file>`. Logs: `journalctl -u restor` (or
 `journalctl --user -u restor`).
 
+On SIGINT/SIGTERM restor stops the running backups, restarts the services it stopped and
+exits within its shutdown timeout (the largest `start_timeout` + 4 minutes, logged as
+`shutdown_timeout`). The shipped units allow 900 s (`TimeoutStopSec`); raise it if a
+`start_timeout` is above 11 minutes.
+
 ## Configuration
 
 See `example/config.yaml` for all options and `example/restor.env` for an env file template.

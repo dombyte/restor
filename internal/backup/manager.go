@@ -16,6 +16,10 @@ import (
 	"github.com/dombyte/restor/internal/util"
 )
 
+// shutdownGrace is what a cancelled run needs besides restarting services: the running
+// command gets SIGTERM and is killed 10 s later (package command), then the run unwinds.
+const shutdownGrace = time.Minute
+
 var (
 	// ErrMissingDependency is returned by NewManager for a missing dependency.
 	ErrMissingDependency = errors.New("backup: missing dependency")
@@ -109,7 +113,7 @@ func NewManager(s Settings, projects []Project, d Deps) (*Manager, error) {
 // the returned ErrProjectsFailed; forget, prune and unlock failures are only logged.
 func (m *Manager) Run(ctx context.Context) error {
 	m.d.Log.Info().Bool("parallel", m.s.Parallel).Int("projects", len(m.projects)).
-		Msg("starting backup run")
+		Dur("shutdown_timeout", m.ShutdownTimeout()).Msg("starting backup run")
 
 	outcomes := m.runProjects(ctx)
 	if ctx.Err() == nil {
@@ -122,6 +126,21 @@ func (m *Manager) Run(ctx context.Context) error {
 		return fmt.Errorf("backup: %w", err)
 	}
 	return nil
+}
+
+// ShutdownTimeout returns how long the run may take after its context was cancelled: the
+// running commands end, then each running project restarts the services it stopped. Only
+// the projects running at the cancel restart (sequential mode starts no further one), and
+// in parallel mode they restart at the same time, so the largest start timeout counts,
+// not the sum.
+func (m *Manager) ShutdownTimeout() time.Duration {
+	var restart time.Duration
+	for _, p := range m.projects {
+		if p.Settings.StopServices {
+			restart = max(restart, p.Settings.StartTimeout+restartGrace)
+		}
+	}
+	return shutdownGrace + restart
 }
 
 // outcome is how the backup of one project ended.

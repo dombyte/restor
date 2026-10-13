@@ -3,7 +3,9 @@ package backup
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -166,4 +168,24 @@ func TestRunProject_ReportsCompleteness(t *testing.T) {
 		fileProject(f, t, "a", ""))
 	require.NoError(t, err)
 	assert.True(t, complete)
+}
+
+func TestManager_ShutdownTimeout(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	assert.Equal(t, shutdownGrace, f.manager(t, Settings{}).ShutdownTimeout(),
+		"no services to restart")
+
+	slow := fileProject(f, t, "slow", "")
+	slow.Settings.StartTimeout = 5 * time.Minute
+	unstopped := fileProject(f, t, "unstopped", "")
+	unstopped.Settings.StartTimeout, unstopped.Settings.StopServices = time.Hour, false
+	projects := []Project{slow, unstopped}
+	for i := range 10 {
+		projects = append(projects, fileProject(f, t, strconv.Itoa(i), "")) // 20 s each
+	}
+	m := f.manager(t, Settings{}, projects...)
+
+	assert.Equal(t, shutdownGrace+5*time.Minute+restartGrace, m.ShutdownTimeout(),
+		"the largest start timeout counts, not the sum")
 }

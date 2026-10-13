@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -78,6 +79,10 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	return a.manager.Run(ctx)
 }
+
+// ShutdownTimeout returns how long Run may take after its context was cancelled, so that
+// every project can restart the services it stopped.
+func (a *App) ShutdownTimeout() time.Duration { return a.manager.ShutdownTimeout() }
 
 type managerDeps struct {
 	runner, resticRunner *command.Runner
