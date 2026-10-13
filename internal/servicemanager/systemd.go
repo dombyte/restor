@@ -79,6 +79,7 @@ func (s *Systemd) Stop(ctx context.Context, units []string, timeout time.Duratio
 	if len(units) == 0 {
 		return true, nil
 	}
+	deadline := s.clock.Now().Add(timeout)
 	cmdCtx, cancel := commandContext(ctx, timeout)
 	defer cancel()
 	if out, err := s.run(cmdCtx, append([]string{"stop"}, units...)...); err != nil &&
@@ -86,7 +87,7 @@ func (s *Systemd) Stop(ctx context.Context, units []string, timeout time.Duratio
 		!strings.Contains(string(out), "not loaded") {
 		return false, fmt.Errorf("servicemanager: stop %s: %w", unitList(units), err)
 	}
-	return waitUntil(ctx, s.clock, timeout, func(ctx context.Context) (bool, error) {
+	return waitUntil(ctx, s.clock, deadline, func(ctx context.Context) (bool, error) {
 		states, err := s.states(ctx, units)
 		return err == nil && !slices.ContainsFunc(states, isUp), err
 	})
@@ -98,12 +99,13 @@ func (s *Systemd) Start(ctx context.Context, units []string, timeout time.Durati
 	if len(units) == 0 {
 		return true, nil
 	}
+	deadline := s.clock.Now().Add(timeout)
 	cmdCtx, cancel := commandContext(ctx, timeout)
 	defer cancel()
 	if _, err := s.run(cmdCtx, append([]string{"start"}, units...)...); err != nil {
 		return false, fmt.Errorf("servicemanager: start %s: %w", unitList(units), err)
 	}
-	return waitUntil(ctx, s.clock, timeout, func(ctx context.Context) (bool, error) {
+	return waitUntil(ctx, s.clock, deadline, func(ctx context.Context) (bool, error) {
 		states, err := s.states(ctx, units)
 		return err == nil && !slices.ContainsFunc(states, func(st string) bool {
 			return st != "active"

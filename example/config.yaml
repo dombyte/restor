@@ -191,6 +191,7 @@ global:
 #   of this file.
 #   - stop_timeout: Timeout in seconds for stopping services (> 0 when services are stopped)
 #   - start_timeout: Timeout in seconds for starting services (> 0 when services are stopped)
+#     Both cover the stop/start command and the wait until the services are down/up.
 #
 # Project names are case-insensitive; the lowercase name is the restic tag. A name must not
 # start with "-" or contain "," or whitespace.

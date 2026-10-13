@@ -190,3 +190,19 @@ func TestSystemd_StartAndStopNothing(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, ok)
 }
+
+func TestSystemd_SlowStartCommandShortensTheWait(t *testing.T) {
+	t.Parallel()
+	d, r, clock := newDeps(t)
+	s, err := NewSystemd(SystemdSettings{Units: []string{"a.service"}}, d)
+	require.NoError(t, err)
+	expectSystemctl(r, "start", "a.service").
+		Run(func(mock.Arguments) { clock.After(time.Minute) }). // the command takes 1 min
+		Return(nil, nil).Once()
+	expectSystemctl(r, "is-active", "a.service").Return([]byte("activating"), nil).Once()
+
+	ok, err := s.Start(context.Background(), []string{"a.service"}, 30*time.Second)
+
+	require.NoError(t, err)
+	assert.False(t, ok, "start_timeout covers the command and the wait")
+}
