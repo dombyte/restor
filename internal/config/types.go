@@ -27,6 +27,11 @@ const (
 	ScopeUser   = "user"
 )
 
+// Args is a list of command-line arguments for restic. A single string in the file is one
+// argument; unlike the other lists it is not split on commas, which options such as
+// "--group-by=host,tags" contain.
+type Args []string
+
 // Config is the configuration file.
 type Config struct {
 	// Mode is ModeSequential or ModeParallel.
@@ -52,7 +57,7 @@ type GlobalConfig struct {
 	// AutoPrune runs forget per project and one prune after all backups.
 	AutoPrune bool `mapstructure:"auto_prune"`
 	// PruneOptions are global restic options for prune and unlock.
-	PruneOptions []string `mapstructure:"prune_options"`
+	PruneOptions Args `mapstructure:"prune_options"`
 	// PreBackupCmd is the default pre-backup hook of every project.
 	PreBackupCmd string `mapstructure:"pre_backup_cmd"`
 	// PostBackupCmd is the default post-backup hook of every project.
@@ -71,8 +76,8 @@ type ProjectConfig struct {
 	StartTimeout    int      `mapstructure:"start_timeout"` // seconds
 	RetentionPolicy string   `mapstructure:"retention_policy"`
 	StopServices    *bool    `mapstructure:"stop_services"` // nil = true
-	BackupOptions   []string `mapstructure:"backup_options"`
-	ForgetOptions   []string `mapstructure:"forget_options"`
+	BackupOptions   Args     `mapstructure:"backup_options"`
+	ForgetOptions   Args     `mapstructure:"forget_options"`
 	PreBackupCmd    string   `mapstructure:"pre_backup_cmd"`  // overrides the global hook
 	PostBackupCmd   string   `mapstructure:"post_backup_cmd"` // overrides the global hook
 }
