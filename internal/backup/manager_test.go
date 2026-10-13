@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -123,4 +124,46 @@ func TestManager_RunCancelled(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, []string{"lock a", "release a"}, f.rec.list(),
 		"b is not started after the cancel, no maintenance")
+}
+
+func TestManager_IncompleteSnapshotKeepsHistory(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		id   string
+		err  error
+	}{
+		{name: "unreadable files", id: "abc", err: fmt.Errorf("w: %w", incompleteError{})},
+		{name: "no snapshot ID", id: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			f.expectLock("a")
+			f.expectLock("b")
+			f.expectBackup("a", nil)
+			f.restic.EXPECT().Backup(mock.Anything, "b", mock.Anything, mock.Anything).
+				Return(tt.id, tt.err).Once()
+			f.restic.EXPECT().Forget(mock.Anything, "a", "--keep-last 1", []string(nil)).
+				Return(nil).Once()
+			m := f.manager(t, Settings{AutoPrune: true},
+				fileProject(f, t, "a", "--keep-last 1"), fileProject(f, t, "b", "--keep-last 1"))
+
+			require.NoError(t, m.Run(context.Background()), "an incomplete project succeeds")
+			// b is not forgotten and prune/unlock are skipped (the restic mock fails the
+			// test on any unexpected call).
+		})
+	}
+}
+
+func TestRunProject_ReportsCompleteness(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expectLock("a")
+	f.expectBackup("a", nil)
+	complete, err := f.manager(t, Settings{}).runProject(context.Background(),
+		fileProject(f, t, "a", ""))
+	require.NoError(t, err)
+	assert.True(t, complete)
 }

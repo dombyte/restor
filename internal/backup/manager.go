@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -104,19 +103,19 @@ func NewManager(s Settings, projects []Project, d Deps) (*Manager, error) {
 	return &Manager{s: s, projects: projects, d: d}, nil
 }
 
-// Run backs up every project. With AutoPrune it then runs forget for the projects that
-// were backed up, and prune and unlock only when every project succeeded. A cancelled
-// run does no maintenance. Project failures are logged here and summarized in the
-// returned ErrProjectsFailed; forget, prune and unlock failures are only logged.
+// Run backs up every project. With AutoPrune it then runs forget for the projects with a
+// complete snapshot, and prune and unlock only when every snapshot is complete. A
+// cancelled run does no maintenance. Project failures are logged here and summarized in
+// the returned ErrProjectsFailed; forget, prune and unlock failures are only logged.
 func (m *Manager) Run(ctx context.Context) error {
 	m.d.Log.Info().Bool("parallel", m.s.Parallel).Int("projects", len(m.projects)).
 		Msg("starting backup run")
 
-	succeeded, failed := m.runProjects(ctx)
+	outcomes := m.runProjects(ctx)
 	if ctx.Err() == nil {
-		m.maintain(ctx, succeeded, failed == 0)
+		m.maintain(ctx, outcomes)
 	}
-	if failed > 0 {
+	if failed := m.count(outcomes, outcomeFailed); failed > 0 {
 		return fmt.Errorf("%w: %d of %d", ErrProjectsFailed, failed, len(m.projects))
 	}
 	if err := ctx.Err(); err != nil {
@@ -125,40 +124,36 @@ func (m *Manager) Run(ctx context.Context) error {
 	return nil
 }
 
-// forget runs forget for every one of projects with a retention policy and reports
-// whether there was one.
-func (m *Manager) forget(ctx context.Context, projects []Project) bool {
-	forgot := false
-	for _, p := range projects {
-		s := p.Settings
-		if s.RetentionPolicy == "" {
-			continue
-		}
-		forgot = true
-		log := m.d.Log.With().Str("project", s.Name).Logger()
-		if err := m.d.Restic.Forget(ctx, s.Name, s.RetentionPolicy, s.ForgetOptions); err != nil {
-			log.Error().Err(err).Msg("forget failed")
-			continue
-		}
-		log.Info().Str("retention_policy", s.RetentionPolicy).Msg("forget completed")
-	}
-	return forgot
-}
+// outcome is how the backup of one project ended.
+type outcome int
 
-// runProjects runs the projects in the configured mode and returns those that succeeded
-// (in their configured order) and how many failed; projects skipped after a cancel are
-// neither.
-func (m *Manager) runProjects(ctx context.Context) ([]Project, int) {
-	ok := make([]bool, len(m.projects)) // each run writes only its own index
-	var failed atomic.Int32
+const (
+	// The zero value: not started because the run was cancelled.
+	_ outcome = iota
+	// outcomeFailed: no snapshot, the project failed.
+	outcomeFailed
+	// outcomeIncomplete: backed up, but the snapshot misses files or was not reported.
+	outcomeIncomplete
+	// outcomeComplete: backed up with a complete snapshot.
+	outcomeComplete
+)
+
+// runProjects runs the projects in the configured mode and returns the outcome of each,
+// by index.
+func (m *Manager) runProjects(ctx context.Context) []outcome {
+	outcomes := make([]outcome, len(m.projects)) // each run writes only its own index
 	run := func(i int) {
 		p := m.projects[i]
-		if err := m.runProject(ctx, p); err != nil {
-			failed.Add(1)
+		complete, err := m.runProject(ctx, p)
+		switch {
+		case err != nil:
+			outcomes[i] = outcomeFailed
 			m.d.Log.Error().Err(err).Str("project", p.Settings.Name).Msg("project backup failed")
-			return
+		case complete:
+			outcomes[i] = outcomeComplete
+		default:
+			outcomes[i] = outcomeIncomplete
 		}
-		ok[i] = true
 	}
 	if m.s.Parallel {
 		var wg sync.WaitGroup
@@ -174,32 +169,67 @@ func (m *Manager) runProjects(ctx context.Context) ([]Project, int) {
 			run(i)
 		}
 	}
-	return m.selected(ok), int(failed.Load())
+	return outcomes
 }
 
-// selected returns the projects whose index is true in ok, in their configured order.
-func (m *Manager) selected(ok []bool) []Project {
-	var out []Project
-	for i, p := range m.projects {
-		if ok[i] {
-			out = append(out, p)
+// count returns how many of outcomes are want.
+func (m *Manager) count(outcomes []outcome, want outcome) int {
+	n := 0
+	for _, o := range outcomes {
+		if o == want {
+			n++
 		}
 	}
-	return out
+	return n
 }
 
-// maintain runs forget for the projects with a retention policy among succeeded, then
-// one prune and unlock when allSucceeded. They run after all backups because they need
-// exclusive repository locks. Forget only touches projects with a new snapshot; prune is
-// skipped after a failure, so a broken run never removes data.
-func (m *Manager) maintain(ctx context.Context, succeeded []Project, allSucceeded bool) {
-	if !m.s.AutoPrune || !m.forget(ctx, succeeded) {
+// maintain runs forget for the projects with a retention policy and a complete snapshot,
+// then one prune and unlock when every project has one. They run after all backups
+// because they need exclusive repository locks. A failed or incomplete backup keeps its
+// project's history and skips prune, so a broken run never removes data.
+func (m *Manager) maintain(ctx context.Context, outcomes []outcome) {
+	if !m.s.AutoPrune || !m.forgetAll(ctx, outcomes) {
 		return
 	}
-	if !allSucceeded {
-		m.d.Log.Warn().Msg("prune skipped because a project failed")
+	if m.count(outcomes, outcomeComplete) < len(m.projects) {
+		m.d.Log.Warn().Msg("prune skipped because a project failed or is incomplete")
 		return
 	}
+	m.prune(ctx)
+}
+
+// forgetAll runs forget for the projects with a retention policy and a complete snapshot
+// and reports whether there was one.
+func (m *Manager) forgetAll(ctx context.Context, outcomes []outcome) bool {
+	forgot := false
+	for i, p := range m.projects {
+		if p.Settings.RetentionPolicy == "" {
+			continue
+		}
+		switch outcomes[i] {
+		case outcomeComplete:
+			forgot = true
+			m.forget(ctx, p.Settings)
+		case outcomeIncomplete:
+			m.d.Log.Warn().Str("project", p.Settings.Name).
+				Msg("forget skipped because the snapshot is incomplete")
+		}
+	}
+	return forgot
+}
+
+// forget applies the retention policy of one project; a failure is only logged.
+func (m *Manager) forget(ctx context.Context, s ProjectSettings) {
+	log := m.d.Log.With().Str("project", s.Name).Logger()
+	if err := m.d.Restic.Forget(ctx, s.Name, s.RetentionPolicy, s.ForgetOptions); err != nil {
+		log.Error().Err(err).Msg("forget failed")
+		return
+	}
+	log.Info().Str("retention_policy", s.RetentionPolicy).Msg("forget completed")
+}
+
+// prune runs prune and unlock for the whole repository; failures are only logged.
+func (m *Manager) prune(ctx context.Context) {
 	if err := m.d.Restic.Prune(ctx, m.s.PruneOptions); err != nil {
 		m.d.Log.Error().Err(err).Msg("prune failed")
 	} else {

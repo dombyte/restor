@@ -88,6 +88,11 @@ managers and the hooks (inline wins). `$VAR`, `${VAR}` and `${VAR:-default}` are
 from the process environment when the config is loaded; write `$$` for a literal `$`
 (e.g. in a password). In `.env` files a value in single quotes is never expanded.
 
+**Retention:** with `auto_prune`, each project with a `retention_policy` runs `forget`
+after all backups, then one `prune` runs for the repository. A project that failed, or
+whose snapshot is incomplete (restic could not read some files), keeps its history, and
+prune waits for a run where every project has a complete snapshot.
+
 **Project names** are case-insensitive; the lowercase name is the restic tag.
 
 **List options** (`prune_options`, `backup_options`, `forget_options`) are passed as one
