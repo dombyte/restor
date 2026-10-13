@@ -12,7 +12,9 @@ import (
 )
 
 // restartGrace is added to the start timeout to bound restarting the services after the
-// run was cancelled (the run context can no longer be used for that).
+// run was cancelled (the run context can no longer be used for that). It is above what a
+// service manager adds to the timeout itself (2 min for the start command, plus one status
+// query of at most 30 s), so a slow start ends with a warning, not a cancelled restart.
 const restartGrace = 3 * time.Minute
 
 // ProjectSettings configure the backup of one project.

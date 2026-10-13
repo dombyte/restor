@@ -92,6 +92,7 @@ func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Dura
 	if len(services) == 0 {
 		return true, nil
 	}
+	deadline := c.clock.Now().Add(timeout)
 	cmdCtx, cancel := commandContext(ctx, timeout)
 	defer cancel()
 	args := append([]string{"stop", "-t", strconv.Itoa(int(timeout.Seconds()))}, services...)
@@ -99,7 +100,7 @@ func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Dura
 		!strings.Contains(strings.ToLower(string(out)), "no containers to stop") {
 		return false, fmt.Errorf("servicemanager: stop %s: %w", c.s.File, err)
 	}
-	return waitUntil(ctx, c.clock, timeout, func(ctx context.Context) (bool, error) {
+	return waitUntil(ctx, c.clock, deadline, func(ctx context.Context) (bool, error) {
 		running, err := c.running(ctx)
 		return err == nil && !anyOf(services, running), err
 	})
@@ -114,12 +115,13 @@ func (c *Compose) Start(ctx context.Context, services []string, timeout time.Dur
 	if len(services) == 0 {
 		return true, nil
 	}
+	deadline := c.clock.Now().Add(timeout)
 	cmdCtx, cancel := commandContext(ctx, timeout)
 	defer cancel()
 	if _, err := c.run(cmdCtx, append([]string{"start"}, services...)...); err != nil {
 		return false, fmt.Errorf("servicemanager: start %s: %w", c.s.File, err)
 	}
-	return waitUntil(ctx, c.clock, timeout, func(ctx context.Context) (bool, error) {
+	return waitUntil(ctx, c.clock, deadline, func(ctx context.Context) (bool, error) {
 		running, err := c.running(ctx)
 		return err == nil && allOf(services, running), err
 	})

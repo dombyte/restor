@@ -323,7 +323,10 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   validation error); empty means all units.
 - noop: no services; every operation succeeds.
 - Stop and start poll every 500 ms until the expected state or the timeout; a failed
-  status query is retried, and its error counts only when the last poll failed.
+  status query is retried, and its error counts only when the last poll failed. The
+  timeout counts from before the stop/start command, so a slow command shortens the wait
+  (at least one status query still runs); a restart thus ends within `start_timeout` +
+  2 min + one status query, inside the `start_timeout` + 3 min bound after a cancel.
 
 ### restic
 - The repository is passed as `RESTIC_REPOSITORY` (not `-r`), so it never shows up in
