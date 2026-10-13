@@ -192,7 +192,8 @@ global:
 #   - stop_timeout: Timeout in seconds for stopping services (> 0 when services are stopped)
 #   - start_timeout: Timeout in seconds for starting services (> 0 when services are stopped)
 #
-# Project names are case-insensitive; the lowercase name is the restic tag.
+# Project names are case-insensitive; the lowercase name is the restic tag. A name must not
+# start with "-" or contain "," or whitespace.
 #
 # OPTIONAL fields for each project:
 #   - retention_policy: Retention policy for snapshots (forget runs only with auto_prune;

@@ -93,7 +93,8 @@ after all backups, then one `prune` runs for the repository. A project that fail
 whose snapshot is incomplete (restic could not read some files), keeps its history, and
 prune waits for a run where every project has a complete snapshot.
 
-**Project names** are case-insensitive; the lowercase name is the restic tag.
+**Project names** are case-insensitive; the lowercase name is the restic tag. A name must
+not start with `-` or contain `,` or whitespace.
 
 **List options** (`prune_options`, `backup_options`, `forget_options`) are passed as one
 argument per item: write `["-o", "s3.connections=10"]` or `["--option=s3.connections=10"]`.
