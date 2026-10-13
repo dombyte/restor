@@ -28,10 +28,10 @@ func expectCompose(r *mocks.MockRunner, args ...any) *mock.Call {
 	return r.On("Run", all...)
 }
 
-func TestCompose_LockKey(t *testing.T) {
+func TestCompose_LockKeys(t *testing.T) {
 	t.Parallel()
 	c, _ := newCompose(t)
-	assert.Equal(t, composeFile, c.LockKey())
+	assert.Equal(t, []string{composeFile}, c.LockKeys())
 }
 
 func TestCompose_Running(t *testing.T) {

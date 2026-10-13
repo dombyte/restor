@@ -46,8 +46,8 @@ func NewCompose(s ComposeSettings, d Deps) (*Compose, error) {
 	return &Compose{s: s, runner: d.Runner, clock: d.Clock}, nil
 }
 
-// LockKey returns the compose file path.
-func (c *Compose) LockKey() string { return c.s.File }
+// LockKeys returns the compose file path.
+func (c *Compose) LockKeys() []string { return []string{c.s.File} }
 
 // Running returns the services among requested (every service of the compose file when
 // it is empty) that have a running container.

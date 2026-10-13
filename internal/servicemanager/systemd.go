@@ -41,8 +41,11 @@ func NewSystemd(s SystemdSettings, d Deps) (*Systemd, error) {
 	return &Systemd{s: s, runner: d.Runner, clock: d.Clock}, nil
 }
 
-// LockKey returns the unit names joined with commas.
-func (s *Systemd) LockKey() string { return strings.Join(s.s.Units, ",") }
+// LockKeys returns the unit names, sorted: one lock per unit, so projects that share
+// only some units still exclude each other.
+func (s *Systemd) LockKeys() []string {
+	return slices.Compact(slices.Sorted(slices.Values(s.s.Units)))
+}
 
 // Running returns the units among requested (all units when it is empty) that are up
 // (active, activating, reloading, …). A requested name that is not a configured unit is
@@ -81,7 +84,7 @@ func (s *Systemd) Stop(ctx context.Context, units []string, timeout time.Duratio
 	if out, err := s.run(cmdCtx, append([]string{"stop"}, units...)...); err != nil &&
 		!strings.Contains(string(out), "not running") &&
 		!strings.Contains(string(out), "not loaded") {
-		return false, fmt.Errorf("servicemanager: stop %s: %w", s.LockKey(), err)
+		return false, fmt.Errorf("servicemanager: stop %s: %w", unitList(units), err)
 	}
 	return waitUntil(ctx, s.clock, timeout, func(ctx context.Context) (bool, error) {
 		states, err := s.states(ctx, units)
@@ -98,7 +101,7 @@ func (s *Systemd) Start(ctx context.Context, units []string, timeout time.Durati
 	cmdCtx, cancel := commandContext(ctx, timeout)
 	defer cancel()
 	if _, err := s.run(cmdCtx, append([]string{"start"}, units...)...); err != nil {
-		return false, fmt.Errorf("servicemanager: start %s: %w", s.LockKey(), err)
+		return false, fmt.Errorf("servicemanager: start %s: %w", unitList(units), err)
 	}
 	return waitUntil(ctx, s.clock, timeout, func(ctx context.Context) (bool, error) {
 		states, err := s.states(ctx, units)
@@ -120,7 +123,7 @@ func (s *Systemd) states(ctx context.Context, units []string) ([]string, error) 
 		if err == nil {
 			err = fmt.Errorf("%w: %q", errUnexpectedOutput, out)
 		}
-		return nil, fmt.Errorf("servicemanager: status of %s: %w", s.LockKey(), err)
+		return nil, fmt.Errorf("servicemanager: status of %s: %w", unitList(units), err)
 	}
 	return states, nil
 }
@@ -134,6 +137,9 @@ func isUp(state string) bool {
 		return false
 	}
 }
+
+// unitList names units in errors.
+func unitList(units []string) string { return strings.Join(units, ",") }
 
 func (s *Systemd) run(ctx context.Context, args ...string) ([]byte, error) {
 	if s.s.User {

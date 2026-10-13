@@ -88,7 +88,7 @@ func (f *fixture) expectHook(name string, err error) {
 func (f *fixture) services(t *testing.T, key string, names ...string) *mocks.MockServices {
 	t.Helper()
 	s := mocks.NewMockServices(t)
-	s.EXPECT().LockKey().Return(key).Maybe()
+	s.EXPECT().LockKeys().Return([]string{key}).Maybe()
 	s.EXPECT().Running(mock.Anything, mock.Anything).Return(names, nil).Maybe()
 	return s
 }
@@ -276,7 +276,7 @@ func TestRunProject_StopServicesDisabled(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	svc := mocks.NewMockServices(t)
-	svc.EXPECT().LockKey().Return("key")
+	svc.EXPECT().LockKeys().Return([]string{"key"})
 	f.expectLock("key")
 	f.expectBackup("web", nil)
 	p := project("web", svc)
@@ -304,7 +304,7 @@ func TestRunProject_RestartsOnlyRunningServices(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	svc := mocks.NewMockServices(t)
-	svc.EXPECT().LockKey().Return("key")
+	svc.EXPECT().LockKeys().Return([]string{"key"})
 	svc.EXPECT().Running(mock.Anything, []string{"web", "db", "job"}).
 		Return([]string{"web"}, nil).Once()
 	svc.EXPECT().Stop(mock.Anything, []string{"web"}, 10*time.Second).Return(true, nil).Once()
@@ -322,7 +322,7 @@ func TestRunProject_ServicesFail(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	svc := mocks.NewMockServices(t)
-	svc.EXPECT().LockKey().Return("key")
+	svc.EXPECT().LockKeys().Return([]string{"key"})
 	svc.EXPECT().Running(mock.Anything, mock.Anything).Return(nil, assert.AnError)
 	f.expectLock("key")
 	p := project("web", svc)
@@ -338,7 +338,7 @@ func TestRunProject_Locked(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	svc := mocks.NewMockServices(t)
-	svc.EXPECT().LockKey().Return("key")
+	svc.EXPECT().LockKeys().Return([]string{"key"})
 	f.locker.EXPECT().Lock("key").Return(nil, assert.AnError)
 
 	err := f.manager(t, Settings{}).runProject(context.Background(), project("web", svc))
@@ -382,4 +382,36 @@ func TestRunProject_RestartAfterCancel(t *testing.T) {
 	err := f.manager(t, Settings{}).runProject(ctx, p)
 
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestRunProject_LocksEveryKey(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	svc := mocks.NewMockServices(t)
+	svc.EXPECT().LockKeys().Return([]string{"a", "b"})
+	svc.EXPECT().Running(mock.Anything, mock.Anything).Return(nil, nil)
+	f.expectLock("a")
+	f.expectLock("b")
+	f.expectBackup("web", nil)
+	p := project("web", svc)
+	p.Settings.PreBackupCmd, p.Settings.PostBackupCmd = "", ""
+
+	require.NoError(t, f.manager(t, Settings{}).runProject(context.Background(), p))
+	assert.Equal(t, []string{"lock a", "lock b", "backup web", "release b", "release a"},
+		f.rec.list())
+}
+
+func TestRunProject_PartlyLocked(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	svc := mocks.NewMockServices(t)
+	svc.EXPECT().LockKeys().Return([]string{"a", "b"})
+	f.expectLock("a")
+	f.locker.EXPECT().Lock("b").Return(nil, assert.AnError)
+
+	err := f.manager(t, Settings{}).runProject(context.Background(), project("web", svc))
+
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, []string{"lock a", "release a"}, f.rec.list(),
+		"the locks taken before the failure are released")
 }

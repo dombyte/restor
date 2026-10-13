@@ -194,10 +194,11 @@ restor itself has no data store. What it writes, and who writes it:
   Two `Lock` calls of one process conflict too. The lock dir is per user (`lock.DefaultDir`):
   `/run/restor` for root on Linux, `$XDG_RUNTIME_DIR/restor` for other users, else
   `restor-<uid>` in the temp dir; it is refused unless it is a real directory owned by the
-  user and not writable by others (`ErrUnsafeDir`). The key comes from the service manager: the
-  compose file path, the systemd unit names joined with commas, or `noop-<project>`. The
-  locks stop two runs (two processes or
-  two projects) from stopping and backing up the same compose file / units at once.
+  user and not writable by others (`ErrUnsafeDir`). The keys come from the service manager
+  (`LockKeys`): the compose file path, one key per systemd unit, or `noop-<project>`; a
+  project takes all of its keys before it starts and fails if one is held. The locks stop
+  two runs (two processes or two projects) from stopping and backing up the same compose
+  file or the same unit at once, also when two projects share only some of their units.
   Runs of different users do not see each other's locks (rare: root and a `docker` group
   member backing up the same compose file).
 - **Services:** a project stops and restarts only those of its services (`services`, or
@@ -721,8 +722,8 @@ change keeps its own branch and merge commit:
 
 ### Adding a service manager
 1. New file in `servicemanager` with a `…Settings` struct and a constructor that takes
-   `Deps` (Runner, Clock) and validates them; it implements `backup.Services`: `LockKey`
-   (unique per managed unit set), `Services`, and `Stop`/`Start` that wait with
+   `Deps` (Runner, Clock) and validates them; it implements `backup.Services`: `LockKeys`
+   (one key per independently managed unit), `Services`, and `Stop`/`Start` that wait with
    `waitUntil` and return false when the timeout passes.
 2. Config: add the `Manager…` constant, its fields in `ProjectConfig`/`Project`,
    validation in `validator.serviceManager` (and `stopsServices` if it stops services), and
