@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -106,7 +107,9 @@ func decode(raw map[string]any, cfg *Config) ([]string, error) {
 		Result:           cfg,
 		Metadata:         &md,
 		WeaklyTypedInput: true,
-		DecodeHook:       mapstructure.StringToSliceHookFunc(","),
+		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			stringToArgsHook, mapstructure.StringToSliceHookFunc(","),
+		),
 	})
 	if err != nil {
 		return nil, err
@@ -116,6 +119,19 @@ func decode(raw map[string]any, cfg *Config) ([]string, error) {
 	}
 	slices.Sort(md.Unused)
 	return md.Unused, nil
+}
+
+// stringToArgsHook decodes a single string for an Args field as one argument, before
+// StringToSliceHookFunc would split it on commas.
+func stringToArgsHook(from, to reflect.Type, data any) (any, error) {
+	str, ok := data.(string)
+	if !ok || from.Kind() != reflect.String || to != reflect.TypeFor[Args]() {
+		return data, nil
+	}
+	if str == "" {
+		return []string{}, nil
+	}
+	return []string{str}, nil
 }
 
 // lowerProjectNames makes project names lowercase: they are case-insensitive and the

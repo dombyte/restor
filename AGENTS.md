@@ -276,7 +276,9 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 - One file (`--config`, required): YAML (`.yaml`/`.yml`), JSON or TOML by extension.
   Template with every option: `example/config.yaml`.
 - Keys keep their case (environment variable names are case-sensitive). Config field names
-  match case-insensitively; scalars are converted loosely (`"30"` → 30, `"a,b"` → list).
+  match case-insensitively; scalars are converted loosely (`"30"` → 30, `"a,b"` → list),
+  except that a string for an option list (`config.Args`: `prune_options`,
+  `backup_options`, `forget_options`) is one argument, never split on commas.
   Project names are case-insensitive and used in lowercase (also as the restic tag);
   names that differ only in case are an error.
 - Environment for restic, service managers and hooks = process env + `env_file`

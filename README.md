@@ -110,6 +110,7 @@ not start with `-` or contain `,` or whitespace.
 
 **List options** (`prune_options`, `backup_options`, `forget_options`) are passed as one
 argument per item: write `["-o", "s3.connections=10"]` or `["--option=s3.connections=10"]`.
+A single string is one argument (`forget_options: --group-by=host,tags` keeps its comma).
 
 ## License
 

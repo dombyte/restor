@@ -75,7 +75,7 @@ func TestLoad_Full(t *testing.T) {
 
 	assert.Equal(t, ModeParallel, cfg.RunMode())
 	assert.Equal(t, "s3:bucket", cfg.Global.ResticRepo)
-	assert.Equal(t, []string{"--cache-dir=/home/x/cache"}, cfg.Global.PruneOptions)
+	assert.Equal(t, Args{"--cache-dir=/home/x/cache"}, cfg.Global.PruneOptions)
 	assert.Equal(t, []string{"FROM_FILE=file", "INLINE=/home/x/inline", "SHARED=inline"},
 		cfg.EnvPairs(), "names keep their case; inline variables win over the env file")
 
@@ -140,6 +140,27 @@ projects:
 	assert.Equal(t, 30*time.Second, p.StopTimeout)
 	assert.Equal(t, []string{"/a", "/b"}, p.Sources)
 	assert.False(t, p.StopServices)
+}
+
+func TestLoad_OptionStringIsOneArgument(t *testing.T) {
+	t.Parallel()
+	path := writeFile(t, t.TempDir(), "config.yaml", `
+global: {prune_options: ""}
+projects:
+  a:
+    service_manager: noop
+    sources: [/a]
+    forget_options: --group-by=host,tags
+    backup_options:
+      - --exclude=a,b
+      - --one-file-system
+`)
+	cfg, err := Load(path, getenv(nil))
+	require.NoError(t, err)
+	p := cfg.ResolvedProjects()[0]
+	assert.Equal(t, []string{"--group-by=host,tags"}, p.ForgetOptions, "not split on commas")
+	assert.Equal(t, []string{"--exclude=a,b", "--one-file-system"}, p.BackupOptions)
+	assert.Empty(t, cfg.Global.PruneOptions, "an empty string is no argument")
 }
 
 func TestLoad_OtherFormats(t *testing.T) {
