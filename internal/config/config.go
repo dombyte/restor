@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/pelletier/go-toml/v2"
@@ -198,9 +199,23 @@ func (c *Config) Validate() error {
 		})
 	}
 	for _, name := range sortedKeys(c.Projects) {
+		if !validName(name) {
+			errs = append(errs, &FieldError{
+				Path:    "projects." + name,
+				Problem: `name must not be empty, start with "-" or contain "," or whitespace`,
+			})
+		}
 		errs = append(errs, validateProject("projects."+name, c.Projects[name])...)
 	}
 	return errors.Join(errs...)
+}
+
+// validName reports whether a project name works as a restic tag: restic splits --tag
+// values on commas (so "web,db" would also match the snapshots of "web"), and a leading
+// "-" or whitespace breaks the command line.
+func validName(name string) bool {
+	return name != "" && !strings.HasPrefix(name, "-") &&
+		!strings.ContainsFunc(name, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
 }
 
 func validateProject(path string, p ProjectConfig) []error {

@@ -219,6 +219,38 @@ projects:
 	}
 }
 
+func TestValidate_ProjectNames(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		valid bool
+	}{
+		{name: "web", valid: true},
+		{name: "10-db_main.v2", valid: true},
+		{name: ""},
+		{name: "web,db"},
+		{name: "-web"},
+		{name: "my web"},
+		{name: "web\t"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{Projects: map[string]ProjectConfig{
+				tt.name: {ServiceManager: ManagerNoop, Sources: []string{"/a"}},
+			}}
+			err := cfg.Validate()
+			if tt.valid {
+				require.NoError(t, err)
+				return
+			}
+			var fe *FieldError
+			require.ErrorAs(t, err, &fe)
+			assert.Equal(t, "projects."+tt.name, fe.Path)
+		})
+	}
+}
+
 func TestValidate_FieldErrors(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{Projects: map[string]ProjectConfig{"a": {Sources: []string{"/a"}}}}
