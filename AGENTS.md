@@ -72,8 +72,8 @@ restor orchestrates **restic** backups of several **projects** on one host.
 make check                                                # ./scripts/pre-commit.sh, check-only
 golangci-lint fmt --config .golangci.yml                  # gofumpt + goimports
 golangci-lint run --config .golangci.yml                  # full linter set (section 12)
-go run golang.org/x/tools/cmd/deadcode@v0.51.0 -test ./... # unused exported code
-go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...     # known vulnerabilities
+go run golang.org/x/tools/cmd/deadcode@v0.52.0 -test ./... # unused exported code
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...     # known vulnerabilities
 go test -race ./...                                       # all unit tests, as in CI
 go tool mockery                                           # regenerate mocks (.mockery.yaml)
 make build                                                # ./restor with version info (ldflags)
