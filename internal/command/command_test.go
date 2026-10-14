@@ -34,22 +34,13 @@ func helper(mode string) int {
 		fmt.Println(strings.Join(os.Args[1:], " "), os.Getenv("RESTOR_TEST_VALUE"))
 		return 0
 	case "big":
-		line := strings.Repeat("x", 1023) + "\n"
-		for range 3 * maxOutput / len(line) {
-			fmt.Print(line)
-		}
-		fmt.Println("snapshot 1a2b3c4d saved")
-		return 0
+		return helperBig()
 	case "term":
-		// Report SIGTERM, then exit: the runner must ask before it kills.
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGTERM)
-		if err := os.WriteFile(os.Getenv("RESTOR_READY_FILE"), nil, 0o600); err != nil {
-			return 2
-		}
-		<-sig
-		fmt.Println("got SIGTERM")
-		return 0
+		return helperTerm()
+	case "group":
+		return helperGroup()
+	case "termfile":
+		return helperTermFile()
 	case "fail":
 		fmt.Println("line one")
 		fmt.Println("line two")
@@ -57,6 +48,60 @@ func helper(mode string) int {
 	default:
 		return 2
 	}
+}
+
+// helperBig prints three times maxOutput, then a snapshot line.
+func helperBig() int {
+	line := strings.Repeat("x", 1023) + "\n"
+	for range 3 * maxOutput / len(line) {
+		fmt.Print(line)
+	}
+	fmt.Println("snapshot 1a2b3c4d saved")
+	return 0
+}
+
+// helperTerm reports SIGTERM, then exits: the runner must ask before it kills.
+func helperTerm() int {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM)
+	if err := os.WriteFile(os.Getenv("RESTOR_READY_FILE"), nil, 0o600); err != nil {
+		return 2
+	}
+	<-sig
+	fmt.Println("got SIGTERM")
+	return 0
+}
+
+// helperTermFile is like helperTerm, but reports SIGTERM in a file: its parent owns the
+// output.
+func helperTermFile() int {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM)
+	if err := os.WriteFile(os.Getenv("RESTOR_READY_FILE"), nil, 0o600); err != nil {
+		return 2
+	}
+	<-sig
+	if err := os.WriteFile(os.Getenv("RESTOR_TERM_FILE"), nil, 0o600); err != nil {
+		return 2
+	}
+	return 0
+}
+
+// helperGroup starts a termfile child (like a hook script starting a program) and, on
+// SIGTERM, waits for it: the child only ends if the runner signals the whole group.
+func helperGroup() int {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM)
+	child := exec.Command(os.Args[0])
+	child.Env = append(os.Environ(), helperEnv+"=termfile")
+	if err := child.Start(); err != nil {
+		return 2
+	}
+	<-sig
+	if err := child.Wait(); err != nil {
+		return 2
+	}
+	return 0
 }
 
 func newRunner(mode string, extra ...string) *Runner {
@@ -132,6 +177,38 @@ func TestRunner_RunCancelSendsSIGTERM(t *testing.T) {
 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Contains(t, string(out), "got SIGTERM")
+}
+
+func TestRunner_RunCancelSignalsTheProcessGroup(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ready, term := filepath.Join(dir, "ready"), filepath.Join(dir, "term")
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for {
+			if _, err := os.Stat(ready); err == nil {
+				cancel()
+				return
+			}
+			runtime.Gosched()
+		}
+	}()
+
+	_, err := newRunner("group", "RESTOR_READY_FILE="+ready, "RESTOR_TERM_FILE="+term).
+		Run(ctx, os.Args[0])
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.FileExists(t, term, "the child of the program got SIGTERM too")
+}
+
+func TestSignalGroup_ExitedGroup(t *testing.T) {
+	t.Parallel()
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = []string{helperEnv + "=echo"}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	require.NoError(t, cmd.Run())
+
+	require.NoError(t, signalGroup(cmd.Process.Pid, syscall.SIGKILL), "ESRCH is no error")
 }
 
 func TestRunner_RunEmpty(t *testing.T) {

@@ -246,7 +246,9 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 
 ### Shutdown and supervision
 - SIGINT/SIGTERM cancel the run context: running commands get SIGTERM and are killed 10 s
-  later (`exec.Cmd.Cancel`/`WaitDelay`, so restic can remove its repository lock),
+  later (`exec.Cmd.Cancel`/`WaitDelay`, so restic can remove its repository lock). Each
+  command runs in its own process group: SIGTERM goes to the whole group (a hook's child
+  processes too), and what is left of it gets SIGKILL when the command returns;
   sequential mode starts no further project, waits end early.
 - A project that stopped its services restarts them with its own context
   (`context.WithoutCancel`, bounded by `start_timeout` + 3 min).
