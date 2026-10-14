@@ -210,3 +210,29 @@ func TestWarnConfig_Quiet(t *testing.T) {
 
 	assert.Empty(t, buf.String())
 }
+
+func TestNew_WarnsAboutSharedLocksInParallelMode(t *testing.T) {
+	t.Parallel()
+	projects := `
+projects:
+  a: {service_manager: docker-compose, compose_file: /c.yml, sources: [/a],
+      stop_timeout: 1, start_timeout: 1}
+  b: {service_manager: docker-compose, compose_file: /c.yml, sources: [/b],
+      stop_timeout: 1, start_timeout: 1}
+  c: {service_manager: noop, sources: [/c]}
+`
+	for _, mode := range []string{"parallel", "sequential"} {
+		var buf bytes.Buffer
+		o := options(writeConfig(t, "mode: "+mode+"\n"+projects))
+		o.Log = zerolog.New(&buf)
+
+		_, err := New(o)
+
+		require.NoError(t, err)
+		if mode == "parallel" {
+			assert.Contains(t, buf.String(), `"project":"b","other_project":"a","lock":"/c.yml"`)
+		} else {
+			assert.NotContains(t, buf.String(), "cannot run in parallel")
+		}
+	}
+}

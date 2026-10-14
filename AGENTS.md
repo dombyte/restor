@@ -199,6 +199,8 @@ restor itself has no data store. What it writes, and who writes it:
   project takes all of its keys before it starts and fails if one is held. The locks stop
   two runs (two processes or two projects) from stopping and backing up the same compose
   file or the same unit at once, also when two projects share only some of their units.
+  In parallel mode such projects start together and all but one fail as locked; startup
+  warns about them (`warnSharedLocks`).
   Runs of different users do not see each other's locks (rare: root and a `docker` group
   member backing up the same compose file).
 - **Services:** a project stops and restarts only those of its services (`services`, or
@@ -299,7 +301,8 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   or `user`; `services` of a systemd project are among its `systemd_units`;
   `stop_timeout`/`start_timeout` (seconds) are ≥ 0 and > 0 when services are
   stopped. Unknown keys are ignored. Startup warns about them
-  (typos such as `stop_service`), about a `retention_policy` without `auto_prune` and
+  (typos such as `stop_service`), about projects sharing a compose file or unit in
+  parallel mode, about a `retention_policy` without `auto_prune` and
   about a missing repository (`restic_repo`, `RESTIC_REPOSITORY`, `RESTIC_REPOSITORY_FILE`).
 - `stop_services: false` backs up without stopping anything. Hooks: global
   `pre_backup_cmd`/`post_backup_cmd` are the default of every project, overridden per
