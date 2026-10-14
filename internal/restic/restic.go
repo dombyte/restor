@@ -26,6 +26,10 @@ const (
 	exitIncomplete = 3
 	// shortIDLength is the length of the snapshot IDs restic prints.
 	shortIDLength = 8
+	// Exit codes of restic ≥ 0.17 for common setup problems.
+	exitNoRepository  = 10
+	exitLocked        = 11
+	exitWrongPassword = 12
 )
 
 var (
@@ -33,6 +37,11 @@ var (
 	ErrMissingDependency = errors.New("restic: missing dependency")
 	// ErrNoSources is returned by Backup when there is nothing to back up.
 	ErrNoSources = errors.New("restic: no sources")
+
+	errNoRepository = errors.New("repository does not exist (create it with restic init)")
+	errLocked       = errors.New("repository is locked by another process " +
+		"(add --retry-lock=<duration> to the options to wait for it)")
+	errWrongPassword = errors.New("wrong password or no key found")
 )
 
 // Runner executes a program and returns its combined output.
@@ -94,7 +103,7 @@ func (c *Client) Backup(ctx context.Context, tag string, sources, opts []string)
 	args := slices.Concat([]string{"backup", "--json"}, opts, []string{"--tag", tag}, sources)
 	out, err := c.runner.Run(ctx, program, args...)
 	if err != nil && !isExit(err, exitIncomplete) {
-		return "", fmt.Errorf("restic: backup %s: %w", tag, err)
+		return "", failed("backup "+tag, err)
 	}
 	sum, found := parseSummary(out)
 	if found {
@@ -158,6 +167,27 @@ func (c *Client) logSummary(tag string, s summary) {
 		Msg("backup summary")
 }
 
+// failed wraps the error of a restic run, naming the cause of the exit codes restic uses
+// for setup problems, which its JSON output would otherwise bury.
+func failed(op string, err error) error {
+	var exit interface{ ExitCode() int }
+	if !errors.As(err, &exit) {
+		return fmt.Errorf("restic: %s: %w", op, err)
+	}
+	var cause error
+	switch exit.ExitCode() {
+	case exitNoRepository:
+		cause = errNoRepository
+	case exitLocked:
+		cause = errLocked
+	case exitWrongPassword:
+		cause = errWrongPassword
+	default:
+		return fmt.Errorf("restic: %s: %w", op, err)
+	}
+	return fmt.Errorf("restic: %s: %w: %w", op, cause, err)
+}
+
 // isExit reports whether err carries the process exit code code.
 func isExit(err error, code int) bool {
 	var exit interface{ ExitCode() int }
@@ -171,7 +201,7 @@ func (c *Client) Forget(ctx context.Context, tag, policy string, opts []string) 
 	args = append(args, "--tag", tag)
 	args = append(args, strings.Fields(policy)...)
 	if _, err := c.runner.Run(ctx, program, args...); err != nil {
-		return fmt.Errorf("restic: forget %s: %w", tag, err)
+		return failed("forget "+tag, err)
 	}
 	return nil
 }
@@ -180,7 +210,7 @@ func (c *Client) Forget(ctx context.Context, tag, policy string, opts []string) 
 func (c *Client) Prune(ctx context.Context, opts []string) error {
 	args := slices.Concat(opts, []string{"prune"})
 	if _, err := c.runner.Run(ctx, program, args...); err != nil {
-		return fmt.Errorf("restic: prune: %w", err)
+		return failed("prune", err)
 	}
 	return nil
 }
@@ -189,7 +219,7 @@ func (c *Client) Prune(ctx context.Context, opts []string) error {
 func (c *Client) Unlock(ctx context.Context, opts []string) error {
 	args := slices.Concat(opts, []string{"unlock"})
 	if _, err := c.runner.Run(ctx, program, args...); err != nil {
-		return fmt.Errorf("restic: unlock: %w", err)
+		return failed("unlock", err)
 	}
 	return nil
 }
