@@ -18,6 +18,8 @@
 #     * Faster for independent projects
 #     * Higher resource usage (memory, I/O, network)
 #     * Use when projects don't share dependencies
+#     * Projects sharing a compose file or systemd unit lock each other out (warned at
+#       startup): all but one fail
 #   - "sequential": Projects backup one after another, sorted by project name
 #     * Lower resource usage
 #     * Slower overall but more controlled

@@ -121,8 +121,12 @@ func createManager(cfg *config.Config, projects []config.Project, d managerDeps)
 		}
 		bps = append(bps, backup.Project{Settings: projectSettings(p), Services: services})
 	}
+	parallel := cfg.RunMode() == config.ModeParallel
+	if parallel {
+		warnSharedLocks(d.log, bps)
+	}
 	return backup.NewManager(backup.Settings{
-		Parallel:     cfg.RunMode() == config.ModeParallel,
+		Parallel:     parallel,
 		AutoPrune:    cfg.Global.AutoPrune,
 		PruneOptions: cfg.Global.PruneOptions,
 	}, bps, backup.Deps{
@@ -216,6 +220,23 @@ func hasRepository(env []string) bool {
 		vars[k] = v
 	}
 	return vars["RESTIC_REPOSITORY"] != "" || vars["RESTIC_REPOSITORY_FILE"] != ""
+}
+
+// warnSharedLocks warns about projects that share a lock key (a compose file or a systemd
+// unit): in parallel mode they start at the same time, so all but one fail as locked.
+func warnSharedLocks(log zerolog.Logger, projects []backup.Project) {
+	owner := map[string]string{}
+	for _, p := range projects {
+		for _, key := range p.Services.LockKeys() {
+			if first, ok := owner[key]; ok {
+				log.Warn().Str("project", p.Settings.Name).Str("other_project", first).
+					Str("lock", key).Msg("projects share services and cannot run in " +
+					"parallel: one of them will fail as locked; use mode: sequential")
+				continue
+			}
+			owner[key] = p.Settings.Name
+		}
+	}
 }
 
 // warnMissingBinaries warns about programs the run will need but PATH does not have.
