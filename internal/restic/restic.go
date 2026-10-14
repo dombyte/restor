@@ -4,11 +4,14 @@
 package restic
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -21,6 +24,8 @@ const (
 	// exitIncomplete is restic's exit code for a snapshot that was saved, but without
 	// some source files that could not be read.
 	exitIncomplete = 3
+	// shortIDLength is the length of the snapshot IDs restic prints.
+	shortIDLength = 8
 )
 
 var (
@@ -79,46 +84,78 @@ func New(d Deps) (*Client, error) {
 	return &Client{runner: d.Runner, log: d.Log}, nil
 }
 
-// Backup runs `restic backup [opts] --tag <tag> <sources>` and returns the ID of the new
-// snapshot, or "" when the output does not name one. An incomplete snapshot returns its
-// ID together with an *IncompleteError.
+// Backup runs `restic backup --json [opts] --tag <tag> <sources>` and returns the short ID
+// of the new snapshot, or "" when restic reports none (also for --dry-run). An incomplete
+// snapshot returns its ID together with an *IncompleteError.
 func (c *Client) Backup(ctx context.Context, tag string, sources, opts []string) (string, error) {
 	if len(sources) == 0 {
 		return "", ErrNoSources
 	}
-	args := append([]string{"backup"}, opts...)
-	args = append(args, "--tag", tag)
-	args = append(args, sources...)
+	args := slices.Concat([]string{"backup", "--json"}, opts, []string{"--tag", tag}, sources)
 	out, err := c.runner.Run(ctx, program, args...)
 	if err != nil && !isExit(err, exitIncomplete) {
 		return "", fmt.Errorf("restic: backup %s: %w", tag, err)
 	}
-	c.logSummary(tag, string(out))
-	if err != nil {
-		return parseSnapshotID(string(out)), &IncompleteError{Tag: tag, Err: err}
+	sum, found := parseSummary(out)
+	if found {
+		c.logSummary(tag, sum)
 	}
-	return parseSnapshotID(string(out)), nil
+	if err != nil {
+		return sum.snapshotID(), &IncompleteError{Tag: tag, Err: err}
+	}
+	return sum.snapshotID(), nil
 }
 
-// logSummary logs restic's summary lines (files, dirs, added data, totals).
-func (c *Client) logSummary(tag, output string) {
-	fields := map[string]any{}
-	prefixes := []struct{ prefix, name string }{
-		{"Files:", "files"},
-		{"Dirs:", "dirs"},
-		{"Added to the repository:", "added"},
-		{"processed ", "processed"},
+// summary is the "summary" message of `restic backup --json`.
+type summary struct {
+	MessageType     string  `json:"message_type"`
+	FilesNew        int64   `json:"files_new"`
+	FilesChanged    int64   `json:"files_changed"`
+	FilesUnmodified int64   `json:"files_unmodified"`
+	DirsNew         int64   `json:"dirs_new"`
+	DirsChanged     int64   `json:"dirs_changed"`
+	DirsUnmodified  int64   `json:"dirs_unmodified"`
+	DataAdded       int64   `json:"data_added"`
+	FilesProcessed  int64   `json:"total_files_processed"`
+	BytesProcessed  int64   `json:"total_bytes_processed"`
+	DurationSeconds float64 `json:"total_duration"`
+	SnapshotID      string  `json:"snapshot_id"`
+	DryRun          bool    `json:"dry_run"`
+}
+
+// snapshotID returns the short snapshot ID (as restic prints it), or "" when no snapshot
+// was saved: a dry run reports the ID it would have used.
+func (s summary) snapshotID() string {
+	if s.DryRun {
+		return ""
 	}
-	for line := range strings.SplitSeq(output, "\n") {
-		for _, p := range prefixes {
-			if v, ok := strings.CutPrefix(strings.TrimSpace(line), p.prefix); ok {
-				fields[p.name] = strings.Join(strings.Fields(v), " ")
-			}
+	return s.SnapshotID[:min(len(s.SnapshotID), shortIDLength)]
+}
+
+// parseSummary returns the last summary message of restic's JSON lines. Other lines
+// (status, errors, plain text from stderr) are skipped.
+func parseSummary(out []byte) (summary, bool) {
+	var last summary
+	found := false
+	for line := range bytes.SplitSeq(out, []byte("\n")) {
+		var s summary
+		if json.Unmarshal(bytes.TrimSpace(line), &s) == nil && s.MessageType == "summary" {
+			last, found = s, true
 		}
 	}
-	if len(fields) > 0 {
-		c.log.Info().Str("tag", tag).Fields(fields).Msg("backup summary")
-	}
+	return last, found
+}
+
+// logSummary logs what the backup processed and added.
+func (c *Client) logSummary(tag string, s summary) {
+	c.log.Info().Str("tag", tag).
+		Int64("files_new", s.FilesNew).Int64("files_changed", s.FilesChanged).
+		Int64("files_unmodified", s.FilesUnmodified).Int64("dirs_new", s.DirsNew).
+		Int64("dirs_changed", s.DirsChanged).Int64("dirs_unmodified", s.DirsUnmodified).
+		Int64("bytes_added", s.DataAdded).Int64("files_processed", s.FilesProcessed).
+		Int64("bytes_processed", s.BytesProcessed).
+		Dur("duration", time.Duration(s.DurationSeconds*float64(time.Second))).
+		Msg("backup summary")
 }
 
 // isExit reports whether err carries the process exit code code.
@@ -155,15 +192,4 @@ func (c *Client) Unlock(ctx context.Context, opts []string) error {
 		return fmt.Errorf("restic: unlock: %w", err)
 	}
 	return nil
-}
-
-// parseSnapshotID returns the ID from restic's "snapshot <id> saved" line, or "".
-func parseSnapshotID(output string) string {
-	for line := range strings.SplitSeq(output, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 3 && fields[0] == "snapshot" && fields[2] == "saved" {
-			return fields[1]
-		}
-	}
-	return ""
 }
