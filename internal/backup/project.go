@@ -78,7 +78,10 @@ func (m *Manager) releaseAll(releases []func() error, log zerolog.Logger) {
 	}
 }
 
-// backupProject runs the hooks, the service stop/start and the backup of a locked project.
+// backupProject runs the hooks around the service stop/start and the backup of a locked
+// project. Once the pre-backup hook succeeded, the post-backup hook always runs, also when
+// the backup failed, so it can undo what the pre-backup hook did (e.g. a maintenance
+// mode).
 func (m *Manager) backupProject(ctx context.Context, p Project, log zerolog.Logger) (
 	bool, error,
 ) {
@@ -86,6 +89,20 @@ func (m *Manager) backupProject(ctx context.Context, p Project, log zerolog.Logg
 	if err := m.hook(ctx, s.PreBackupCmd); err != nil {
 		return false, fmt.Errorf("backup: %s: pre-backup hook: %w", s.Name, err)
 	}
+	complete, err := m.backupWithServices(ctx, p, log)
+	m.postBackupHook(ctx, s.PostBackupCmd, log)
+	if err != nil {
+		return false, err
+	}
+	log.Info().Msg("project backup completed")
+	return complete, nil
+}
+
+// backupWithServices stops the services, runs the backup and starts the services again.
+func (m *Manager) backupWithServices(ctx context.Context, p Project, log zerolog.Logger) (
+	bool, error,
+) {
+	s := p.Settings
 	stopped, err := m.stopServices(ctx, p, log)
 	if err != nil {
 		return false, fmt.Errorf("backup: %s: %w", s.Name, err)
@@ -94,14 +111,22 @@ func (m *Manager) backupProject(ctx context.Context, p Project, log zerolog.Logg
 	if err := m.startServices(ctx, p, stopped, log); err != nil {
 		return false, errors.Join(backupErr, fmt.Errorf("backup: %s: %w", s.Name, err))
 	}
-	if backupErr != nil {
-		return false, backupErr
+	return complete, backupErr
+}
+
+// postBackupHook runs the post-backup hook; a failure is logged and does not fail the
+// project. After a cancel it is skipped: like every hook, it is bound to the run context.
+func (m *Manager) postBackupHook(ctx context.Context, command string, log zerolog.Logger) {
+	if strings.TrimSpace(command) == "" {
+		return
 	}
-	if err := m.hook(ctx, s.PostBackupCmd); err != nil {
+	if ctx.Err() != nil {
+		log.Warn().Msg("post-backup hook skipped because the run was cancelled")
+		return
+	}
+	if err := m.hook(ctx, command); err != nil {
 		log.Error().Err(err).Msg("post-backup hook failed")
 	}
-	log.Info().Msg("project backup completed")
-	return complete, nil
 }
 
 // stopServices stops the project's running services and returns them, so that only

@@ -22,7 +22,7 @@ restor orchestrates **restic** backups of several **projects** on one host.
   they are backed up. Services are managed by a **service manager**: `docker-compose`,
   `podman-compose`, `systemd` (system or user scope) or `noop` (files only, nothing to stop).
 - **Per project:** lock → pre-backup hook → stop services → `restic backup --tag <project>`
-  → start services → post-backup hook.
+  → start services → post-backup hook (also after a failed backup).
 - **After all projects:** `restic forget --tag <project> <retention_policy>` per project,
   then one repository-wide `restic prune` and `restic unlock` (only with `auto_prune`).
 - **Modes:** `sequential` (one project after another, sorted by name) or `parallel` (one
@@ -313,6 +313,9 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 - Split on whitespace and executed directly (no shell): no quoting, pipes or redirects.
   Use a script for anything more.
 - Run with the merged environment and the run context.
+- The post-backup hook runs after the services are started again whenever the pre-backup
+  hook succeeded (or there is none), also when the backup or the restart failed, so it
+  can undo the pre-backup hook. It is skipped after a cancel (a warning).
 
 ### Service managers
 - Compose: `<docker|podman> compose -f <file> …`; services from `config --services` when
