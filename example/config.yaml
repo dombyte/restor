@@ -67,6 +67,7 @@ mode: sequential
 # Recommended for production to keep credentials separate from config
 # Supports: .env, .yaml, .yml, .json formats
 # Example: env_file: /etc/restor/env.yaml
+# Keep it private (chmod 600); restor warns at startup when others can access it.
 env_file: ""
 
 # Inline environment variables (override external file values)

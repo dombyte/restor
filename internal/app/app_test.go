@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -235,4 +236,27 @@ projects:
 			assert.NotContains(t, buf.String(), "cannot run in parallel")
 		}
 	}
+}
+
+func TestWarnEnvFileMode(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for _, tt := range []struct {
+		mode os.FileMode
+		warn bool
+	}{{0o600, false}, {0o400, false}, {0o640, true}, {0o604, true}} {
+		path := filepath.Join(dir, tt.mode.String())
+		require.NoError(t, os.WriteFile(path, nil, 0o600))
+		require.NoError(t, os.Chmod(path, tt.mode))
+		var buf bytes.Buffer
+
+		warnEnvFileMode(zerolog.New(&buf), path)
+
+		assert.Equal(t, tt.warn, strings.Contains(buf.String(), "accessible by other users"),
+			tt.mode)
+	}
+	var buf bytes.Buffer
+	warnEnvFileMode(zerolog.New(&buf), "")
+	warnEnvFileMode(zerolog.New(&buf), filepath.Join(dir, "missing"))
+	assert.Empty(t, buf.String())
 }

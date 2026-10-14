@@ -302,7 +302,8 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   `stop_timeout`/`start_timeout` (seconds) are ≥ 0 and > 0 when services are
   stopped. Unknown keys are ignored. Startup warns about them
   (typos such as `stop_service`), about projects sharing a compose file or unit in
-  parallel mode, about a `retention_policy` without `auto_prune` and
+  parallel mode, about an `env_file` that group or others can access (mode & 077), about
+  a `retention_policy` without `auto_prune` and
   about a missing repository (`restic_repo`, `RESTIC_REPOSITORY`, `RESTIC_REPOSITORY_FILE`).
 - `stop_services: false` backs up without stopping anything. Hooks: global
   `pre_backup_cmd`/`post_backup_cmd` are the default of every project, overridden per
