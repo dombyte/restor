@@ -171,7 +171,9 @@ global:
   # A project's own pre_backup_cmd/post_backup_cmd replaces them for that project.
   # They run once per project, around its backup:
   #   pre_backup_cmd fails (non-zero exit) -> the project fails, its services are not touched
-  #   post_backup_cmd fails -> logged, the project still counts as backed up
+  #   post_backup_cmd runs whenever pre_backup_cmd succeeded, also when the backup failed
+  #     (so it can undo the pre hook); not after a cancel (SIGTERM)
+  #   post_backup_cmd fails -> logged, does not change the project's result
   # Commands are split on spaces and run without a shell (no quotes, pipes or redirects);
   # use a script for anything more.
   # pre_backup_cmd: "/usr/local/bin/global-pre-backup-hook.sh"

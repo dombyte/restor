@@ -84,6 +84,11 @@ them all at once), `restic_repo`, `auto_prune`, `prune_options`, `pre_backup_cmd
 Only the services that are running when a project's backup starts are stopped, and only
 those are started again afterwards.
 
+**Hooks:** `pre_backup_cmd` runs before the services are stopped; if it fails, the
+project fails and nothing else runs. `post_backup_cmd` runs after the services are started
+again, also when the backup failed, so it can undo the pre hook. Hooks run without a
+shell (split on spaces); use a script for anything more.
+
 Relative `env_file`, `compose_file` and `sources` paths are resolved against the directory
 of the config file. restor checks the whole file at startup and lists every problem with
 its field path; unknown keys (typos) are reported as warnings.

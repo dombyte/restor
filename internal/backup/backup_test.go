@@ -205,15 +205,19 @@ func TestRunProject_FailureHandling(t *testing.T) {
 			},
 		},
 		{
-			name: "backup fails: services restarted, no post hook",
+			name: "backup fails: services restarted, post hook runs",
 			setup: func(f *fixture, s *mocks.MockServices) {
 				f.expectHook("pre", nil)
 				f.expectStop(s, true, nil)
 				f.expectBackup("web", assert.AnError)
 				f.expectStart(s, true, nil)
+				f.expectHook("post", nil)
 			},
 			wantErr: true,
-			want:    []string{"lock key", "hook pre", "stop", "backup web", "start", "release key"},
+			want: []string{
+				"lock key", "hook pre", "stop", "backup web", "start", "hook post",
+				"release key",
+			},
 		},
 		{
 			name: "incomplete snapshot: warning only, post hook runs",
@@ -230,15 +234,19 @@ func TestRunProject_FailureHandling(t *testing.T) {
 			},
 		},
 		{
-			name: "restart fails: project fails",
+			name: "restart fails: project fails, post hook runs",
 			setup: func(f *fixture, s *mocks.MockServices) {
 				f.expectHook("pre", nil)
 				f.expectStop(s, true, nil)
 				f.expectBackup("web", nil)
 				f.expectStart(s, false, assert.AnError)
+				f.expectHook("post", nil)
 			},
 			wantErr: true,
-			want:    []string{"lock key", "hook pre", "stop", "backup web", "start", "release key"},
+			want: []string{
+				"lock key", "hook pre", "stop", "backup web", "start", "hook post",
+				"release key",
+			},
 		},
 		{
 			name: "post-backup hook fails: project succeeds",
@@ -328,13 +336,14 @@ func TestRunProject_ServicesFail(t *testing.T) {
 	svc.EXPECT().LockKeys().Return([]string{"key"})
 	svc.EXPECT().Running(mock.Anything, mock.Anything).Return(nil, assert.AnError)
 	f.expectLock("key")
+	f.expectHook("post", nil)
 	p := project("web", svc)
 	p.Settings.PreBackupCmd = ""
 
 	err := errOf(f.manager(t, Settings{}).runProject(context.Background(), p))
 
 	require.ErrorIs(t, err, assert.AnError)
-	assert.Equal(t, []string{"lock key", "release key"}, f.rec.list())
+	assert.Equal(t, []string{"lock key", "hook post", "release key"}, f.rec.list())
 }
 
 func TestRunProject_Locked(t *testing.T) {
