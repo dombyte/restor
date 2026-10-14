@@ -350,6 +350,9 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   JSON (stderr) are skipped. Exit code 3 returns the ID with a `*restic.IncompleteError`;
   `backup` matches it through an `Incomplete() bool` interface, so it does not import
   `restic`.
+- Exit codes 10 (no repository), 11 (repository locked; hint: `--retry-lock`) and 12
+  (wrong password) are named in the error before the runner's error, which keeps only
+  restic's last output lines (JSON in backup).
 - `restic forget [forget_options] --tag <project> <retention_policy split on whitespace>`.
 - `restic [prune_options] prune` and `restic [prune_options] unlock`.
 - Every list option is passed as one argument per item: write `["-o", "s3.connections=10"]`

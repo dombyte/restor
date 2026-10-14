@@ -169,6 +169,10 @@ global:
     # - "--limit-upload=51200"
     # - "--limit-download=51200"
 
+    # Wait for a repository lock held by another host instead of failing (restic >= 0.16);
+    # also useful in forget_options when several hosts share the repository
+    # - "--retry-lock=10m"
+
   # Optional: default pre/post-backup hooks for EVERY project
   # A project's own pre_backup_cmd/post_backup_cmd replaces them for that project.
   # They run once per project, around its backup:

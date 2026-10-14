@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -184,4 +185,33 @@ func TestClient_PruneFails(t *testing.T) {
 
 	require.ErrorIs(t, c.Prune(context.Background(), nil), assert.AnError)
 	require.NoError(t, c.Unlock(context.Background(), nil))
+}
+
+func TestClient_ExitCodeCauses(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		code int
+		want error
+		text string
+	}{
+		{code: 10, want: errNoRepository, text: "restic: prune: repository does not exist"},
+		{code: 11, want: errLocked, text: "restic: prune: repository is locked"},
+		{code: 12, want: errWrongPassword, text: "restic: prune: wrong password"},
+		{code: 1, text: "restic: prune: exit status 1"},
+	}
+	for _, tt := range tests {
+		t.Run(strconv.Itoa(tt.code), func(t *testing.T) {
+			t.Parallel()
+			c, r := newClient(t)
+			r.EXPECT().Run(mock.Anything, "restic", "prune").Return(nil, exitError(tt.code))
+
+			err := c.Prune(context.Background(), nil)
+
+			require.ErrorIs(t, err, exitError(tt.code), "the runner's error is kept")
+			if tt.want != nil {
+				require.ErrorIs(t, err, tt.want)
+			}
+			assert.True(t, strings.HasPrefix(err.Error(), tt.text), err.Error())
+		})
+	}
 }
