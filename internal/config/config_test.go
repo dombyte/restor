@@ -272,6 +272,21 @@ func TestValidate_ProjectNames(t *testing.T) {
 	}
 }
 
+func TestLoad_InvalidEnvNames(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, dir, "env.json", `{"": "x", "A=B": "y", "OK": "z", "NUL": "a\u0000b"}`)
+	path := writeFile(t, dir, "config.yaml", "env_file: env.json\n")
+
+	_, err := Load(path, getenv(nil))
+
+	require.ErrorIs(t, err, ErrInvalid)
+	for _, key := range []string{"environments.:", "environments.A=B:", "environments.NUL:"} {
+		assert.Contains(t, err.Error(), key)
+	}
+	assert.NotContains(t, err.Error(), "environments.OK")
+}
+
 func TestValidate_FieldErrors(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{Projects: map[string]ProjectConfig{"a": {Sources: []string{"/a"}}}}

@@ -298,7 +298,9 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   the config file (systemd runs restor in `/`); hooks are not (they are commands).
 - Validation (all problems at once, with field paths): `mode` is `sequential` (default) or
   `parallel`; project names are not empty, do not start with `-` and contain no `,` or
-  whitespace (they are restic tags, and restic splits `--tag` on commas); per project `service_manager` and `sources` are required; `compose_file` for
+  whitespace (they are restic tags, and restic splits `--tag` on commas); environment
+  names (inline and from the env file) are not empty and contain no `=`, and no name or
+  value contains a NUL byte; per project `service_manager` and `sources` are required; `compose_file` for
   the compose managers, `systemd_units` for systemd; `systemd_scope` is `system` (default)
   or `user`; `services` of a systemd project are among its `systemd_units`;
   `stop_timeout`/`start_timeout` (seconds) are ≥ 0 and > 0 when services are
