@@ -46,11 +46,12 @@ func NewCompose(s ComposeSettings, d Deps) (*Compose, error) {
 	return &Compose{s: s, runner: d.Runner, clock: d.Clock}, nil
 }
 
-// LockKey returns the compose file path.
-func (c *Compose) LockKey() string { return c.s.File }
+// LockKeys returns the compose file path.
+func (c *Compose) LockKeys() []string { return []string{c.s.File} }
 
 // Running returns the services among requested (every service of the compose file when
-// it is empty) that have a running container.
+// it is empty) that have a running container. A requested name that is not a service of
+// the compose file is an error: a typo would otherwise back up a running service.
 func (c *Compose) Running(ctx context.Context, requested []string) ([]string, error) {
 	services, err := c.services(ctx, requested)
 	if err != nil {
@@ -65,16 +66,22 @@ func (c *Compose) Running(ctx context.Context, requested []string) ([]string, er
 
 // services returns a copy of requested, or every service of the compose file.
 func (c *Compose) services(ctx context.Context, requested []string) ([]string, error) {
-	if len(requested) > 0 {
-		return slices.Clone(requested), nil
-	}
 	ctx, cancel := context.WithTimeout(ctx, statusTimeout)
 	defer cancel()
 	out, err := c.run(ctx, "config", "--services")
 	if err != nil {
 		return nil, fmt.Errorf("servicemanager: list services of %s: %w", c.s.File, err)
 	}
-	return strings.Fields(string(out)), nil
+	all := strings.Fields(string(out))
+	if len(requested) == 0 {
+		return all, nil
+	}
+	for _, s := range requested {
+		if !slices.Contains(all, s) {
+			return nil, fmt.Errorf("servicemanager: %w: %q in %s", errUnknownService, s, c.s.File)
+		}
+	}
+	return slices.Clone(requested), nil
 }
 
 // Stop runs `stop -t <timeout> <services>` and waits until none of them is running. It
@@ -85,6 +92,7 @@ func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Dura
 	if len(services) == 0 {
 		return true, nil
 	}
+	deadline := c.clock.Now().Add(timeout)
 	cmdCtx, cancel := commandContext(ctx, timeout)
 	defer cancel()
 	args := append([]string{"stop", "-t", strconv.Itoa(int(timeout.Seconds()))}, services...)
@@ -92,7 +100,7 @@ func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Dura
 		!strings.Contains(strings.ToLower(string(out)), "no containers to stop") {
 		return false, fmt.Errorf("servicemanager: stop %s: %w", c.s.File, err)
 	}
-	return waitUntil(ctx, c.clock, timeout, func(ctx context.Context) (bool, error) {
+	return waitUntil(ctx, c.clock, deadline, func(ctx context.Context) (bool, error) {
 		running, err := c.running(ctx)
 		return err == nil && !anyOf(services, running), err
 	})
@@ -107,12 +115,13 @@ func (c *Compose) Start(ctx context.Context, services []string, timeout time.Dur
 	if len(services) == 0 {
 		return true, nil
 	}
+	deadline := c.clock.Now().Add(timeout)
 	cmdCtx, cancel := commandContext(ctx, timeout)
 	defer cancel()
 	if _, err := c.run(cmdCtx, append([]string{"start"}, services...)...); err != nil {
 		return false, fmt.Errorf("servicemanager: start %s: %w", c.s.File, err)
 	}
-	return waitUntil(ctx, c.clock, timeout, func(ctx context.Context) (bool, error) {
+	return waitUntil(ctx, c.clock, deadline, func(ctx context.Context) (bool, error) {
 		running, err := c.running(ctx)
 		return err == nil && allOf(services, running), err
 	})

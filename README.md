@@ -60,6 +60,11 @@ sudo loginctl enable-linger "$USER"   # keep the timer running while logged out
 To run a backup by hand: `restor --config <file>`. Logs: `journalctl -u restor` (or
 `journalctl --user -u restor`).
 
+On SIGINT/SIGTERM restor stops the running backups, restarts the services it stopped and
+exits within its shutdown timeout (the largest `start_timeout` + 4 minutes, logged as
+`shutdown_timeout`). The shipped units allow 900 s (`TimeoutStopSec`); raise it if a
+`start_timeout` is above 11 minutes.
+
 ## Configuration
 
 See `example/config.yaml` for all options and `example/restor.env` for an env file template.
@@ -79,19 +84,38 @@ them all at once), `restic_repo`, `auto_prune`, `prune_options`, `pre_backup_cmd
 Only the services that are running when a project's backup starts are stopped, and only
 those are started again afterwards.
 
+**Hooks:** `pre_backup_cmd` runs before the services are stopped; if it fails, the
+project fails and nothing else runs. `post_backup_cmd` runs after the services are started
+again, also when the backup failed, so it can undo the pre hook. Hooks run without a
+shell (split on spaces); use a script for anything more.
+
 Relative `env_file`, `compose_file` and `sources` paths are resolved against the directory
 of the config file. restor checks the whole file at startup and lists every problem with
 its field path; unknown keys (typos) are reported as warnings.
 
 **Environment:** `env_file` and inline `environments` are passed to restic, the service
 managers and the hooks (inline wins). `$VAR`, `${VAR}` and `${VAR:-default}` are expanded
-from the process environment when the config is loaded; write `$$` for a literal `$`
-(e.g. in a password). In `.env` files a value in single quotes is never expanded.
+from the process environment when the config is loaded; write `$$` for a literal `$`.
+In `.env` files a value in single quotes is never expanded.
 
-**Project names** are case-insensitive; the lowercase name is the restic tag.
+> **Secrets containing `$`:** expansion also applies to values from the env file (YAML,
+> JSON and unquoted or double-quoted `.env` values). An unset variable becomes empty, and
+> `$` followed by a digit or one of `!*#@?-` is replaced too, so `RESTIC_PASSWORD: "pa$word"`
+> becomes `pa` and restic fails with a wrong password. Write `pa$$word`, use a single-quoted
+> `.env` value (`RESTIC_PASSWORD='pa$word'`), or better, keep the password in a file
+> (`RESTIC_PASSWORD_FILE`), which is never expanded.
+
+**Retention:** with `auto_prune`, each project with a `retention_policy` runs `forget`
+after all backups, then one `prune` runs for the repository. A project that failed, or
+whose snapshot is incomplete (restic could not read some files), keeps its history, and
+prune waits for a run where every project has a complete snapshot.
+
+**Project names** are case-insensitive; the lowercase name is the restic tag. A name must
+not start with `-` or contain `,` or whitespace.
 
 **List options** (`prune_options`, `backup_options`, `forget_options`) are passed as one
 argument per item: write `["-o", "s3.connections=10"]` or `["--option=s3.connections=10"]`.
+A single string is one argument (`forget_options: --group-by=host,tags` keeps its comma).
 
 ## License
 

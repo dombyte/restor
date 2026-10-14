@@ -55,7 +55,7 @@ func TestWaitUntil(t *testing.T) {
 	t.Parallel()
 	clock := clocktest.New(time.Unix(0, 0))
 	calls := 0
-	ok, err := waitUntil(context.Background(), clock, 2*time.Second,
+	ok, err := waitUntil(context.Background(), clock, time.Unix(2, 0),
 		func(context.Context) (bool, error) {
 			calls++
 			return calls == 3, nil
@@ -69,7 +69,7 @@ func TestWaitUntil(t *testing.T) {
 func TestWaitUntil_Timeout(t *testing.T) {
 	t.Parallel()
 	clock := clocktest.New(time.Unix(0, 0))
-	ok, err := waitUntil(context.Background(), clock, 2*time.Second,
+	ok, err := waitUntil(context.Background(), clock, time.Unix(2, 0),
 		func(context.Context) (bool, error) { return false, nil })
 	require.NoError(t, err)
 	assert.False(t, ok)
@@ -79,7 +79,7 @@ func TestWaitUntil_Timeout(t *testing.T) {
 func TestWaitUntil_Error(t *testing.T) {
 	t.Parallel()
 	calls := 0
-	ok, err := waitUntil(context.Background(), clocktest.New(time.Unix(0, 0)), time.Second,
+	ok, err := waitUntil(context.Background(), clocktest.New(time.Unix(0, 0)), time.Unix(1, 0),
 		func(context.Context) (bool, error) {
 			calls++
 			return false, assert.AnError
@@ -92,7 +92,7 @@ func TestWaitUntil_Error(t *testing.T) {
 func TestWaitUntil_TransientError(t *testing.T) {
 	t.Parallel()
 	calls := 0
-	ok, err := waitUntil(context.Background(), clocktest.New(time.Unix(0, 0)), time.Second,
+	ok, err := waitUntil(context.Background(), clocktest.New(time.Unix(0, 0)), time.Unix(1, 0),
 		func(context.Context) (bool, error) {
 			calls++
 			if calls == 1 {
@@ -104,13 +104,26 @@ func TestWaitUntil_TransientError(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestWaitUntil_PollsOnceAfterDeadline(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	ok, err := waitUntil(context.Background(), clocktest.New(time.Unix(5, 0)), time.Unix(1, 0),
+		func(context.Context) (bool, error) {
+			calls++
+			return false, nil
+		})
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Equal(t, 1, calls, "a slow command used up the timeout: one last check")
+}
+
 func TestWaitUntil_Cancelled(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	// A closed context and a ready timer race in select; either way the loop must stop
 	// with the context error before the timeout.
-	_, err := waitUntil(ctx, blockingClock{}, time.Hour,
+	_, err := waitUntil(ctx, blockingClock{}, time.Unix(3600, 0),
 		func(context.Context) (bool, error) { return false, nil })
 	require.ErrorIs(t, err, context.Canceled)
 }
@@ -126,7 +139,7 @@ func TestNoop(t *testing.T) {
 	n := NewNoop(NoopSettings{LockKey: "noop_files"})
 	ctx := context.Background()
 
-	assert.Equal(t, "noop_files", n.LockKey())
+	assert.Equal(t, []string{"noop_files"}, n.LockKeys())
 	services, err := n.Running(ctx, []string{"a"})
 	require.NoError(t, err)
 	assert.Empty(t, services)

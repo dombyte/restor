@@ -47,46 +47,48 @@ func (_m *MockServices) EXPECT() *MockServices_Expecter {
 	return &MockServices_Expecter{mock: &_m.Mock}
 }
 
-// LockKey provides a mock function for the type MockServices
-func (_mock *MockServices) LockKey() string {
+// LockKeys provides a mock function for the type MockServices
+func (_mock *MockServices) LockKeys() []string {
 	ret := _mock.Called()
 
 	if len(ret) == 0 {
-		panic("no return value specified for LockKey")
+		panic("no return value specified for LockKeys")
 	}
 
-	var r0 string
-	if returnFunc, ok := ret.Get(0).(func() string); ok {
+	var r0 []string
+	if returnFunc, ok := ret.Get(0).(func() []string); ok {
 		r0 = returnFunc()
 	} else {
-		r0 = ret.Get(0).(string)
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
 	}
 	return r0
 }
 
-// MockServices_LockKey_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LockKey'
-type MockServices_LockKey_Call struct {
+// MockServices_LockKeys_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LockKeys'
+type MockServices_LockKeys_Call struct {
 	*mock.Call
 }
 
-// LockKey is a helper method to define mock.On call
-func (_e *MockServices_Expecter) LockKey() *MockServices_LockKey_Call {
-	return &MockServices_LockKey_Call{Call: _e.mock.On("LockKey")}
+// LockKeys is a helper method to define mock.On call
+func (_e *MockServices_Expecter) LockKeys() *MockServices_LockKeys_Call {
+	return &MockServices_LockKeys_Call{Call: _e.mock.On("LockKeys")}
 }
 
-func (_c *MockServices_LockKey_Call) Run(run func()) *MockServices_LockKey_Call {
+func (_c *MockServices_LockKeys_Call) Run(run func()) *MockServices_LockKeys_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run()
 	})
 	return _c
 }
 
-func (_c *MockServices_LockKey_Call) Return(s string) *MockServices_LockKey_Call {
-	_c.Call.Return(s)
+func (_c *MockServices_LockKeys_Call) Return(strings []string) *MockServices_LockKeys_Call {
+	_c.Call.Return(strings)
 	return _c
 }
 
-func (_c *MockServices_LockKey_Call) RunAndReturn(run func() string) *MockServices_LockKey_Call {
+func (_c *MockServices_LockKeys_Call) RunAndReturn(run func() []string) *MockServices_LockKeys_Call {
 	_c.Call.Return(run)
 	return _c
 }

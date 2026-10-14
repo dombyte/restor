@@ -29,6 +29,7 @@ var (
 
 	errUnexpectedOutput = errors.New("unexpected output")
 	errUnknownUnit      = errors.New("service is not one of the systemd units")
+	errUnknownService   = errors.New("service is not in the compose file")
 )
 
 // Runner executes a program and returns its combined output, also on failure.
@@ -52,12 +53,12 @@ func (d Deps) validate() error {
 }
 
 // waitUntil polls done every pollInterval until it reports true (true), ctx ends, or
-// timeout has passed (false). A failed poll (e.g. a status query that timed out) is
-// retried; its error is returned only when the last poll before the timeout failed.
-func waitUntil(ctx context.Context, clock util.Clock, timeout time.Duration,
+// deadline has passed (false); it polls at least once. A failed poll (e.g. a status query
+// that timed out) is retried; its error is returned only when the last poll before the
+// deadline failed.
+func waitUntil(ctx context.Context, clock util.Clock, deadline time.Time,
 	done func(ctx context.Context) (bool, error),
 ) (bool, error) {
-	deadline := clock.Now().Add(timeout)
 	for {
 		ok, err := done(ctx)
 		if err == nil && ok {
@@ -75,6 +76,8 @@ func waitUntil(ctx context.Context, clock util.Clock, timeout time.Duration,
 }
 
 // commandContext bounds a stop/start command by the configured timeout plus commandGrace.
+// The timeout counts from before the command, so a slow command shortens the wait that
+// follows: Stop and Start take at most timeout + commandGrace + one status query.
 func commandContext(ctx context.Context, timeout time.Duration) (context.Context,
 	context.CancelFunc,
 ) {

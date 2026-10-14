@@ -19,10 +19,6 @@ import (
 	"github.com/dombyte/restor/internal/app"
 )
 
-// shutdownTimeout bounds the run after SIGINT/SIGTERM: running projects restart their
-// services, then the process exits 1 regardless.
-const shutdownTimeout = 5 * time.Minute
-
 // Build information, set by the Makefile and goreleaser via -ldflags "-X main.Version=…".
 // -X can only set package-level string variables, hence the only globals in the binary.
 //
@@ -39,7 +35,8 @@ var (
 	errReported = errors.New("reported")
 	// errMissingConfig is returned when --config is not set.
 	errMissingConfig = errors.New(`required flag "config" not set`)
-	// errShutdownDeadline is returned when the run outlives shutdownTimeout after a signal.
+	// errShutdownDeadline is returned when the run outlives its shutdown timeout after a
+	// signal.
 	errShutdownDeadline = errors.New("shutdown deadline exceeded")
 )
 
@@ -137,7 +134,7 @@ func runBackup(ctx context.Context, configPath string, log zerolog.Logger) error
 	}
 	done := make(chan error, 1)
 	go func() { done <- a.Run(ctx) }()
-	if err := waitForRun(ctx, done, log); err != nil {
+	if err := waitForRun(ctx, done, a.ShutdownTimeout(), log); err != nil {
 		log.Error().Err(err).Msg("backup run failed")
 		return errReported
 	}
@@ -145,20 +142,22 @@ func runBackup(ctx context.Context, configPath string, log zerolog.Logger) error
 	return nil
 }
 
-// waitForRun waits for the run to finish; after ctx is cancelled it waits at most
-// shutdownTimeout.
-func waitForRun(ctx context.Context, done <-chan error, log zerolog.Logger) error {
+// waitForRun waits for the run to finish; after ctx is cancelled it waits at most timeout
+// (the time the running projects need to restart their services), then gives up.
+func waitForRun(ctx context.Context, done <-chan error, timeout time.Duration,
+	log zerolog.Logger,
+) error {
 	select {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
 	}
-	log.Warn().Dur("timeout", shutdownTimeout).
+	log.Warn().Dur("timeout", timeout).
 		Msg("shutdown requested, waiting for running projects to restart their services")
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(shutdownTimeout):
+	case <-time.After(timeout):
 		return errShutdownDeadline
 	}
 }

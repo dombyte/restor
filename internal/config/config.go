@@ -7,10 +7,12 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/pelletier/go-toml/v2"
@@ -105,7 +107,9 @@ func decode(raw map[string]any, cfg *Config) ([]string, error) {
 		Result:           cfg,
 		Metadata:         &md,
 		WeaklyTypedInput: true,
-		DecodeHook:       mapstructure.StringToSliceHookFunc(","),
+		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			stringToArgsHook, mapstructure.StringToSliceHookFunc(","),
+		),
 	})
 	if err != nil {
 		return nil, err
@@ -115,6 +119,19 @@ func decode(raw map[string]any, cfg *Config) ([]string, error) {
 	}
 	slices.Sort(md.Unused)
 	return md.Unused, nil
+}
+
+// stringToArgsHook decodes a single string for an Args field as one argument, before
+// StringToSliceHookFunc would split it on commas.
+func stringToArgsHook(from, to reflect.Type, data any) (any, error) {
+	str, ok := data.(string)
+	if !ok || from.Kind() != reflect.String || to != reflect.TypeFor[Args]() {
+		return data, nil
+	}
+	if str == "" {
+		return []string{}, nil
+	}
+	return []string{str}, nil
 }
 
 // lowerProjectNames makes project names lowercase: they are case-insensitive and the
@@ -197,10 +214,40 @@ func (c *Config) Validate() error {
 			Path: "mode", Problem: fmt.Sprintf("must be %q or %q", ModeSequential, ModeParallel),
 		})
 	}
+	errs = append(errs, validateEnv(c.Environments)...)
 	for _, name := range sortedKeys(c.Projects) {
+		if !validName(name) {
+			errs = append(errs, &FieldError{
+				Path:    "projects." + name,
+				Problem: `name must not be empty, start with "-" or contain "," or whitespace`,
+			})
+		}
 		errs = append(errs, validateProject("projects."+name, c.Projects[name])...)
 	}
 	return errors.Join(errs...)
+}
+
+// validateEnv checks that every variable can be passed to a program: exec rejects names
+// that are empty or contain "=" and NUL bytes anywhere, which would fail every command.
+func validateEnv(env map[string]string) []error {
+	var errs []error
+	for _, key := range sortedKeys(env) {
+		if key == "" || strings.ContainsAny(key, "=\x00") || strings.ContainsRune(env[key], 0) {
+			errs = append(errs, &FieldError{
+				Path:    "environments." + key,
+				Problem: `name must not be empty or contain "=", and no NUL bytes`,
+			})
+		}
+	}
+	return errs
+}
+
+// validName reports whether a project name works as a restic tag: restic splits --tag
+// values on commas (so "web,db" would also match the snapshots of "web"), and a leading
+// "-" or whitespace breaks the command line.
+func validName(name string) bool {
+	return name != "" && !strings.HasPrefix(name, "-") &&
+		!strings.ContainsFunc(name, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
 }
 
 func validateProject(path string, p ProjectConfig) []error {

@@ -42,8 +42,8 @@ func New(env []string, log zerolog.Logger) *Runner {
 
 // Run executes name with args and returns its combined stdout and stderr (the last
 // maxOutput bytes). A non-zero exit returns the output too, with an error that carries
-// the last lines of it. When ctx ends, the program gets SIGTERM, then SIGKILL after
-// waitDelay.
+// the last lines of it. When ctx ends, the program's process group gets SIGTERM, the
+// program SIGKILL after waitDelay, and what is left of the group SIGKILL when it ended.
 func (r *Runner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	if name == "" {
 		return nil, ErrEmptyCommand
@@ -54,11 +54,21 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) ([]byte, 
 	// they run directly, without a shell.
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // see above
 	cmd.Env = r.env
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	// Its own process group, so that a cancel also reaches the processes it started (a
+	// hook script's children), not only the program itself.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return signalGroup(cmd.Process.Pid, syscall.SIGTERM) }
 	cmd.WaitDelay = waitDelay
 	buf := &tailBuffer{max: maxOutput}
 	cmd.Stdout, cmd.Stderr = buf, buf
 	err := cmd.Run()
+	if ctx.Err() != nil && cmd.Process != nil {
+		// Kill what is left of a cancelled group: after waitDelay exec only kills the
+		// program itself.
+		if kerr := signalGroup(cmd.Process.Pid, syscall.SIGKILL); kerr != nil {
+			r.log.Warn().Err(kerr).Str("program", name).Msg("cannot kill process group")
+		}
+	}
 	out := buf.Bytes()
 	if err != nil {
 		return out, &Error{Program: name, Output: tail(out, maxOutputLines), Err: err}
@@ -66,6 +76,15 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) ([]byte, 
 	r.log.Debug().Str("program", name).Str("output", tail(out, maxOutputLines)).
 		Msg("command finished")
 	return out, nil
+}
+
+// signalGroup sends sig to the process group led by pid; a group that has already exited
+// is not an error.
+func signalGroup(pid int, sig syscall.Signal) error {
+	if err := syscall.Kill(-pid, sig); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("command: signal process group %d: %w", pid, err)
+	}
+	return nil
 }
 
 // tailBuffer is an io.Writer that keeps only the last max bytes written to it.

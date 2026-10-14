@@ -28,10 +28,10 @@ func expectCompose(r *mocks.MockRunner, args ...any) *mock.Call {
 	return r.On("Run", all...)
 }
 
-func TestCompose_LockKey(t *testing.T) {
+func TestCompose_LockKeys(t *testing.T) {
 	t.Parallel()
 	c, _ := newCompose(t)
-	assert.Equal(t, composeFile, c.LockKey())
+	assert.Equal(t, []string{composeFile}, c.LockKeys())
 }
 
 func TestCompose_Running(t *testing.T) {
@@ -39,6 +39,7 @@ func TestCompose_Running(t *testing.T) {
 	ps := []byte(`{"Service":"web","State":"running"}` + "\n" +
 		`{"Service":"db","State":"exited"}`)
 	c, r := newCompose(t)
+	expectCompose(r, "config", "--services").Return([]byte("web\ndb\njob\n\n"), nil).Times(4)
 	expectCompose(r, "ps", "--format", "json").Return(ps, nil).Once()
 	requested := []string{"web", "db"}
 	got, err := c.Running(context.Background(), requested)
@@ -46,18 +47,27 @@ func TestCompose_Running(t *testing.T) {
 	assert.Equal(t, []string{"web"}, got)
 	assert.Equal(t, []string{"web", "db"}, requested, "requested is not modified")
 
-	expectCompose(r, "config", "--services").Return([]byte("web\ndb\njob\n\n"), nil).Once()
 	expectCompose(r, "ps", "--format", "json").Return(ps, nil).Once()
 	got, err = c.Running(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"web"}, got)
 
-	expectCompose(r, "config", "--services").Return(nil, assert.AnError).Once()
-	_, err = c.Running(context.Background(), nil)
-	require.ErrorIs(t, err, assert.AnError)
-
 	expectCompose(r, "ps", "--format", "json").Return(nil, assert.AnError).Once()
 	_, err = c.Running(context.Background(), []string{"web"})
+	require.ErrorIs(t, err, assert.AnError)
+
+	_, err = c.Running(context.Background(), []string{"web", "postgress"})
+	require.ErrorIs(t, err, errUnknownService, "a typo must not skip the stop silently")
+	assert.Contains(t, err.Error(), `"postgress"`)
+}
+
+func TestCompose_RunningListFails(t *testing.T) {
+	t.Parallel()
+	c, r := newCompose(t)
+	expectCompose(r, "config", "--services").Return(nil, assert.AnError).Once()
+
+	_, err := c.Running(context.Background(), []string{"web"})
+
 	require.ErrorIs(t, err, assert.AnError)
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,25 +92,25 @@ func TestCreateServiceManager(t *testing.T) {
 		Runner: nopRunner{}, Clock: clocktest.New(time.Unix(0, 0)),
 	}
 	tests := []struct {
-		project config.Project
-		lockKey string
-		wantErr error
+		project  config.Project
+		lockKeys []string
+		wantErr  error
 	}{
 		{
-			project: config.Project{ServiceManager: config.ManagerDockerCompose, ComposeFile: "/d"},
-			lockKey: "/d",
+			project:  config.Project{ServiceManager: config.ManagerDockerCompose, ComposeFile: "/d"},
+			lockKeys: []string{"/d"},
 		},
 		{
-			project: config.Project{ServiceManager: config.ManagerPodmanCompose, ComposeFile: "/p"},
-			lockKey: "/p",
+			project:  config.Project{ServiceManager: config.ManagerPodmanCompose, ComposeFile: "/p"},
+			lockKeys: []string{"/p"},
 		},
 		{project: config.Project{
-			ServiceManager: config.ManagerSystemd, SystemdUnits: []string{"a", "b"},
+			ServiceManager: config.ManagerSystemd, SystemdUnits: []string{"b", "a"},
 			SystemdScope: config.ScopeUser,
-		}, lockKey: "a,b"},
+		}, lockKeys: []string{"a", "b"}},
 		{
-			project: config.Project{Name: "files", ServiceManager: config.ManagerNoop},
-			lockKey: "noop-files",
+			project:  config.Project{Name: "files", ServiceManager: config.ManagerNoop},
+			lockKeys: []string{"noop-files"},
 		},
 		{project: config.Project{ServiceManager: "nope"}, wantErr: ErrUnknownType},
 		{
@@ -126,7 +127,7 @@ func TestCreateServiceManager(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tt.lockKey, s.LockKey())
+			assert.Equal(t, tt.lockKeys, s.LockKeys())
 		})
 	}
 }
@@ -208,5 +209,54 @@ func TestWarnConfig_Quiet(t *testing.T) {
 		[]string{"RESTIC_REPOSITORY_FILE=/etc/repo"})
 	warnConfig(log, &config.Config{Global: config.GlobalConfig{ResticRepo: "/r"}}, nil, nil)
 
+	assert.Empty(t, buf.String())
+}
+
+func TestNew_WarnsAboutSharedLocksInParallelMode(t *testing.T) {
+	t.Parallel()
+	projects := `
+projects:
+  a: {service_manager: docker-compose, compose_file: /c.yml, sources: [/a],
+      stop_timeout: 1, start_timeout: 1}
+  b: {service_manager: docker-compose, compose_file: /c.yml, sources: [/b],
+      stop_timeout: 1, start_timeout: 1}
+  c: {service_manager: noop, sources: [/c]}
+`
+	for _, mode := range []string{"parallel", "sequential"} {
+		var buf bytes.Buffer
+		o := options(writeConfig(t, "mode: "+mode+"\n"+projects))
+		o.Log = zerolog.New(&buf)
+
+		_, err := New(o)
+
+		require.NoError(t, err)
+		if mode == "parallel" {
+			assert.Contains(t, buf.String(), `"project":"b","other_project":"a","lock":"/c.yml"`)
+		} else {
+			assert.NotContains(t, buf.String(), "cannot run in parallel")
+		}
+	}
+}
+
+func TestWarnEnvFileMode(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for _, tt := range []struct {
+		mode os.FileMode
+		warn bool
+	}{{0o600, false}, {0o400, false}, {0o640, true}, {0o604, true}} {
+		path := filepath.Join(dir, tt.mode.String())
+		require.NoError(t, os.WriteFile(path, nil, 0o600))
+		require.NoError(t, os.Chmod(path, tt.mode))
+		var buf bytes.Buffer
+
+		warnEnvFileMode(zerolog.New(&buf), path)
+
+		assert.Equal(t, tt.warn, strings.Contains(buf.String(), "accessible by other users"),
+			tt.mode)
+	}
+	var buf bytes.Buffer
+	warnEnvFileMode(zerolog.New(&buf), "")
+	warnEnvFileMode(zerolog.New(&buf), filepath.Join(dir, "missing"))
 	assert.Empty(t, buf.String())
 }

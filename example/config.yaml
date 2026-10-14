@@ -18,6 +18,8 @@
 #     * Faster for independent projects
 #     * Higher resource usage (memory, I/O, network)
 #     * Use when projects don't share dependencies
+#     * Projects sharing a compose file or systemd unit lock each other out (warned at
+#       startup): all but one fail
 #   - "sequential": Projects backup one after another, sorted by project name
 #     * Lower resource usage
 #     * Slower overall but more controlled
@@ -65,11 +67,14 @@ mode: sequential
 # Recommended for production to keep credentials separate from config
 # Supports: .env, .yaml, .yml, .json formats
 # Example: env_file: /etc/restor/env.yaml
+# Keep it private (chmod 600); restor warns at startup when others can access it.
 env_file: ""
 
 # Inline environment variables (override external file values)
 # These are passed to both restic and docker compose commands
 # Use ${VAR_NAME} syntax to reference system environment variables; $$ is a literal $
+# Values from env_file are expanded too: a secret containing "$" must write it as "$$"
+# ("pa$word" would become "pa"), or come from a file such as RESTIC_PASSWORD_FILE
 environments:
   # ========================================
   # Restic Authentication (choose ONE method)
@@ -143,8 +148,9 @@ global:
   # GLOBAL: Enable/disable automatic pruning
   # When true: Each project with retention_policy runs 'forget', then ONE 'prune' runs for entire repo
   # This is efficient as prune only needs to run once after all forget operations
-  # When a project fails, only the projects that were backed up run 'forget'; prune is
-  # skipped until a run where every project succeeds
+  # When a project fails or its snapshot is incomplete (unreadable files, restic exit code
+  # 3), only the projects with a complete snapshot run 'forget'; prune is skipped until a
+  # run where every project has a complete snapshot
   # When false: You must manually run prune, or use restic's auto-prune features
   auto_prune: true
 
@@ -164,11 +170,17 @@ global:
     # - "--limit-upload=51200"
     # - "--limit-download=51200"
 
+    # Wait for a repository lock held by another host instead of failing (restic >= 0.16);
+    # also useful in forget_options when several hosts share the repository
+    # - "--retry-lock=10m"
+
   # Optional: default pre/post-backup hooks for EVERY project
   # A project's own pre_backup_cmd/post_backup_cmd replaces them for that project.
   # They run once per project, around its backup:
   #   pre_backup_cmd fails (non-zero exit) -> the project fails, its services are not touched
-  #   post_backup_cmd fails -> logged, the project still counts as backed up
+  #   post_backup_cmd runs whenever pre_backup_cmd succeeded, also when the backup failed
+  #     (so it can undo the pre hook); not after a cancel (SIGTERM)
+  #   post_backup_cmd fails -> logged, does not change the project's result
   # Commands are split on spaces and run without a shell (no quotes, pipes or redirects);
   # use a script for anything more.
   # pre_backup_cmd: "/usr/local/bin/global-pre-backup-hook.sh"
@@ -190,8 +202,10 @@ global:
 #   of this file.
 #   - stop_timeout: Timeout in seconds for stopping services (> 0 when services are stopped)
 #   - start_timeout: Timeout in seconds for starting services (> 0 when services are stopped)
+#     Both cover the stop/start command and the wait until the services are down/up.
 #
-# Project names are case-insensitive; the lowercase name is the restic tag.
+# Project names are case-insensitive; the lowercase name is the restic tag. A name must not
+# start with "-" or contain "," or whitespace.
 #
 # OPTIONAL fields for each project:
 #   - retention_policy: Retention policy for snapshots (forget runs only with auto_prune;
@@ -201,7 +215,7 @@ global:
 #     * Useful for databases, high-availability services, or when using filesystem snapshots
 #   - services: List of specific services to stop/start (default: all from service manager;
 #     only the ones running at backup time are stopped and started again;
-#     for systemd every name must be one of systemd_units)
+#     every name must be a service of the compose file / one of systemd_units)
 #   - systemd_scope: For systemd only - "system" (default) or "user" for user-level services
 #   - backup_options: Additional restic options for backup command only
 #   - forget_options: Additional restic options for forget command only

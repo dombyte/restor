@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -29,17 +30,40 @@ func TestNew_MissingRunner(t *testing.T) {
 	require.ErrorIs(t, err, ErrMissingDependency)
 }
 
+// Output of restic 0.19 `backup --json`, shortened.
+const (
+	jsonSummary = `{"message_type":"summary","files_new":1,"files_changed":2,` +
+		`"files_unmodified":3,"dirs_new":4,"dirs_changed":0,"dirs_unmodified":6,` +
+		`"data_added":3875,"total_files_processed":6,"total_bytes_processed":4096,` +
+		`"total_duration":1.5,"snapshot_id":"9fdba01e5a142c12d6a3a1c83f9218b7973d232933fc"}`
+	jsonStatus = `{"message_type":"status","percent_done":0.5}`
+	jsonError  = `{"message_type":"error","error":{"message":"open /a/secret: ` +
+		`permission denied"},"during":"archival","item":"/a/secret"}`
+	jsonExit3 = `{"message_type":"exit_error","code":3,"message":"Warning: at least one ` +
+		`source file could not be read"}`
+)
+
 func TestClient_Backup(t *testing.T) {
 	t.Parallel()
-	c, r := newClient(t)
-	r.EXPECT().Run(mock.Anything, "restic", "backup", "--exclude=*.tmp", "--tag", "web",
-		"/a", "/b").Return([]byte("Files: 3 new\nsnapshot 1a2b3c4d saved\n"), nil)
+	var buf bytes.Buffer
+	r := mocks.NewMockRunner(t)
+	c, err := New(Deps{Runner: r, Log: zerolog.New(&buf)})
+	require.NoError(t, err)
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--exclude=*.tmp", "--tag",
+		"web", "/a", "/b").Return([]byte(jsonStatus+"\n"+jsonSummary+"\n"), nil)
 
 	id, err := c.Backup(context.Background(), "web", []string{"/a", "/b"},
 		[]string{"--exclude=*.tmp"})
 
 	require.NoError(t, err)
-	assert.Equal(t, "1a2b3c4d", id)
+	assert.Equal(t, "9fdba01e", id, "the short ID")
+	for _, field := range []string{
+		`"files_new":1`, `"files_changed":2`, `"files_unmodified":3`, `"dirs_new":4`,
+		`"bytes_added":3875`, `"files_processed":6`, `"bytes_processed":4096`,
+		`"duration":1500`,
+	} {
+		assert.Contains(t, buf.String(), field)
+	}
 }
 
 // exitError fakes the exec error of a program that exited with code.
@@ -50,37 +74,49 @@ func (e exitError) ExitCode() int { return int(e) }
 
 func TestClient_BackupIncomplete(t *testing.T) {
 	t.Parallel()
-	var buf bytes.Buffer
-	r := mocks.NewMockRunner(t)
-	c, err := New(Deps{Runner: r, Log: zerolog.New(&buf)})
-	require.NoError(t, err)
-	out := "error: open /a/secret: permission denied\n" +
-		"Files:           1 new,     0 changed,     2 unmodified\n" +
-		"Added to the repository: 1.5 KiB (900 B   stored)\n" +
-		"processed 3 files, 4 KiB in 0:01\nsnapshot 1a2b3c4d saved\n" +
-		"Warning: at least one source file could not be read\n"
-	r.EXPECT().Run(mock.Anything, "restic", "backup", "--tag", "web", "/a").
+	c, r := newClient(t)
+	out := jsonError + "\n" + jsonSummary + "\n" + jsonExit3 + "\n"
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--tag", "web", "/a").
 		Return([]byte(out), fmt.Errorf("command: restic: %w", exitError(3)))
 
 	id, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
 
-	assert.Equal(t, "1a2b3c4d", id)
+	assert.Equal(t, "9fdba01e", id)
 	var incomplete *IncompleteError
 	require.ErrorAs(t, err, &incomplete)
 	assert.True(t, incomplete.Incomplete())
 	assert.Contains(t, err.Error(), "snapshot incomplete")
 	var exit exitError
 	require.ErrorAs(t, err, &exit, "the runner's error is kept")
-	assert.Contains(t, buf.String(), `"files":"1 new, 0 changed, 2 unmodified"`)
-	assert.Contains(t, buf.String(), `"added":"1.5 KiB (900 B stored)"`)
-	assert.Contains(t, buf.String(), `"processed":"3 files, 4 KiB in 0:01"`)
+}
+
+func TestClient_BackupWithoutSnapshot(t *testing.T) {
+	t.Parallel()
+	tests := []struct{ name, out string }{
+		{name: "dry run", out: jsonSummary[:len(jsonSummary)-1] + `,"dry_run":true}`},
+		{name: "no summary", out: "Warning: something\n" + jsonStatus},
+		{name: "empty", out: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, r := newClient(t)
+			r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--tag", "web", "/a").
+				Return([]byte(tt.out), nil)
+
+			id, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
+
+			require.NoError(t, err)
+			assert.Empty(t, id)
+		})
+	}
 }
 
 func TestClient_BackupOtherExitCodeFails(t *testing.T) {
 	t.Parallel()
 	c, r := newClient(t)
-	r.EXPECT().Run(mock.Anything, "restic", "backup", "--tag", "web", "/a").
-		Return([]byte("snapshot 1a2b3c4d saved\n"), exitError(1))
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--tag", "web", "/a").
+		Return([]byte(jsonSummary), exitError(1))
 
 	id, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
 
@@ -100,7 +136,7 @@ func TestClient_BackupNoSources(t *testing.T) {
 func TestClient_BackupFails(t *testing.T) {
 	t.Parallel()
 	c, r := newClient(t)
-	r.EXPECT().Run(mock.Anything, "restic", "backup", "--tag", "web", "/a").
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--tag", "web", "/a").
 		Return(nil, assert.AnError)
 
 	_, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
@@ -151,21 +187,31 @@ func TestClient_PruneFails(t *testing.T) {
 	require.NoError(t, c.Unlock(context.Background(), nil))
 }
 
-func TestParseSnapshotID(t *testing.T) {
+func TestClient_ExitCodeCauses(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name, output, want string
+		code int
+		want error
+		text string
 	}{
-		{name: "saved line", output: "processed 3 files\nsnapshot abc123 saved\n", want: "abc123"},
-		{name: "indented", output: "  snapshot abc123 saved  ", want: "abc123"},
-		{name: "missing", output: "Fatal: unable to open repository", want: ""},
-		{name: "other snapshot line", output: "snapshot abc123 loaded", want: ""},
-		{name: "empty", output: "", want: ""},
+		{code: 10, want: errNoRepository, text: "restic: prune: repository does not exist"},
+		{code: 11, want: errLocked, text: "restic: prune: repository is locked"},
+		{code: 12, want: errWrongPassword, text: "restic: prune: wrong password"},
+		{code: 1, text: "restic: prune: exit status 1"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(strconv.Itoa(tt.code), func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tt.want, parseSnapshotID(tt.output))
+			c, r := newClient(t)
+			r.EXPECT().Run(mock.Anything, "restic", "prune").Return(nil, exitError(tt.code))
+
+			err := c.Prune(context.Background(), nil)
+
+			require.ErrorIs(t, err, exitError(tt.code), "the runner's error is kept")
+			if tt.want != nil {
+				require.ErrorIs(t, err, tt.want)
+			}
+			assert.True(t, strings.HasPrefix(err.Error(), tt.text), err.Error())
 		})
 	}
 }

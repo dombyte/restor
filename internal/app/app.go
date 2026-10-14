@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -23,6 +24,9 @@ import (
 	"github.com/dombyte/restor/internal/servicemanager"
 	"github.com/dombyte/restor/internal/util"
 )
+
+// envFileOthersMask are the permission bits that let group or others access the env file.
+const envFileOthersMask os.FileMode = 0o077
 
 // ErrUnknownType is returned by CreateServiceManager for an unknown service manager.
 var ErrUnknownType = errors.New("app: unknown service manager")
@@ -79,6 +83,10 @@ func (a *App) Run(ctx context.Context) error {
 	return a.manager.Run(ctx)
 }
 
+// ShutdownTimeout returns how long Run may take after its context was cancelled, so that
+// every project can restart the services it stopped.
+func (a *App) ShutdownTimeout() time.Duration { return a.manager.ShutdownTimeout() }
+
 type managerDeps struct {
 	runner, resticRunner *command.Runner
 	clock                util.Clock
@@ -116,8 +124,12 @@ func createManager(cfg *config.Config, projects []config.Project, d managerDeps)
 		}
 		bps = append(bps, backup.Project{Settings: projectSettings(p), Services: services})
 	}
+	parallel := cfg.RunMode() == config.ModeParallel
+	if parallel {
+		warnSharedLocks(d.log, bps)
+	}
 	return backup.NewManager(backup.Settings{
-		Parallel:     cfg.RunMode() == config.ModeParallel,
+		Parallel:     parallel,
 		AutoPrune:    cfg.Global.AutoPrune,
 		PruneOptions: cfg.Global.PruneOptions,
 	}, bps, backup.Deps{
@@ -191,6 +203,23 @@ func warnConfig(log zerolog.Logger, cfg *config.Config, projects []config.Projec
 	if len(projects) > 0 && cfg.Global.ResticRepo == "" && !hasRepository(env) {
 		log.Warn().Msg("no restic repository: set global.restic_repo or RESTIC_REPOSITORY")
 	}
+	warnEnvFileMode(log, cfg.EnvFile)
+}
+
+// warnEnvFileMode warns when the env file, which usually holds the restic password, can
+// be read or changed by other users. It is only a warning: the file still works.
+func warnEnvFileMode(log zerolog.Logger, path string) {
+	if path == "" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return // config.Load already read it; a race here is not worth a warning
+	}
+	if info.Mode().Perm()&envFileOthersMask != 0 {
+		log.Warn().Str("env_file", path).Str("mode", info.Mode().Perm().String()).
+			Msg("env_file is accessible by other users; restrict it with chmod 600")
+	}
 }
 
 // warnIgnoredRetention warns about each project with a retention policy.
@@ -211,6 +240,23 @@ func hasRepository(env []string) bool {
 		vars[k] = v
 	}
 	return vars["RESTIC_REPOSITORY"] != "" || vars["RESTIC_REPOSITORY_FILE"] != ""
+}
+
+// warnSharedLocks warns about projects that share a lock key (a compose file or a systemd
+// unit): in parallel mode they start at the same time, so all but one fail as locked.
+func warnSharedLocks(log zerolog.Logger, projects []backup.Project) {
+	owner := map[string]string{}
+	for _, p := range projects {
+		for _, key := range p.Services.LockKeys() {
+			if first, ok := owner[key]; ok {
+				log.Warn().Str("project", p.Settings.Name).Str("other_project", first).
+					Str("lock", key).Msg("projects share services and cannot run in " +
+					"parallel: one of them will fail as locked; use mode: sequential")
+				continue
+			}
+			owner[key] = p.Settings.Name
+		}
+	}
 }
 
 // warnMissingBinaries warns about programs the run will need but PATH does not have.
