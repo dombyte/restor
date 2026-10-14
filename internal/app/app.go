@@ -25,6 +25,9 @@ import (
 	"github.com/dombyte/restor/internal/util"
 )
 
+// envFileOthersMask are the permission bits that let group or others access the env file.
+const envFileOthersMask os.FileMode = 0o077
+
 // ErrUnknownType is returned by CreateServiceManager for an unknown service manager.
 var ErrUnknownType = errors.New("app: unknown service manager")
 
@@ -199,6 +202,23 @@ func warnConfig(log zerolog.Logger, cfg *config.Config, projects []config.Projec
 	}
 	if len(projects) > 0 && cfg.Global.ResticRepo == "" && !hasRepository(env) {
 		log.Warn().Msg("no restic repository: set global.restic_repo or RESTIC_REPOSITORY")
+	}
+	warnEnvFileMode(log, cfg.EnvFile)
+}
+
+// warnEnvFileMode warns when the env file, which usually holds the restic password, can
+// be read or changed by other users. It is only a warning: the file still works.
+func warnEnvFileMode(log zerolog.Logger, path string) {
+	if path == "" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return // config.Load already read it; a race here is not worth a warning
+	}
+	if info.Mode().Perm()&envFileOthersMask != 0 {
+		log.Warn().Str("env_file", path).Str("mode", info.Mode().Perm().String()).
+			Msg("env_file is accessible by other users; restrict it with chmod 600")
 	}
 }
 
