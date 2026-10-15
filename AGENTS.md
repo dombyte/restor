@@ -72,8 +72,8 @@ restor orchestrates **restic** backups of several **projects** on one host.
 make check                                                # ./scripts/pre-commit.sh, check-only
 golangci-lint fmt --config .golangci.yml                  # gofumpt + goimports
 golangci-lint run --config .golangci.yml                  # full linter set (section 12)
-go run golang.org/x/tools/cmd/deadcode@v0.52.0 -test ./... # unused exported code
-go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...     # known vulnerabilities
+go tool deadcode -test ./... # unused exported code
+go tool govulncheck ./...     # known vulnerabilities
 go test -race ./...                                       # all unit tests, as in CI
 go tool mockery                                           # regenerate mocks (.mockery.yaml)
 make build                                                # ./restor with version info (ldflags)
@@ -93,15 +93,17 @@ make build                                                # ./restor with versio
   at startup.
 - A real run needs `restic` and the service manager binaries on `PATH` (missing ones are
   warned about at startup); unit tests must not.
-- Mocks: mockery v3 is a `tool` directive in `go.mod` (bump with
-  `go get -tool github.com/vektra/mockery/v3@vX.Y.Z`); `go tool mockery` generates them
+- Mocks: mockery v3 is a Go tool (see below); `go tool mockery` generates them
   from `.mockery.yaml` into `internal/<pkg>/mocks`. CI checks them for drift (not part of
   `make check`); regenerate after changing an interface.
-- Tool versions are pinned (pinned `go run` commands, golangci-lint action `version:`,
-  mockery in `go.mod`) and bumped deliberately, the same version locally and in CI.
-  mockery is a `go tool` rather than a pinned `go run` because `go run` checks its ~20
-  modules against sum.golang.org on every CI run, and a checksum-DB hiccup can fail the
-  mock drift job.
+- Tool versions are pinned (`tool` directives in `go.mod`, golangci-lint action
+  `version:`) and bumped deliberately, the same version locally and in CI. Go tools
+  (mockery, deadcode, govulncheck) are `tool` directives, run with `go tool <name>` and
+  bumped with `go get -tool <module>@vX.Y.Z`, rather than pinned `go run` commands: those
+  check their modules against sum.golang.org on every CI run, and a checksum-DB hiccup
+  can fail CI. golangci-lint is not one: it would pull ~300 modules into restor's module
+  graph and upgrade the app's own dependencies; its maintainers support only prebuilt
+  binaries.
 - Go itself is the `go` directive in `go.mod`: CI installs it (`go-version-file`), and
   `scripts/pre-commit.sh` sets `GOTOOLCHAIN` to it, so `make check` uses the same release
   even on a distro Go. A distro build's version (e.g. `go1.26.8-X:nodwarf5`) makes
@@ -614,15 +616,14 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
 ### Renovate
 Renovate is the only dependency updater (no Dependabot). Its config is written for this
 project:
-- `enabledManagers` lists exactly the ecosystems restor has: `gomod`, `github-actions`,
-  plus `custom.regex` for the regex managers below.
+- `enabledManagers` lists exactly the ecosystems restor has: `gomod` (incl. the Go
+  tools), `github-actions`, plus `custom.regex` for the regex manager below.
 - Every pinned version in the repo is tracked. Versions no built-in manager sees get a
-  `customManagers` regex: pinned `go run` commands in workflows, scripts and this file,
-  and the golangci-lint `version:` of the CI action.
+  `customManagers` regex; today only the golangci-lint `version:` of the CI action (the
+  `github-actions` manager tracks the action, not that input).
 - Updates that need manual work (Go module majors = new module path, golangci-lint majors
   = config migration) are disabled with a `description` saying why.
-- Text that only describes a pinning pattern must not match a regex manager (write
-  "pinned `go run` commands", not a literal tool-at-version string).
+- Text that only describes a pinning pattern must not match a regex manager.
 - A change that adds a new pinned version extends `renovate.json` in the same change.
 
 ---

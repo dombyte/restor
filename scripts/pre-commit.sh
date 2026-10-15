@@ -58,7 +58,7 @@ print_result $? "golangci-lint run"
 
 # 3. Unused exported code (golangci's unused only sees unexported identifiers)
 echo "Checking for dead code..."
-DEAD=$(go run golang.org/x/tools/cmd/deadcode@v0.52.0 -test ./... 2>&1)
+DEAD=$(go tool deadcode -test ./... 2>&1)
 if [ -n "$DEAD" ]; then
     echo "$DEAD"
     print_result 1 "deadcode"
@@ -68,7 +68,7 @@ fi
 
 # 4. Known vulnerabilities in dependencies and the standard library
 echo "Checking for vulnerabilities..."
-go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+go tool govulncheck ./...
 print_result $? "govulncheck"
 
 # 5. Build
