@@ -299,3 +299,10 @@ func TestApp_CheckResticWarnsAboutNewerReleases(t *testing.T) {
 		assert.Contains(t, buf.String(), `"restic_version":"`+tt.version+`"`)
 	}
 }
+
+func TestKeepLabel(t *testing.T) {
+	t.Parallel()
+	for n, want := range map[int]string{0: "A", 25: "Z", 26: "AA", 27: "AB", 52: "BA"} {
+		assert.Equal(t, want, keepLabel(n), n)
+	}
+}

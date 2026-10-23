@@ -360,8 +360,10 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - `restor run [job...]`: one backup cycle of all or the named jobs (`Plan.Select`;
   unknown names are an error). Ordering against jobs that are not selected is dropped.
 - `restor validate`: loads and wires everything, then prints the jobs in the order they
-  start with concurrency 1 (`Manager.Order`), with type, after, stop, keep and sources;
-  never the repository URL (it may hold credentials).
+  start with concurrency 1 (`Manager.Order`), with type, after, stop, a keep label and
+  sources, and below them each distinct retention policy once with its label (A, B, … in
+  order of first use; `-` = never forgotten) and its jobs; never the repository URL (it
+  may hold credentials).
 - `restor restic <args>`: `restic <repository global flags> <args>` with the restic
   environment, attached to the terminal (`command.Runner.Attach`); restor's flags must
   come before the first restic argument (`SetInterspersed(false)`).
