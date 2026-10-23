@@ -24,7 +24,7 @@ func (f *File) validate() []error {
 	v.check(valueOr(f.Concurrency, DefaultConcurrency) >= 0, "concurrency", "must be >= 0")
 	v.check(len(f.Jobs) > 0, "jobs", "at least one job is required")
 	v.repository(f.Repository)
-	v.at("defaults").common(f.Defaults)
+	v.at("defaults").common(f, f.Defaults)
 	for _, name := range sortedKeys(f.Jobs) {
 		jv := v.at("jobs." + name)
 		jv.check(validName(name), "",
@@ -92,8 +92,9 @@ func (v *validator) repository(r RepositoryConfig) {
 	}
 }
 
-// common checks the fields a job shares with the defaults section.
-func (v *validator) common(d Defaults) {
+// common checks the fields a job shares with the defaults section; f gives the job
+// names.
+func (v *validator) common(f *File, d Defaults) {
 	durations := map[string]*Duration{
 		"stop_timeout": d.StopTimeout, "start_timeout": d.StartTimeout,
 		"backup_timeout": d.BackupTimeout,
@@ -113,6 +114,11 @@ func (v *validator) common(d Defaults) {
 			`a size such as "500M" or "2G"`)
 	}
 	v.tags("tags", d.Tags)
+	for _, t := range d.Tags {
+		_, isJob := f.Jobs[strings.ToLower(t)]
+		v.check(!isJob, "tags", fmt.Sprintf("%q is the name of a job: forgetting that job "+
+			"would also select these snapshots", t))
+	}
 	if d.Keep != nil {
 		v.at("keep").keep(*d.Keep)
 	}
@@ -138,17 +144,24 @@ func (v *validator) keep(k Keep) {
 		"within_weekly": k.WithinWeekly, "within_monthly": k.WithinMonthly,
 		"within_yearly": k.WithinYearly,
 	}
+	rule := false
 	for _, field := range sortedKeys(within) {
 		if within[field] != "" {
+			rule = true
 			v.matches(withinPattern, within[field], field, `a duration such as "30d" or "1y6m"`)
 		}
 	}
+	for _, n := range counts {
+		rule = rule || n > 0
+	}
 	v.tags("tags", k.Tags)
+	v.check(rule || len(k.Tags) == 0, "tags", "needs another rule (last, daily, within, …): "+
+		"with tags alone restic forgets every other snapshot, also the newest")
 }
 
 // job checks one job; f gives the defaults and the other job names.
 func (v *validator) job(f *File, name string, j JobConfig) {
-	v.common(j.Defaults)
+	v.common(f, j.Defaults)
 	v.check(len(j.Sources) > 0, "sources", "required")
 	v.check(!slices.Contains(j.Sources, ""), "sources", "must not contain empty entries")
 	v.references(f, name, "before", j.Before)

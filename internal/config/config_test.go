@@ -389,3 +389,90 @@ func TestLoad_ExampleConfig(t *testing.T) {
 	require.NoError(t, err, "example/config.yaml must stay valid")
 	assert.NotEmpty(t, plan.Jobs)
 }
+
+func TestLoad_AnchorsAndMergeKeys(t *testing.T) {
+	t.Parallel()
+	plan, err := load(t, `version: 2
+x-compose: &compose
+  type: docker-compose
+  compose_file: /srv/app/compose.yml
+  stop_timeout: 10s
+x-files: &files {sources: [/srv/app/data]}
+jobs:
+  db:
+    <<: [*compose, *files]
+    services: [db]
+  web:
+    <<: *compose
+    sources: [/srv/app/web]
+`, nil)
+
+	require.NoError(t, err)
+	db, web := plan.Jobs[0], plan.Jobs[1]
+	assert.Equal(t, TypeDockerCompose, db.Type)
+	assert.Equal(t, []string{"/srv/app/data"}, db.Sources)
+	assert.Equal(t, 10*time.Second, web.StopTimeout)
+	assert.Equal(t, "/srv/app/compose.yml", web.ComposeFile)
+}
+
+func TestLoad_UnknownKeysInMergedMappings(t *testing.T) {
+	t.Parallel()
+	_, err := load(t, `version: 2
+x-common: &common {stop_service: true}
+x-list: &list [{sources: [/a]}]
+jobs:
+  web:
+    <<: *common
+    sources: [/a]
+  db: *common
+nested:
+  x-not-top: 1
+`, nil)
+
+	require.ErrorIs(t, err, ErrInvalid)
+	for _, want := range []string{
+		"jobs.web.stop_service: unknown key (line 2)",
+		"jobs.db.stop_service: unknown key (line 2)",
+		"nested: unknown key",
+	} {
+		assert.Contains(t, err.Error(), want)
+	}
+}
+
+func TestLoad_SafetyChecks(t *testing.T) {
+	t.Parallel()
+	tests := []struct{ name, config, want string }{
+		{
+			"tag is a job", "jobs: {web: {sources: [/a], tags: [DB]}, db: {sources: [/b]}}",
+			`jobs.web.tags: "DB" is the name of a job`,
+		},
+		{
+			"default tag is a job", "defaults: {tags: [web]}\njobs: {web: {sources: [/a]}}",
+			`defaults.tags: "web" is the name of a job`,
+		},
+		{
+			"keep tags alone", "defaults: {keep: {tags: [important]}}\njobs: {a: {sources: [/a]}}",
+			"defaults.keep.tags: needs another rule",
+		},
+		{
+			"home source", "jobs: {a: {sources: [~/data]}}",
+			`jobs.a.sources: "~/data": ~ is not expanded`,
+		},
+		{
+			"home env file", "repository: {env_file: ~/restic.env}\njobs: {a: {sources: [/a]}}",
+			`repository.env_file: "~/restic.env": ~ is not expanded`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := load(t, "version: 2\n"+tt.config, nil)
+			require.ErrorIs(t, err, ErrInvalid)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+
+	_, err := load(t, "version: 2\njobs: {a: {sources: [/a], keep: {daily: 7, tags: [x]}}}",
+		nil)
+	require.NoError(t, err, "tags next to another rule are fine")
+}
