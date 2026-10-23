@@ -123,18 +123,21 @@ func (c *Client) run(ctx context.Context, command string, args ...string) ([]byt
 	return c.runner.Run(ctx, program, slices.Concat(c.s.GlobalArgs, []string{command}, args)...)
 }
 
-// Backup runs `restic backup --json [args] --tag=<tag> -- <sources>` and returns the short
-// ID of the new snapshot, or "" when restic reports none. args come from BackupFlags.Args.
-// An incomplete snapshot returns its ID together with an *IncompleteError, a snapshot
-// that --skip-if-unchanged skipped an *UnchangedError.
+// Backup runs `restic backup --json --group-by=host,tags [args] --tag=<tag> -- <sources>`
+// and returns the short ID of the new snapshot, or "" when restic reports none. args come
+// from BackupFlags.Args. An incomplete snapshot returns its ID together with an
+// *IncompleteError, a snapshot that --skip-if-unchanged skipped an *UnchangedError.
 func (c *Client) Backup(ctx context.Context, tag string, sources, args []string) (
 	string, error,
 ) {
 	if len(sources) == 0 {
 		return "", ErrNoSources
 	}
-	out, err := c.run(ctx, "backup", slices.Concat([]string{"--json"}, args,
-		[]string{"--tag=" + tag, "--"}, sources)...)
+	// The parent snapshot comes from the job's own snapshots (its tags include the job
+	// name): by restic's default (host,paths) a job with the same sources as another would
+	// compare against that job's snapshot, and --skip-if-unchanged would skip its own.
+	out, err := c.run(ctx, "backup", slices.Concat([]string{"--json", "--group-by=host,tags"},
+		args, []string{"--tag=" + tag, "--"}, sources)...)
 	if err != nil && !isExit(err, exitIncomplete) {
 		return "", failed("backup "+tag, err)
 	}
