@@ -624,6 +624,13 @@ project:
 - Updates that need manual work (Go module majors = new module path, golangci-lint majors
   = config migration) are disabled with a `description` saying why.
 - Text that only describes a pinning pattern must not match a regex manager.
+- **Auto-merge:** Renovate proposes a version only once it is 3 days old
+  (`minimumReleaseAge`; security updates at once) and merges minor, patch and digest
+  updates itself with a merge commit once the required checks pass, only between 00:00
+  and 06:00 Europe/Berlin (`automergeSchedule`). Renovate merges, not GitHub
+  (`platformAutomerge: false`): GitHub's auto-merge is armed when the PR is opened and
+  would ignore the schedule. Majors and lock file maintenance stay manual PRs. Releases
+  are still tagged by hand.
 - A change that adds a new pinned version extends `renovate.json` in the same change.
 
 ---
@@ -634,6 +641,7 @@ project:
 - Changes go through a PR from a `type/description` branch (`feat/…`, `fix/…`, `docs/…`,
   `refactor/…`, `chore/…`). The maintainer MAY commit or merge directly into `main`
   (ruleset bypass, 15.5) after `make check` passes; CI then runs on the pushed commit.
+  Bots such as Renovate always need a PR with green checks.
 - Merge: regular merge by default; squash or rebase only with user confirmation.
 - Only rewrite history that is not on any remote.
 
@@ -675,9 +683,9 @@ feat(config)!: rename env prefix to RESTOR_
 ```
 
 ### 15.3 Review
-- The required CI checks MUST be green before a PR is merged. Approvals are set in the
-  ruleset: 0 while the maintainer is the only reviewer, otherwise 1; the author MAY merge
-  after approval.
+- The required CI checks MUST be green before a PR is merged. No approval is required
+  while the maintainer is the only reviewer; Renovate merges its own non-major PRs
+  (section 14).
 
 ### 15.4 Batching
 Several small changes MAY share one PR, so they cost one review and few CI runs while each
@@ -691,13 +699,16 @@ change keeps its own branch and merge commit:
    (regular merge) once CI is green.
 
 ### 15.5 Branch protection (MUST)
-`main` is protected by a repository ruleset (not classic branch protection):
+`main` (`~DEFAULT_BRANCH`) is protected by two repository rulesets (not classic branch
+protection):
 
-- Rules: block deletion and force pushes, require signed commits, require a pull request,
-  require the `checks.yml` job names as status checks with "branches must be up to date"
-  on.
-- Bypass list: only the Repository admin role, mode "always". Bots (Renovate) and other
+- "main: signed commits": every commit signed; no bypass, not even for the admin.
+- "main: required checks": the `checks.yml` jobs `Gate`, `golangci-lint` and
+  `Build, test, deadcode, govulncheck` must pass, with "branches must be up to date" on.
+  Bypass: only the Repository admin role, mode "always". Bots (Renovate) and other
   contributors are never on the bypass list.
+- Renaming one of these jobs means updating the ruleset in the same change, or every PR
+  waits for a check that never reports.
 - `checks.yml` runs on every PR, every direct push to `main` and every release tag, but not
   again on the merge commit of a PR: a `gate` job asks the API
   (`repos/{repo}/commits/{sha}/pulls`) whether the pushed commit is a PR's
