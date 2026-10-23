@@ -219,10 +219,11 @@ func TestWarnRelativeHooks(t *testing.T) {
 	warnRelativeHooks(zerolog.New(&buf), plan)
 
 	out := buf.String()
-	assert.Contains(t, out, `"job":"","hook":"notify/x"`)
-	assert.Contains(t, out, `"job":"rel","hook":"./hooks/pre.sh"`)
-	assert.Contains(t, out, `"job":"rel","hook":"bin/post"`)
-	assert.NotContains(t, out, `"job":"ok"`, "absolute paths and PATH lookups are fine")
+	assert.Contains(t, out, `"field":"on_failure","hook":"notify/x"`)
+	assert.Contains(t, out, `"field":"jobs.rel.pre","hook":"./hooks/pre.sh"`)
+	assert.Contains(t, out, `"field":"jobs.rel.post","hook":"bin/post"`)
+	assert.NotContains(t, out, `jobs.ok`, "absolute paths and PATH lookups are fine")
+	assert.NotContains(t, out, `"job":`)
 }
 
 func TestWarnEnvFileMode(t *testing.T) {
