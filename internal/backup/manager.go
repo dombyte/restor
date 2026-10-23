@@ -154,6 +154,17 @@ func (m *Manager) ShutdownTimeout() time.Duration {
 	return shutdownGrace + restart
 }
 
+// Order returns the job names in the order they start with concurrency 1.
+func (m *Manager) Order() []string {
+	s := newSchedule(m.jobs, 1)
+	var names []string
+	for next := s.next(); len(next) > 0; next = s.next() {
+		names = append(names, m.jobs[next[0]].Settings.Name)
+		s.finish(next[0])
+	}
+	return names
+}
+
 // runJobs runs the jobs as the schedule allows and returns the result of each, by index.
 // It starts one goroutine per job and waits for all of them before it returns.
 func (m *Manager) runJobs(ctx context.Context) []result {
