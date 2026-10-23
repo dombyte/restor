@@ -96,14 +96,13 @@ func (m *Manager) runJob(ctx context.Context, j Job) result {
 	s := j.Settings
 	log := m.d.Log.With().Str("job", s.Name).Logger()
 	releases, err := m.lockAll(j.Services.LockKeys())
-	r := result{outcome: outcomeFailed, err: err}
+	r := result{outcome: outcomeFailed, err: fmt.Errorf("backup: %s: %w", s.Name, err)}
 	if err == nil {
 		log.Info().Msg("starting job")
 		r = m.backupJob(ctx, j, log)
 	}
 	m.releaseAll(releases, log)
 	if r.outcome == outcomeFailed {
-		r.err = fmt.Errorf("backup: %s: %w", s.Name, r.err)
 		log.Error().Err(r.err).Msg("job failed")
 		m.jobHook(ctx, s, hookOnFailure, r, log)
 	}
@@ -136,13 +135,17 @@ func (m *Manager) releaseAll(releases []func() error, log zerolog.Logger) {
 
 // backupJob runs the hooks around the service stop/start and the backup of a locked job.
 // Once the pre hook succeeded, the post hook always runs, also when the backup failed, so
-// it can undo what the pre hook did (e.g. a maintenance mode).
+// it can undo what the pre hook did (e.g. a maintenance mode). An error names the job.
 func (m *Manager) backupJob(ctx context.Context, j Job, log zerolog.Logger) result {
 	s := j.Settings
 	if err := m.hook(ctx, s.Pre, hookEnv(hookPre, s.Name, result{})); err != nil {
-		return result{outcome: outcomeFailed, err: fmt.Errorf("pre hook: %w", err)}
+		return result{outcome: outcomeFailed, err: fmt.Errorf("backup: %s: pre hook: %w",
+			s.Name, err)}
 	}
 	r := m.backupWithServices(ctx, j, log)
+	if r.err != nil {
+		r.err = fmt.Errorf("backup: %s: %w", s.Name, r.err)
+	}
 	m.jobHook(ctx, s, hookPost, r, log)
 	if r.outcome != outcomeFailed {
 		log.Info().Msg("job completed")
