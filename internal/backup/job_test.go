@@ -459,6 +459,30 @@ func TestRunJob_HookEnvironment(t *testing.T) {
 	}, envs["post"])
 }
 
+func TestRunJob_FailedHookEnvironment(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expectLock("key")
+	f.expectBackup("web", assert.AnError)
+	envs := map[string][]string{}
+	f.hooks.EXPECT().RunEnv(mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, env []string, name string, _ ...string) (
+			[]byte, error,
+		) {
+			envs[name] = env
+			return nil, nil
+		}).Twice()
+	j := job("web", f.services(t, "key"))
+	j.Settings.Pre, j.Settings.Post, j.Settings.OnFailure = "", "post", "failed"
+
+	r := f.manager(t, Settings{}).runJob(context.Background(), j)
+
+	require.ErrorIs(t, r.err, assert.AnError)
+	want := "RESTOR_ERROR=backup: web: " + assert.AnError.Error()
+	assert.Contains(t, envs["post"], want, "post and on_failure get the same error")
+	assert.Contains(t, envs["failed"], want)
+}
+
 func TestHookEnv_Incomplete(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, []string{
