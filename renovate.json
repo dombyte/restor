@@ -46,6 +46,13 @@
       "enabled": false
     },
     {
+      "description": "goreleaser majors change the .goreleaser.yaml format; upgrade by hand",
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["goreleaser/goreleaser"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
       "matchManagers": ["github-actions"],
       "groupName": "GitHub Actions"
     }
@@ -59,6 +66,15 @@
       "depNameTemplate": "golangci/golangci-lint",
       "datasourceTemplate": "github-releases",
       "versioningTemplate": "semver-coerced"
+    },
+    {
+      "description": "goreleaser version pinned in the release action (`version: vX.Y.Z`); the github-actions manager only tracks the action itself",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      "matchStrings": ["goreleaser/goreleaser-action@\\S+\\s+with:\\s+distribution:\\s*goreleaser\\s+version:\\s*(?<currentValue>v\\d+\\.\\d+\\.\\d+)"],
+      "depNameTemplate": "goreleaser/goreleaser",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
     }
   ],
   "lockFileMaintenance": {
