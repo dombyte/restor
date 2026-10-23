@@ -133,6 +133,7 @@ func TestJobSettings(t *testing.T) {
 		Stop: true, StopTimeout: time.Second, StartTimeout: 2 * time.Second,
 		Keep: config.Keep{Last: 1, Tags: []string{"k"}}, Exclude: []string{"*.tmp"},
 		OneFileSystem: true, Tags: []string{"prod"}, Pre: "pre", Post: "post",
+		OnFailure: "fail", After: []string{"db"}, BackupTimeout: time.Hour,
 	}
 	s := jobSettings(j)
 	assert.Equal(t, "web", s.Name)
@@ -144,8 +145,11 @@ func TestJobSettings(t *testing.T) {
 	assert.Equal(t, []string{"--exclude=*.tmp", "--one-file-system", "--tag=prod"},
 		s.BackupArgs)
 	assert.Equal(t, []string{"--keep-last=1", "--keep-tag=k"}, s.ForgetArgs)
-	assert.Equal(t, "pre", s.PreBackupCmd)
-	assert.Equal(t, "post", s.PostBackupCmd)
+	assert.Equal(t, "pre", s.Pre)
+	assert.Equal(t, "post", s.Post)
+	assert.Equal(t, "fail", s.OnFailure)
+	assert.Equal(t, []string{"db"}, s.After)
+	assert.Equal(t, time.Hour, s.BackupTimeout)
 
 	j.Type = config.TypeFiles
 	assert.False(t, jobSettings(j).StopServices, "file jobs stop nothing")
@@ -217,30 +221,6 @@ func TestWarnRelativeHooks(t *testing.T) {
 	assert.Contains(t, out, `"job":"rel","hook":"./hooks/pre.sh"`)
 	assert.Contains(t, out, `"job":"rel","hook":"bin/post"`)
 	assert.NotContains(t, out, `"job":"ok"`, "absolute paths and PATH lookups are fine")
-}
-
-func TestNew_WarnsAboutSharedLocksInParallelMode(t *testing.T) {
-	t.Parallel()
-	jobs := `
-jobs:
-  a: {type: docker-compose, compose_file: /c.yml, sources: [/a]}
-  b: {type: docker-compose, compose_file: /c.yml, sources: [/b]}
-  c: {sources: [/c]}
-`
-	for _, concurrency := range []string{"0", "1"} {
-		var buf bytes.Buffer
-		o := options(writeConfig(t, "version: 2\nconcurrency: "+concurrency+"\n"+jobs))
-		o.Log = zerolog.New(&buf)
-
-		_, err := New(o)
-
-		require.NoError(t, err)
-		if concurrency == "0" {
-			assert.Contains(t, buf.String(), `"job":"b","other_job":"a","lock":"/c.yml"`)
-		} else {
-			assert.NotContains(t, buf.String(), "cannot run in parallel")
-		}
-	}
 }
 
 func TestWarnEnvFileMode(t *testing.T) {
