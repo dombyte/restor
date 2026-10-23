@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,7 +18,7 @@ func fileProject(f *fixture, t *testing.T, name, policy string) Project {
 	t.Helper()
 	p := project(name, f.services(t, name))
 	p.Settings.PreBackupCmd, p.Settings.PostBackupCmd = "", ""
-	p.Settings.RetentionPolicy = policy
+	p.Settings.ForgetArgs = strings.Fields(policy)
 	return p
 }
 
@@ -47,7 +48,7 @@ func TestManager_RunParallel(t *testing.T) {
 	f.expectBackup("a", nil)
 	f.expectBackup("b", assert.AnError)
 	f.expectBackup("c", nil)
-	f.restic.EXPECT().Forget(mock.Anything, "a", "--keep-last 1", []string(nil)).
+	f.restic.EXPECT().Forget(mock.Anything, "a", []string{"--keep-last", "1"}).
 		Return(nil).Once()
 	m := f.manager(t, Settings{Parallel: true, AutoPrune: true},
 		fileProject(f, t, "a", "--keep-last 1"), fileProject(f, t, "b", "--keep-last 1"),
@@ -65,18 +66,17 @@ func TestManager_RunParallel(t *testing.T) {
 func TestManager_Maintenance(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	opts := []string{"--cache-dir=/c"}
 	for _, name := range []string{"a", "b", "c"} {
 		f.expectLock(name)
 		f.expectBackup(name, nil)
 	}
-	f.restic.EXPECT().Forget(mock.Anything, "a", "--keep-last 1", []string(nil)).
+	f.restic.EXPECT().Forget(mock.Anything, "a", []string{"--keep-last", "1"}).
 		Return(assert.AnError).Once()
-	f.restic.EXPECT().Forget(mock.Anything, "c", "--keep-daily 7", []string(nil)).
+	f.restic.EXPECT().Forget(mock.Anything, "c", []string{"--keep-daily", "7"}).
 		Return(nil).Once()
-	f.restic.EXPECT().Prune(mock.Anything, opts).Return(assert.AnError).Once()
-	f.restic.EXPECT().Unlock(mock.Anything, opts).Return(assert.AnError).Once()
-	m := f.manager(t, Settings{AutoPrune: true, PruneOptions: opts},
+	f.restic.EXPECT().Prune(mock.Anything).Return(assert.AnError).Once()
+	f.restic.EXPECT().Unlock(mock.Anything).Return(assert.AnError).Once()
+	m := f.manager(t, Settings{AutoPrune: true},
 		fileProject(f, t, "a", "--keep-last 1"), fileProject(f, t, "b", ""),
 		fileProject(f, t, "c", "--keep-daily 7"))
 
@@ -147,7 +147,7 @@ func TestManager_IncompleteSnapshotKeepsHistory(t *testing.T) {
 			f.expectBackup("a", nil)
 			f.restic.EXPECT().Backup(mock.Anything, "b", mock.Anything, mock.Anything).
 				Return(tt.id, tt.err).Once()
-			f.restic.EXPECT().Forget(mock.Anything, "a", "--keep-last 1", []string(nil)).
+			f.restic.EXPECT().Forget(mock.Anything, "a", []string{"--keep-last", "1"}).
 				Return(nil).Once()
 			m := f.manager(t, Settings{AutoPrune: true},
 				fileProject(f, t, "a", "--keep-last 1"), fileProject(f, t, "b", "--keep-last 1"))

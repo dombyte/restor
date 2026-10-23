@@ -30,11 +30,10 @@ type ProjectSettings struct {
 	// StopTimeout and StartTimeout bound waiting for the services.
 	StopTimeout  time.Duration
 	StartTimeout time.Duration
-	// RetentionPolicy is passed to forget, split on whitespace; empty skips forget.
-	RetentionPolicy string
-	// BackupOptions and ForgetOptions are extra restic options.
-	BackupOptions []string
-	ForgetOptions []string
+	// BackupArgs are the restic backup flags.
+	BackupArgs []string
+	// ForgetArgs are the restic forget flags (the retention policy); empty skips forget.
+	ForgetArgs []string
 	// PreBackupCmd and PostBackupCmd are hooks, split on whitespace (no shell).
 	PreBackupCmd  string
 	PostBackupCmd string
@@ -187,7 +186,7 @@ func (m *Manager) startServices(ctx context.Context, p Project, services []strin
 func (m *Manager) backup(ctx context.Context, s ProjectSettings, log zerolog.Logger) (
 	bool, error,
 ) {
-	id, err := m.d.Restic.Backup(ctx, s.Name, s.Sources, s.BackupOptions)
+	id, err := m.d.Restic.Backup(ctx, s.Name, s.Sources, s.BackupArgs)
 	var incomplete interface{ Incomplete() bool }
 	if errors.As(err, &incomplete) && incomplete.Incomplete() {
 		log.Warn().Err(err).Str("snapshot_id", id).

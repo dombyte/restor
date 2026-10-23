@@ -30,9 +30,9 @@ var (
 // Restic runs restic commands against the repository.
 type Restic interface {
 	Backup(ctx context.Context, tag string, sources, opts []string) (string, error)
-	Forget(ctx context.Context, tag, policy string, opts []string) error
-	Prune(ctx context.Context, opts []string) error
-	Unlock(ctx context.Context, opts []string) error
+	Forget(ctx context.Context, tag string, args []string) error
+	Prune(ctx context.Context) error
+	Unlock(ctx context.Context) error
 }
 
 // Services stops and starts the services of one project. LockKeys name what it manages
@@ -64,8 +64,6 @@ type Settings struct {
 	Parallel bool
 	// AutoPrune runs forget per project with a retention policy, then prune and unlock.
 	AutoPrune bool
-	// PruneOptions are global restic options for prune and unlock.
-	PruneOptions []string
 }
 
 // Project is one project and its service manager.
@@ -222,7 +220,7 @@ func (m *Manager) maintain(ctx context.Context, outcomes []outcome) {
 func (m *Manager) forgetAll(ctx context.Context, outcomes []outcome) bool {
 	forgot := false
 	for i, p := range m.projects {
-		if p.Settings.RetentionPolicy == "" {
+		if len(p.Settings.ForgetArgs) == 0 {
 			continue
 		}
 		switch outcomes[i] {
@@ -240,21 +238,21 @@ func (m *Manager) forgetAll(ctx context.Context, outcomes []outcome) bool {
 // forget applies the retention policy of one project; a failure is only logged.
 func (m *Manager) forget(ctx context.Context, s ProjectSettings) {
 	log := m.d.Log.With().Str("project", s.Name).Logger()
-	if err := m.d.Restic.Forget(ctx, s.Name, s.RetentionPolicy, s.ForgetOptions); err != nil {
+	if err := m.d.Restic.Forget(ctx, s.Name, s.ForgetArgs); err != nil {
 		log.Error().Err(err).Msg("forget failed")
 		return
 	}
-	log.Info().Str("retention_policy", s.RetentionPolicy).Msg("forget completed")
+	log.Info().Strs("keep", s.ForgetArgs).Msg("forget completed")
 }
 
 // prune runs prune and unlock for the whole repository; failures are only logged.
 func (m *Manager) prune(ctx context.Context) {
-	if err := m.d.Restic.Prune(ctx, m.s.PruneOptions); err != nil {
+	if err := m.d.Restic.Prune(ctx); err != nil {
 		m.d.Log.Error().Err(err).Msg("prune failed")
 	} else {
 		m.d.Log.Info().Msg("prune completed")
 	}
-	if err := m.d.Restic.Unlock(ctx, m.s.PruneOptions); err != nil {
+	if err := m.d.Restic.Unlock(ctx); err != nil {
 		m.d.Log.Error().Err(err).Msg("unlock failed")
 	}
 }

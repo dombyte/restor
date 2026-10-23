@@ -1,6 +1,8 @@
-// Package restic wraps the restic CLI: backup, forget, prune and unlock. The repository
-// and its credentials come from the runner's environment (RESTIC_REPOSITORY,
-// RESTIC_PASSWORD_FILE, …), so they never appear in arguments or logs.
+// Package restic wraps the restic CLI: backup, forget, prune, unlock and version. The
+// repository and its credentials come from the runner's environment (RESTIC_REPOSITORY,
+// RESTIC_PASSWORD_FILE, …), so they never appear in arguments or logs. The restic flags
+// are built here from typed settings (Repository, BackupFlags, Keep, PruneFlags); no
+// caller passes raw restic arguments.
 package restic
 
 import (
@@ -10,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -40,7 +41,7 @@ var (
 
 	errNoRepository = errors.New("repository does not exist (create it with restic init)")
 	errLocked       = errors.New("repository is locked by another process " +
-		"(add --retry-lock=<duration> to the options to wait for it)")
+		"(set repository.retry_lock to wait for it)")
 	errWrongPassword = errors.New("wrong password or no key found")
 )
 
@@ -78,31 +79,47 @@ type Deps struct {
 	Log zerolog.Logger
 }
 
+// Settings configure a Client.
+type Settings struct {
+	// GlobalArgs come before the command of every restic call (Repository.Args).
+	GlobalArgs []string
+	// PruneArgs are the options of prune (PruneFlags.Args).
+	PruneArgs []string
+}
+
 // Client runs restic commands against one repository.
 type Client struct {
+	s      Settings
 	runner Runner
 	log    zerolog.Logger
 }
 
 // New returns a Client.
-func New(d Deps) (*Client, error) {
+func New(s Settings, d Deps) (*Client, error) {
 	if err := util.RequireAll(ErrMissingDependency,
 		util.Requirement{Name: "Runner", OK: d.Runner != nil},
 	); err != nil {
 		return nil, err
 	}
-	return &Client{runner: d.Runner, log: d.Log}, nil
+	return &Client{s: s, runner: d.Runner, log: d.Log}, nil
 }
 
-// Backup runs `restic backup --json [opts] --tag <tag> <sources>` and returns the short ID
-// of the new snapshot, or "" when restic reports none (also for --dry-run). An incomplete
-// snapshot returns its ID together with an *IncompleteError.
-func (c *Client) Backup(ctx context.Context, tag string, sources, opts []string) (string, error) {
+// run runs restic with the global arguments, then command and args.
+func (c *Client) run(ctx context.Context, command string, args ...string) ([]byte, error) {
+	return c.runner.Run(ctx, program, slices.Concat(c.s.GlobalArgs, []string{command}, args)...)
+}
+
+// Backup runs `restic backup --json [args] --tag=<tag> -- <sources>` and returns the short
+// ID of the new snapshot, or "" when restic reports none. args come from BackupFlags.Args.
+// An incomplete snapshot returns its ID together with an *IncompleteError.
+func (c *Client) Backup(ctx context.Context, tag string, sources, args []string) (
+	string, error,
+) {
 	if len(sources) == 0 {
 		return "", ErrNoSources
 	}
-	args := slices.Concat([]string{"backup", "--json"}, opts, []string{"--tag", tag}, sources)
-	out, err := c.runner.Run(ctx, program, args...)
+	out, err := c.run(ctx, "backup", slices.Concat([]string{"--json"}, args,
+		[]string{"--tag=" + tag, "--"}, sources)...)
 	if err != nil && !isExit(err, exitIncomplete) {
 		return "", failed("backup "+tag, err)
 	}
@@ -200,32 +217,39 @@ func isExit(err error, code int) bool {
 	return errors.As(err, &exit) && exit.ExitCode() == code
 }
 
-// Forget runs `restic forget [opts] --tag <tag> <policy>`; policy is split on whitespace
-// (e.g. "--keep-daily 7 --keep-weekly 4").
-func (c *Client) Forget(ctx context.Context, tag, policy string, opts []string) error {
-	args := append([]string{"forget"}, opts...)
-	args = append(args, "--tag", tag)
-	args = append(args, strings.Fields(policy)...)
-	if _, err := c.runner.Run(ctx, program, args...); err != nil {
+// Forget runs `restic forget --group-by=host --tag=<tag> [args]`; args come from
+// Keep.Args. The tag selects the job's snapshots and grouping by host alone keeps them in
+// one group per host: restic's default (host,paths) would leave the snapshots of
+// changed sources in a group of their own that is never forgotten.
+func (c *Client) Forget(ctx context.Context, tag string, args []string) error {
+	all := slices.Concat([]string{"--group-by=host", "--tag=" + tag}, args)
+	if _, err := c.run(ctx, "forget", all...); err != nil {
 		return failed("forget "+tag, err)
 	}
 	return nil
 }
 
-// Prune runs `restic [opts] prune` for the whole repository.
-func (c *Client) Prune(ctx context.Context, opts []string) error {
-	args := slices.Concat(opts, []string{"prune"})
-	if _, err := c.runner.Run(ctx, program, args...); err != nil {
+// Prune runs `restic prune [prune args]` for the whole repository.
+func (c *Client) Prune(ctx context.Context) error {
+	if _, err := c.run(ctx, "prune", c.s.PruneArgs...); err != nil {
 		return failed("prune", err)
 	}
 	return nil
 }
 
-// Unlock runs `restic [opts] unlock` to remove stale repository locks.
-func (c *Client) Unlock(ctx context.Context, opts []string) error {
-	args := slices.Concat(opts, []string{"unlock"})
-	if _, err := c.runner.Run(ctx, program, args...); err != nil {
+// Unlock runs `restic unlock` to remove stale repository locks.
+func (c *Client) Unlock(ctx context.Context) error {
+	if _, err := c.run(ctx, "unlock"); err != nil {
 		return failed("unlock", err)
 	}
 	return nil
+}
+
+// Version runs `restic version` and returns the version it reports.
+func (c *Client) Version(ctx context.Context) (Version, error) {
+	out, err := c.runner.Run(ctx, program, "version")
+	if err != nil {
+		return Version{}, failed("version", err)
+	}
+	return ParseVersion(string(out))
 }

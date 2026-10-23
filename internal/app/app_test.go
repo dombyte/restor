@@ -151,9 +151,8 @@ func TestProjectSettings(t *testing.T) {
 	assert.True(t, s.StopServices)
 	assert.Equal(t, time.Second, s.StopTimeout)
 	assert.Equal(t, 2*time.Second, s.StartTimeout)
-	assert.Equal(t, "--keep-last 1", s.RetentionPolicy)
-	assert.Equal(t, []string{"-b"}, s.BackupOptions)
-	assert.Equal(t, []string{"-f"}, s.ForgetOptions)
+	assert.Equal(t, []string{"-b"}, s.BackupArgs)
+	assert.Equal(t, []string{"-f", "--keep-last", "1"}, s.ForgetArgs)
 	assert.Equal(t, "pre", s.PreBackupCmd)
 	assert.Equal(t, "post", s.PostBackupCmd)
 }

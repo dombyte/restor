@@ -106,9 +106,8 @@ func lockDir(getenv func(string) string) string {
 func createManager(cfg *config.Config, projects []config.Project, d managerDeps) (
 	*backup.Manager, error,
 ) {
-	resticClient, err := restic.New(restic.Deps{
-		Runner: d.resticRunner, Log: component(d.log, "restic"),
-	})
+	resticClient, err := restic.New(restic.Settings{GlobalArgs: cfg.Global.PruneOptions},
+		restic.Deps{Runner: d.resticRunner, Log: component(d.log, "restic")})
 	if err != nil {
 		return nil, err
 	}
@@ -130,9 +129,8 @@ func createManager(cfg *config.Config, projects []config.Project, d managerDeps)
 		warnSharedLocks(d.log, bps)
 	}
 	return backup.NewManager(backup.Settings{
-		Parallel:     parallel,
-		AutoPrune:    cfg.Global.AutoPrune,
-		PruneOptions: cfg.Global.PruneOptions,
+		Parallel:  parallel,
+		AutoPrune: cfg.Global.AutoPrune,
 	}, bps, backup.Deps{
 		Restic: resticClient, Locker: locker, Hooks: d.runner, Log: component(d.log, "backup"),
 	})
@@ -164,10 +162,17 @@ func projectSettings(p config.Project) backup.ProjectSettings {
 	return backup.ProjectSettings{
 		Name: p.Name, Services: p.Services, Sources: p.Sources, StopServices: p.StopServices,
 		StopTimeout: p.StopTimeout, StartTimeout: p.StartTimeout,
-		RetentionPolicy: p.RetentionPolicy,
-		BackupOptions:   p.BackupOptions, ForgetOptions: p.ForgetOptions,
+		BackupArgs: p.BackupOptions, ForgetArgs: forgetArgs(p),
 		PreBackupCmd: p.PreBackupCmd, PostBackupCmd: p.PostBackupCmd,
 	}
+}
+
+// forgetArgs returns the forget options and the retention policy; none without a policy.
+func forgetArgs(p config.Project) []string {
+	if p.RetentionPolicy == "" {
+		return nil
+	}
+	return append(slices.Clone(p.ForgetOptions), strings.Fields(p.RetentionPolicy)...)
 }
 
 // resticRunner runs restic with the repository in RESTIC_REPOSITORY, so it never shows up
