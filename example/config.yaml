@@ -11,11 +11,20 @@
 #   - $VAR, ${VAR} and ${VAR:-default} in values are replaced from restor's own process
 #     environment when the file is loaded; write $$ for a literal $.
 #   - Relative paths (env_file, compose_file, sources, exclude_file) are resolved against
-#     the directory of this file. Hooks are commands and are not resolved: use absolute
-#     paths (under systemd the working directory is /).
+#     the directory of this file; "~" is not expanded (use $HOME). Hooks are commands and
+#     are not resolved: use absolute paths (under systemd the working directory is /).
+#   - YAML anchors and merge keys work: put shared blocks under a top-level key starting
+#     with "x-" and merge them into jobs with "<<: *name" (see the mail job).
 
 # Format version of this file. Required.
 version: 2
+
+# Shared settings for jobs, merged with "<<: *quick-units". Keys starting with "x-" are
+# ignored by restor; they only hold anchors.
+x-quick-units: &quick-units
+  type: systemd
+  stop_timeout: 30s
+  start_timeout: 1m
 
 # How many jobs run at the same time. 1 (default) runs one job after another, 0 runs all
 # at once. Jobs that share a compose file or a systemd unit never run at the same time,
@@ -65,7 +74,7 @@ repository:
 # A command that runs once after a run in which a job, forget or prune failed. It gets
 # RESTOR_STATUS=failed and RESTOR_FAILED_JOBS (comma-separated job names) in its
 # environment; e.g. a notification script. Default: none.
-on_failure: /usr/local/bin/notify-backup-failed
+# on_failure: /usr/local/bin/notify-backup-failed
 
 # ------------------------------------------------------------------------------
 # Defaults: apply to every job that does not set the same key itself. A job's value
@@ -89,7 +98,8 @@ defaults:
   #   last, hourly, daily, weekly, monthly, yearly: numbers of snapshots
   #   within, within_hourly, within_daily, within_weekly, within_monthly, within_yearly:
   #     restic durations such as "30d", "1y6m"
-  #   tags: keep every snapshot with one of these tags
+  #   tags: keep every snapshot with one of these tags (only next to another rule:
+  #     alone, restic would forget every other snapshot, also the newest)
   keep:
     daily: 7
     weekly: 4
@@ -107,7 +117,8 @@ defaults:
   # Do not create a snapshot when nothing changed. Default: false.
   skip_if_unchanged: false
 
-  # Extra snapshot tags; the job name is always a tag.
+  # Extra snapshot tags; the job name is always a tag. A tag must not be the name of a
+  # job (forgetting that job would also select these snapshots).
   tags: []
 
   # Hooks: commands split on spaces and run without a shell (no quotes, pipes or
@@ -160,8 +171,8 @@ jobs:
     exclude: ["*.tmp", "cache/"]
     keep: {daily: 30, weekly: 12}
     tags: [prod]
-    pre: /usr/local/bin/app-maintenance-on
-    post: /usr/local/bin/app-maintenance-off
+    # pre: /usr/local/bin/app-maintenance-on
+    # post: /usr/local/bin/app-maintenance-off
 
   # Podman Compose, backed up while it keeps running.
   wiki:
@@ -170,12 +181,11 @@ jobs:
     stop: false
     sources: [/srv/wiki/data]
 
-  # systemd units of the system (scope: system is the default).
+  # systemd units of the system (scope: system is the default), with shared settings
+  # merged from the x-quick-units anchor below.
   mail:
-    type: systemd
+    <<: *quick-units
     units: [postfix.service, dovecot.service]
-    stop_timeout: 30s
-    start_timeout: 1m
     sources: [/var/mail, /etc/postfix, /etc/dovecot]
     after: [db]
 

@@ -309,6 +309,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   1 (`projects`, `mode`, `global`, `service_manager`, `retention_policy`, …) name their
   replacement. Types are strict too: durations are strings with a unit (`30s`; a bare
   number is an error), lists must be lists.
+- YAML anchors work: aliases are followed and merge keys (`<<`, one mapping or a list)
+  are checked against the type they are merged into; top-level keys starting with `x-`
+  are ignored (a place for anchors, as in Compose files).
 - `$VAR`, `${VAR}` and `${VAR:-default}` in scalar values (not keys) are expanded once at
   load time from the **process** environment; `$$` is a literal `$`. A plain scalar is
   re-typed after expansion, so `${LIMIT}` can fill a number.
@@ -341,7 +344,10 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   stopped; `keep` counts ≥ 0 and `within…` restic durations (`1y2m3d4h`); sizes
   (`exclude_larger_than`) like `500M`; `max_unused` a percentage, size or `unlimited`;
   `backend_options` keys like `s3.connections` with non-empty values; limits ≥ 0; env file
-  names and values without NUL bytes. Startup warns about a missing repository
+  names and values without NUL bytes; no extra `tags` that are the name of a job (forget
+  `--tag=<job>` would select those snapshots too); `keep.tags` only next to another rule
+  (alone, restic forgets every other snapshot, also the newest); no path starting with
+  `~` (YAML does not expand it). Startup warns about a missing repository
   (`repository.url`, `RESTIC_REPOSITORY`, `RESTIC_REPOSITORY_FILE`), an env file that
   group or others can access (mode & 077), a hook whose program is a relative path
   (`./x.sh`), and binaries missing from `PATH`.

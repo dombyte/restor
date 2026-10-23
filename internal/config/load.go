@@ -47,6 +47,7 @@ func Load(path string, getenv func(string) string) (*Plan, error) {
 	if err := root.Decode(&f); err != nil {
 		return nil, fmt.Errorf("config: %w", errors.Join(append(keyErrs, decodeErrors(err)...)...))
 	}
+	keyErrs = append(keyErrs, f.homePaths()...)
 	if err := f.resolvePaths(path); err != nil {
 		return nil, err
 	}
@@ -93,32 +94,76 @@ func decodeErrors(err error) []error {
 
 // unknownKeys returns an error for every mapping key below n that matches no field of t,
 // with a hint for the keys of format version 1. Type mismatches are left to Decode.
+// Aliases are followed and merge keys (<<) checked against t; top-level keys starting
+// with "x-" are free, as a place for anchors.
 func unknownKeys(n *yaml.Node, t reflect.Type, path string) []error {
-	for t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	if n.Kind != yaml.MappingNode {
-		return nil
-	}
-	var childType func(key string) (reflect.Type, bool)
-	switch t.Kind() {
-	case reflect.Map:
-		childType = func(string) (reflect.Type, bool) { return t.Elem(), true }
-	case reflect.Struct:
-		fields := yamlFields(t)
-		childType = func(key string) (reflect.Type, bool) { f, ok := fields[key]; return f, ok }
-	default:
+	n = resolveAlias(n)
+	childType := fieldTypes(t)
+	if n.Kind != yaml.MappingNode || childType == nil {
 		return nil
 	}
 	var errs []error
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		key, child := n.Content[i], joinPath(path, n.Content[i].Value)
+		if skip, merged := special(key.Value, path); skip {
+			if merged {
+				errs = append(errs, mergedKeys(n.Content[i+1], t, path)...)
+			}
+			continue
+		}
 		elem, ok := childType(key.Value)
 		if !ok {
 			errs = append(errs, &FieldError{Path: child, Problem: unknownProblem(key)})
 			continue
 		}
 		errs = append(errs, unknownKeys(n.Content[i+1], elem, child)...)
+	}
+	return errs
+}
+
+// fieldTypes returns the type of a key of a mapping decoded into t, or nil when t is no
+// struct or map (scalars and lists hold no keys to check).
+func fieldTypes(t reflect.Type) func(key string) (reflect.Type, bool) {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Map:
+		return func(string) (reflect.Type, bool) { return t.Elem(), true }
+	case reflect.Struct:
+		fields := yamlFields(t)
+		return func(key string) (reflect.Type, bool) { f, ok := fields[key]; return f, ok }
+	default:
+		return nil
+	}
+}
+
+// resolveAlias returns the node an alias points to, or n itself.
+func resolveAlias(n *yaml.Node) *yaml.Node {
+	if n.Kind == yaml.AliasNode && n.Alias != nil {
+		return n.Alias
+	}
+	return n
+}
+
+// special reports whether key is no field: a merge key (merged) or an "x-" key at the top
+// level.
+func special(key, path string) (skip, merged bool) {
+	if key == "<<" {
+		return true, true
+	}
+	return path == "" && strings.HasPrefix(key, "x-"), false
+}
+
+// mergedKeys checks the mappings merged into a mapping of type t: one, or a list of them.
+func mergedKeys(n *yaml.Node, t reflect.Type, path string) []error {
+	n = resolveAlias(n)
+	if n.Kind != yaml.SequenceNode {
+		return unknownKeys(n, t, path)
+	}
+	var errs []error
+	for _, c := range n.Content {
+		errs = append(errs, unknownKeys(c, t, path)...)
 	}
 	return errs
 }
@@ -209,6 +254,30 @@ func expand(s string, getenv func(string) string) string {
 		}
 		return def
 	})
+}
+
+// homePaths reports paths that start with "~": the shell expands it, YAML does not, so
+// it would become a directory named "~" below the config directory.
+func (f *File) homePaths() []error {
+	paths := map[string][]string{
+		"repository.env_file":   {f.Repository.EnvFile},
+		"defaults.exclude_file": f.Defaults.ExcludeFile,
+	}
+	for name, j := range f.Jobs {
+		paths["jobs."+name+".compose_file"] = []string{j.ComposeFile}
+		paths["jobs."+name+".sources"] = j.Sources
+		paths["jobs."+name+".exclude_file"] = j.ExcludeFile
+	}
+	var errs []error
+	for _, field := range sortedKeys(paths) {
+		for _, p := range paths[field] {
+			if strings.HasPrefix(p, "~") {
+				errs = append(errs, &FieldError{Path: field, Problem: fmt.Sprintf(
+					"%q: ~ is not expanded, use an absolute path or $HOME", p)})
+			}
+		}
+	}
+	return errs
 }
 
 // resolvePaths makes the env file, compose files, sources and exclude files absolute,

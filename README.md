@@ -92,8 +92,9 @@ otherwise; `--debug` logs every command line. Logs go to stderr, under systemd t
 journal: `journalctl -u restor` (or `journalctl --user -u restor`).
 
 `restor run` exits 0 when every job was backed up and 1 when the config is invalid, a job
-failed or the run was cancelled. A failed forget, prune or hook is logged (and runs the
-`on_failure` hook) but does not change the exit code. Before anything is stopped, it checks
+failed or the run was cancelled. A failed forget or prune is logged and runs the
+`on_failure` hook, a failed `post` or `on_failure` hook is only logged; neither changes
+the exit code. Before anything is stopped, it checks
 that `restic` is installed and supported (see below). `restor restic` exits with restic's
 exit code.
 
@@ -137,7 +138,9 @@ startup and every problem is reported with its field path; an unknown key is an 
 so typos never go unnoticed. Durations are strings such as `30s`, `5m` or `4h`.
 `$VAR`, `${VAR}` and `${VAR:-default}` in values are replaced from restor's process
 environment; `$$` is a literal `$`. Relative `env_file`, `compose_file`, `sources` and
-`exclude_file` paths are resolved against the directory of the config file.
+`exclude_file` paths are resolved against the directory of the config file; `~` is not
+expanded (use `$HOME`). YAML anchors and merge keys work: keep shared blocks under a
+top-level key starting with `x-` and merge them with `<<: *name`.
 
 **Repository:** `url` (or `RESTIC_REPOSITORY`/`RESTIC_REPOSITORY_FILE` in the env file),
 `env_file`, `backend_options` (`--option key=value`), `limit_upload`, `limit_download`
@@ -164,10 +167,10 @@ not start with `-` or contain `,` or whitespace.
 | `stop` | stop the services during the backup (default `true`) |
 | `stop_timeout`, `start_timeout` | wait for the services to stop / start (default `1m` / `2m`) |
 | `backup_timeout` | cancel a backup that takes longer; the services start again, the job fails |
-| `keep` | retention: `last`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`, `within…`, `tags` |
+| `keep` | retention: `last`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`, `within…`, and `tags` next to another rule |
 | `exclude`, `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`, `exclude_larger_than`, `one_file_system` | what restic leaves out (the restic options of the same name) |
 | `skip_if_unchanged` | create no snapshot when nothing changed |
-| `tags` | extra snapshot tags |
+| `tags` | extra snapshot tags (not the name of a job) |
 | `pre`, `post`, `on_failure` | hooks, see below |
 
 Every key except `type`, `sources`, `compose_file`, `units`, `scope`, `services`,
