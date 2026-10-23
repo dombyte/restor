@@ -72,6 +72,7 @@ restor orchestrates **restic** backups of several **jobs** on one host.
 
 ```bash
 make check                                                # ./scripts/pre-commit.sh, check-only
+make integration                                          # integration tests, restic on PATH
 golangci-lint fmt --config .golangci.yml                  # gofumpt + goimports
 golangci-lint run --config .golangci.yml                  # full linter set (section 12)
 go tool deadcode -test ./... # unused exported code
@@ -231,8 +232,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 2. `app.New`: `config.Load` (file, expansion, paths, env file, defaults, validation),
    `Plan.Select` for the named jobs, and wiring. Any error ends the run (exit 1); an
    invalid config is logged one line per problem.
-3. `App.Run`: `restic version` must succeed and be new enough for the options in use
-   (`retry_lock` ≥ 0.16, `skip_if_unchanged` ≥ 0.17), before any service is stopped.
+3. `App.Run`: `restic version` must succeed and be at least the oldest supported release
+   (`restic.Supported`), before any service is stopped; a release newer than the newest
+   tested one is logged as a warning and runs.
 4. `Manager.Run`: run the jobs as the schedule allows; when the run was not cancelled:
    forget each job that has a complete snapshot and a `keep`, then, with
    `repository.prune` and only when every job has a complete snapshot, one prune + unlock
@@ -414,7 +416,10 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `backend_options` entry (sorted), `--limit-upload=`, `--limit-download=`,
   `--retry-lock=`. Settings restic reads from its environment (`RESTIC_CACHE_DIR`,
   `RESTIC_COMPRESSION`, `RESTIC_PACK_SIZE`, …) get no config key: they go in the env file.
-- `restic [global] backup --json [backup flags] --tag=<job> -- <sources>`; backup flags
+- `restic [global] backup --json --group-by=host,tags [backup flags] --tag=<job> --
+  <sources>`: the parent snapshot comes from the job's own snapshots (restic's default
+  `host,paths` would compare a job with another one that has the same sources, and
+  `--skip-if-unchanged` would then skip its snapshot); backup flags
   from `exclude`, `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`,
   `exclude_larger_than`, `one_file_system`, `skip_if_unchanged` and `tags` (extra
   `--tag=`). The last JSON `summary` message gives the snapshot ID (logged as the
@@ -430,7 +435,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - `restic [global] forget --group-by=host --tag=<job> [keep flags]`; keep flags
   `--keep-last=` … `--keep-yearly=`, `--keep-within…=` and `--keep-tag=`.
 - `restic [global] prune [--max-unused=]` and `restic [global] unlock`.
-- `restic version` before a run (`restic.ParseVersion` reads `restic X.Y.Z`).
+- `restic version` before a run (`restic.ParseVersion` reads `restic X.Y.Z`): below
+  `restic.Supported`'s oldest release (0.17.1) the run fails, above its newest tested one
+  it warns.
 
 ## 8. Design Decisions
 
@@ -486,6 +493,15 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   would leave the snapshots of changed `sources` in a group that is never forgotten, and
   `host,tags` the same after a change of `tags`. `--tag=<job>` selects the job, grouping by
   host keeps one series per job and host.
+- **A supported restic range, not a pinned release:** restor depends on restic's CLI,
+  JSON output and exit codes, so it refuses releases older than the oldest one that
+  passes the integration tests (0.17.1: exit code 12 and `--skip-if-unchanged`; older
+  releases lack `backup --group-by`). There is no maximum: restic stays compatible in
+  practice, and refusing newer releases would stop backups after every restic update
+  and block its security fixes. A newer release only logs a warning; Renovate raises the
+  tested release once CI passes with it. Per-option version checks are not needed while
+  the minimum covers every option; a future option that needs a newer restic raises the
+  minimum or brings such a check back.
 - **Ordering only, not dependencies:** `before`/`after` say when a job may start, not
   whether: a failed database dump must not cancel the backup of the files next to it. A
   "requires" relation can be added later as its own key.
@@ -688,6 +704,12 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
   no real clock and no sleeps: a fake command runner, a fake `Clock`, mocks, `t.TempDir()`
   for lock files. Tests that need real tools are integration tests behind
   `//go:build integration` and are not part of `go test ./...`.
+- `internal/app/integration_test.go` runs the restic on `PATH` against local repositories
+  (`make integration`): one subtest per restic feature restor uses (every backup, forget,
+  global and prune flag, skip-if-unchanged, exit codes 3/10/11/12, a whole `restor run`),
+  so a failing release shows what it lacks. A new restic option gets a check there.
+  Backups that must be unchanged use `testdata/static`: restic also records the
+  directories above a source, and those of a temp dir change while other tests run.
 - Tests run with `-race` locally and in CI.
 - New code comes with tests; bug fixes come with a regression test (failing first).
 - Coverage (SHOULD): ≥ 70 % per package with logic, ≥ 80 % for packages with ≥ 5 functions
@@ -702,7 +724,7 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
 | `.golangci.yml` | v2 config, linters from section 12, formatters gofumpt + goimports |
 | `scripts/pre-commit.sh` | check-only (never rewrites or stages): fmt diff, lint, deadcode, govulncheck, build, `go test -race` |
 | `Makefile` | `build` (ldflags build info), `check` (runs the script), `clean`, `run` |
-| `.github/workflows/checks.yml` | on push to main, PRs and `workflow_call`: tidy check, build, race tests, deadcode, govulncheck, mock drift, golangci-lint; a `gate` job skips them on a push to main that is a PR's merge commit (15.5); `concurrency` cancels superseded PR runs only |
+| `.github/workflows/checks.yml` | on push to main, PRs and `workflow_call`: tidy check, build, race tests, deadcode, govulncheck, mock drift, golangci-lint, integration tests against the oldest supported and the newest tested restic (downloaded, checksum verified); a `gate` job skips them on a push to main that is a PR's merge commit (15.5); `concurrency` cancels superseded PR runs only |
 | `.github/workflows/release.yml` | on `vX.Y.Z` / `vX.Y.Z-*` tags: a `guard` job verifies the exact tag format and that the tag is on `main`, then reuses `checks.yml` (granted `pull-requests: read` for the gate); passes `GOVERSION` to goreleaser; `concurrency` runs one release per tag, never cancelled |
 | `.goreleaser.yaml` | `go mod verify` only (never rewrites), `-trimpath`, reproducible (`CommitDate`), `goamd64: v1`, grouped changelog, archives + nfpm `.deb`/`.rpm` (`mtime` = `CommitDate`), no image (section 8) |
 | `.gitignore` | never commit local config (`config.yaml`, `*.env` in the root), secrets or build output |
@@ -724,7 +746,11 @@ project:
 - Every pinned version in the repo is tracked. Versions no built-in manager sees get a
   `customManagers` regex; today the `version:` of the golangci-lint action in CI and of
   the goreleaser action in the release (the `github-actions` manager tracks the actions,
-  not that input).
+  not that input), and the newest tested restic, marked with a
+  `renovate: datasource=… depName=…` comment in `checks.yml` and
+  `internal/restic/version.go` (one PR updates both; `TestSupported_MatchesCI` fails
+  when they differ). Its PR merges only when the integration tests pass with the new
+  release; restic majors are disabled. The oldest supported release is raised by hand.
 - Updates that need manual work (Go module majors = new module path, golangci-lint and
   goreleaser majors = config migration) are disabled with a `description` saying why.
 - Text that only describes a pinning pattern must not match a regex manager.
@@ -807,8 +833,10 @@ change keeps its own branch and merge commit:
 protection):
 
 - "main: signed commits": every commit signed; no bypass, not even for the admin.
-- "main: required checks": the `checks.yml` jobs `Gate`, `golangci-lint` and
-  `Build, test, deadcode, govulncheck` must pass, with "branches must be up to date" on.
+- "main: required checks": the `checks.yml` jobs `Gate`, `golangci-lint`,
+  `Build, test, deadcode, govulncheck`, `Integration (oldest restic)` and
+  `Integration (newest restic)` must pass, with "branches must be up to date" on. The
+  integration job names hold no version, so a restic bump does not rename them.
   Bypass: only the Repository admin role, mode "always". Bots (Renovate) and other
   contributors are never on the bypass list.
 - Renaming one of these jobs means updating the ruleset in the same change, or every PR
@@ -885,9 +913,11 @@ protection):
 1. A typed field in `config.Defaults` (per job) or `config.RepositoryConfig`, with
    validation of its format in `validate.go`, and in the `Job`/`Repository` of the Plan.
 2. The flag in the matching `restic` struct (`BackupFlags`, `Keep`, `Repository`,
-   `PruneFlags`) and its `Args`, as `--flag=value`; the mapping in `app`. A minimum restic
-   release goes into `requiredResticVersion`.
-3. `example/config.yaml`, README table, section 7; tests for validation and `Args`.
+   `PruneFlags`) and its `Args`, as `--flag=value`; the mapping in `app`. If the oldest
+   supported restic lacks the flag, raise `minSupported` (and the CI matrix) or add a
+   version check for the option.
+3. `example/config.yaml`, README table, section 7; tests for validation and `Args`, and a
+   check in the integration test.
 
 ---
 

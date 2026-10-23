@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -260,31 +261,40 @@ func fakeRestic(t *testing.T, path, out string) Options {
 
 // TestApp_RunChecksResticVersion is not parallel: it sets PATH.
 func TestApp_RunChecksResticVersion(t *testing.T) {
-	path := writeConfig(t, "version: 2\nrepository: {url: /r, retry_lock: 1m}\n"+
-		"jobs: {a: {sources: [/a]}}\n")
+	path := writeConfig(t, "version: 2\nrepository: {url: /r}\njobs: {a: {sources: [/a]}}\n")
 
-	a, err := New(fakeRestic(t, path, "restic 0.15.2 compiled with go1.20"))
+	a, err := New(fakeRestic(t, path, "restic 0.17.0 compiled with go1.22"))
 	require.NoError(t, err)
 	err = a.Run(context.Background())
 	require.ErrorIs(t, err, ErrResticVersion)
-	assert.EqualError(t, err,
-		"app: restic is too old: 0.15.2, repository.retry_lock needs 0.16.0")
+	assert.EqualError(t, err, "app: restic is too old: 0.17.0, restor needs 0.17.1 or newer")
 
 	a, err = New(fakeRestic(t, path, "not restic"))
 	require.NoError(t, err)
 	require.ErrorIs(t, a.Run(context.Background()), restic.ErrVersion)
 }
 
-func TestRequiredResticVersion(t *testing.T) {
-	t.Parallel()
-	v, reason := requiredResticVersion(&config.Plan{Jobs: []config.Job{{Name: "a"}}})
-	assert.Equal(t, restic.Version{}, v)
-	assert.Empty(t, reason)
+// TestApp_CheckResticWarnsAboutNewerReleases is not parallel: it sets PATH.
+func TestApp_CheckResticWarnsAboutNewerReleases(t *testing.T) {
+	path := writeConfig(t, "version: 2\nrepository: {url: /r}\njobs: {a: {sources: [/a]}}\n")
+	_, newest := restic.Supported()
+	for _, tt := range []struct {
+		version string
+		warn    bool
+	}{
+		{version: newest.String(), warn: false},
+		{version: fmt.Sprintf("%d.%d.%d", newest.Major, newest.Minor, newest.Patch+1), warn: true},
+		{version: fmt.Sprintf("%d.0.0", newest.Major+1), warn: true},
+	} {
+		var buf bytes.Buffer
+		o := fakeRestic(t, path, "restic "+tt.version+" compiled with go1.26")
+		o.Log = zerolog.New(&buf)
+		a, err := New(o)
+		require.NoError(t, err)
 
-	v, reason = requiredResticVersion(&config.Plan{
-		Repository: config.Repository{RetryLock: time.Minute},
-		Jobs:       []config.Job{{Name: "a"}, {Name: "b", SkipIfUnchanged: true}},
-	})
-	assert.Equal(t, "0.17.0", v.String())
-	assert.Equal(t, "jobs.b.skip_if_unchanged", reason)
+		require.NoError(t, a.checkRestic(context.Background()))
+
+		assert.Equal(t, tt.warn, strings.Contains(buf.String(), `"newest_tested"`), tt.version)
+		assert.Contains(t, buf.String(), `"restic_version":"`+tt.version+`"`)
+	}
 }

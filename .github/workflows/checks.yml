@@ -89,3 +89,41 @@ jobs:
         with:
           version: v2.15.0
           args: --config .golangci.yml
+
+  # restor against real restic releases: the oldest it supports and the newest it was
+  # tested with (internal/restic/version.go; TestSupported_MatchesCI keeps them in step).
+  # Renovate raises the newest; its PR merges only when this job passes.
+  integration:
+    name: Integration (${{ matrix.name }} restic)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: oldest
+            restic: 0.17.1 # oldest supported
+          - name: newest
+            restic: 0.19.1 # renovate: datasource=github-releases depName=restic/restic
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install restic ${{ matrix.restic }}
+        env:
+          VERSION: ${{ matrix.restic }}
+        run: |
+          base="https://github.com/restic/restic/releases/download/v$VERSION"
+          file="restic_${VERSION}_linux_amd64.bz2"
+          mkdir -p "$RUNNER_TEMP/restic" && cd "$RUNNER_TEMP/restic"
+          curl -fsSLO "$base/$file" -fsSLO "$base/SHA256SUMS"
+          grep " $file\$" SHA256SUMS | sha256sum --check --strict
+          bunzip2 "$file" && install -m 0755 "${file%.bz2}" restic
+          echo "$RUNNER_TEMP/restic" >> "$GITHUB_PATH"
+
+      - name: Integration tests
+        run: restic version && go test -tags integration -race -count=1 -run TestIntegration ./internal/app

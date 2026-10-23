@@ -1,6 +1,7 @@
 package restic
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,4 +36,27 @@ func TestVersion_AtLeast(t *testing.T) {
 		assert.Equal(t, tt.want, v.AtLeast(tt.other), tt.other.String())
 	}
 	assert.True(t, Version{Major: 1}.AtLeast(Version{Minor: 20}))
+}
+
+func TestSupported(t *testing.T) {
+	t.Parallel()
+	oldest, newest := Supported()
+	assert.Equal(t, minSupported, oldest.String())
+	assert.Equal(t, newestTested, newest.String())
+	assert.True(t, newest.AtLeast(oldest))
+}
+
+// TestSupported_MatchesCI keeps the versions the CI integration job tests in step with the
+// constants: Renovate raises both together.
+func TestSupported_MatchesCI(t *testing.T) {
+	t.Parallel()
+	workflow, err := os.ReadFile("../../.github/workflows/checks.yml")
+	require.NoError(t, err)
+	for _, want := range []string{
+		"restic: " + minSupported + " # oldest supported",
+		"restic: " + newestTested + " # renovate: datasource=github-releases " +
+			"depName=restic/restic",
+	} {
+		assert.Contains(t, string(workflow), want)
+	}
 }
