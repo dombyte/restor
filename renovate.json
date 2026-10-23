@@ -53,11 +53,33 @@
       "enabled": false
     },
     {
+      "description": "A restic major may change its CLI or JSON output; raise the tested version by hand",
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["restic/restic"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "Bumping the tested restic release only changes tests and docs",
+      "matchManagers": ["custom.regex"],
+      "matchPackageNames": ["restic/restic"],
+      "semanticCommitType": "test",
+      "semanticCommitScope": "restic"
+    },
+    {
       "matchManagers": ["github-actions"],
       "groupName": "GitHub Actions"
     }
   ],
   "customManagers": [
+    {
+      "description": "Versions marked with a `# renovate: datasource=… depName=…` (CI workflows) or `// renovate: …` (Go) comment: the newest restic release restor is tested with",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/.+\\.ya?ml$/", "/^internal/restic/version\\.go$/"],
+      "matchStrings": ["(?<currentValue>\\d+\\.\\d+\\.\\d+)\"?\\s*(?:#|//) renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)"],
+      "extractVersionTemplate": "^v(?<version>\\d+\\.\\d+\\.\\d+)$",
+      "versioningTemplate": "semver"
+    },
     {
       "description": "golangci-lint version pinned in the CI action (`version: vX.Y`); the github-actions manager only tracks the action itself",
       "customType": "regex",

@@ -178,5 +178,6 @@ formatters:
 
 run:
   timeout: 5m
+  build-tags: [integration] # lint the integration tests too
   allow-parallel-runners: true
   modules-download-mode: readonly

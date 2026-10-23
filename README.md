@@ -19,8 +19,16 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
 ## Installation
 
 Download a package or archive from the
-[releases](https://github.com/dombyte/restor/releases). restor needs `restic`; the packages
-install it as a recommended dependency.
+[releases](https://github.com/dombyte/restor/releases). restor needs `restic` 0.17.1 or
+newer; the packages install it as a recommended dependency.
+
+**restic versions:** restor is tested against restic 0.17.1, the oldest release it
+supports, and 0.19.1, the newest release it was tested with. Every CI run tests both, and
+the newest is raised when restic releases. An older restic is refused before anything is
+stopped. A newer one runs with a warning in the log; please report problems with it.
+Distributions with an older restic (Debian 12 ships 0.14) need the
+[upstream binary](https://github.com/restic/restic/releases), which `restic self-update`
+keeps current.
 
 ### Package (.deb / .rpm)
 
@@ -86,8 +94,8 @@ journal: `journalctl -u restor` (or `journalctl --user -u restor`).
 `restor run` exits 0 when every job was backed up and 1 when the config is invalid, a job
 failed or the run was cancelled. A failed forget, prune or hook is logged (and runs the
 `on_failure` hook) but does not change the exit code. Before anything is stopped, it checks
-that `restic` is installed and new enough for the options in use (`retry_lock` needs
-0.16, `skip_if_unchanged` 0.17). `restor restic` exits with restic's exit code.
+that `restic` is installed and supported (see below). `restor restic` exits with restic's
+exit code.
 
 On SIGINT/SIGTERM restor stops the running backups, restarts the services it stopped,
 starts no further job and exits within its shutdown timeout (the largest `start_timeout`
@@ -158,7 +166,7 @@ not start with `-` or contain `,` or whitespace.
 | `backup_timeout` | cancel a backup that takes longer; the services start again, the job fails |
 | `keep` | retention: `last`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`, `within…`, `tags` |
 | `exclude`, `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`, `exclude_larger_than`, `one_file_system` | what restic leaves out (the restic options of the same name) |
-| `skip_if_unchanged` | create no snapshot when nothing changed (restic ≥ 0.17) |
+| `skip_if_unchanged` | create no snapshot when nothing changed |
 | `tags` | extra snapshot tags |
 | `pre`, `post`, `on_failure` | hooks, see below |
 

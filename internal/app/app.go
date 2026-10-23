@@ -31,10 +31,6 @@ import (
 const (
 	// columnPadding separates the columns of Describe.
 	columnPadding = 2
-	// retryLockMinor and skipIfUnchangedMinor are the restic 0.x releases that brought
-	// --retry-lock and --skip-if-unchanged.
-	retryLockMinor       = 16
-	skipIfUnchangedMinor = 17
 )
 
 // envFileOthersMask are the permission bits that let group or others access the env file.
@@ -43,8 +39,8 @@ const envFileOthersMask os.FileMode = 0o077
 var (
 	// ErrUnknownType is returned by CreateServiceManager for an unknown job type.
 	ErrUnknownType = errors.New("app: unknown job type")
-	// ErrResticVersion is returned by Run when restic is older than the configuration
-	// needs.
+	// ErrResticVersion is returned by Run when restic is older than the oldest release
+	// restor supports.
 	ErrResticVersion = errors.New("app: restic is too old")
 )
 
@@ -112,33 +108,30 @@ func (a *App) Run(ctx context.Context) error {
 	return a.manager.Run(ctx)
 }
 
-// checkRestic fails when restic is missing or older than the configuration needs, before
-// any service is stopped.
+// checkRestic fails when restic is missing or older than restor supports, before any
+// service is stopped, and warns when it is newer than restor was tested with.
 func (a *App) checkRestic(ctx context.Context) error {
 	v, err := a.restic.Version(ctx)
 	if err != nil {
 		return err
 	}
-	a.log.Info().Stringer("restic_version", v).Msg("restic found")
-	if need, reason := requiredResticVersion(a.plan); !v.AtLeast(need) {
-		return fmt.Errorf("%w: %s, %s needs %s", ErrResticVersion, v, reason, need)
+	oldest, newest := restic.Supported()
+	if !v.AtLeast(oldest) {
+		return fmt.Errorf("%w: %s, restor needs %s or newer", ErrResticVersion, v, oldest)
 	}
+	log := a.log.Info()
+	if !newest.AtLeast(v) {
+		log = a.log.Warn().Stringer("newest_tested", newest)
+	}
+	log.Stringer("restic_version", v).Msg(resticVersionMessage(newest.AtLeast(v)))
 	return nil
 }
 
-// requiredResticVersion returns the oldest restic release the plan works with, and the
-// setting that needs it; the zero Version when any release does.
-func requiredResticVersion(plan *config.Plan) (restic.Version, string) {
-	for _, j := range plan.Jobs {
-		if j.SkipIfUnchanged {
-			return restic.Version{Minor: skipIfUnchangedMinor},
-				"jobs." + j.Name + ".skip_if_unchanged"
-		}
+func resticVersionMessage(tested bool) string {
+	if tested {
+		return "restic found"
 	}
-	if plan.Repository.RetryLock > 0 {
-		return restic.Version{Minor: retryLockMinor}, "repository.retry_lock"
-	}
-	return restic.Version{}, ""
+	return "restic is newer than the releases restor was tested with; please report problems"
 }
 
 // Stdio are the standard streams of `restor restic`.

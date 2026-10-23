@@ -28,3 +28,8 @@ run: build
 .PHONY: check
 check:
 	./scripts/pre-commit.sh
+
+# Integration tests against the restic on PATH (not part of check: they need restic).
+.PHONY: integration
+integration:
+	go test -tags integration -race -count=1 -run TestIntegration ./internal/app
