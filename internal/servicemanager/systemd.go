@@ -82,9 +82,10 @@ func (s *Systemd) Stop(ctx context.Context, units []string, timeout time.Duratio
 	deadline := s.clock.Now().Add(timeout)
 	cmdCtx, cancel := commandContext(ctx, timeout)
 	defer cancel()
-	if out, err := s.run(cmdCtx, append([]string{"stop"}, units...)...); err != nil &&
-		!strings.Contains(string(out), "not running") &&
-		!strings.Contains(string(out), "not loaded") {
+	// systemctl reports these on stderr, which the runner's error carries.
+	if _, err := s.run(cmdCtx, append([]string{"stop"}, units...)...); err != nil &&
+		!strings.Contains(err.Error(), "not running") &&
+		!strings.Contains(err.Error(), "not loaded") {
 		return false, fmt.Errorf("servicemanager: stop %s: %w", unitList(units), err)
 	}
 	return waitUntil(ctx, s.clock, deadline, func(ctx context.Context) (bool, error) {

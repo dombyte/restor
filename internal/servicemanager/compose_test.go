@@ -2,6 +2,7 @@ package servicemanager
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -103,7 +104,7 @@ func TestCompose_StopNoContainers(t *testing.T) {
 	t.Parallel()
 	c, r := newCompose(t)
 	expectCompose(r, "stop", "-t", "1", "web").
-		Return([]byte("No containers to stop"), assert.AnError).Once()
+		Return(nil, fmt.Errorf("%w: No containers to stop", assert.AnError)).Once()
 	expectCompose(r, "ps", "--format", "json").Return(nil, nil).Once()
 
 	ok, err := c.Stop(context.Background(), []string{"web"}, time.Second)

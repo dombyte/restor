@@ -96,8 +96,9 @@ func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Dura
 	cmdCtx, cancel := commandContext(ctx, timeout)
 	defer cancel()
 	args := append([]string{"stop", "-t", strconv.Itoa(int(timeout.Seconds()))}, services...)
-	if out, err := c.run(cmdCtx, args...); err != nil &&
-		!strings.Contains(strings.ToLower(string(out)), "no containers to stop") {
+	// Compose reports this on stderr, which the runner's error carries.
+	if _, err := c.run(cmdCtx, args...); err != nil &&
+		!strings.Contains(strings.ToLower(err.Error()), "no containers to stop") {
 		return false, fmt.Errorf("servicemanager: stop %s: %w", c.s.File, err)
 	}
 	return waitUntil(ctx, c.clock, deadline, func(ctx context.Context) (bool, error) {

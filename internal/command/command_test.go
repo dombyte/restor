@@ -29,25 +29,46 @@ func TestMain(m *testing.M) {
 }
 
 func helper(mode string) int {
-	switch mode {
-	case "echo":
-		fmt.Println(strings.Join(os.Args[1:], " "), os.Getenv("RESTOR_TEST_VALUE"))
-		return 0
-	case "big":
-		return helperBig()
-	case "term":
-		return helperTerm()
-	case "group":
-		return helperGroup()
-	case "termfile":
-		return helperTermFile()
-	case "fail":
-		fmt.Println("line one")
-		fmt.Println("line two")
-		return 3
-	default:
-		return 2
+	helpers := map[string]func() int{
+		"echo":       helperEcho,
+		"warn":       helperWarn,
+		"stderrfail": helperStderrFail,
+		"fail":       helperFail,
+		"big":        helperBig,
+		"term":       helperTerm,
+		"group":      helperGroup,
+		"termfile":   helperTermFile,
 	}
+	if h, ok := helpers[mode]; ok {
+		return h()
+	}
+	return 2
+}
+
+func helperEcho() int {
+	fmt.Println(strings.Join(os.Args[1:], " "), os.Getenv("RESTOR_TEST_VALUE"))
+	return 0
+}
+
+// helperWarn writes data to stdout and a warning to stderr, like podman compose.
+func helperWarn() int {
+	fmt.Fprintln(os.Stderr, ">>>> Executing external compose provider <<<<")
+	fmt.Println(`{"Service":"web"}`)
+	return 0
+}
+
+// helperStderrFail reports progress on stdout and its failure on stderr, like restic.
+func helperStderrFail() int {
+	fmt.Println(`{"message_type":"status"}`)
+	fmt.Fprintln(os.Stderr, "Fatal: boom")
+	return 1
+}
+
+// helperFail reports its failure on stdout only, like many scripts.
+func helperFail() int {
+	fmt.Println("line one")
+	fmt.Println("line two")
+	return 3
 }
 
 // helperBig prints three times maxOutput, then a snapshot line.
@@ -135,6 +156,26 @@ func TestRunner_RunFailure(t *testing.T) {
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, err, &exitErr)
 	assert.Equal(t, 3, exitErr.ExitCode())
+}
+
+func TestRunner_RunReturnsStdoutOnly(t *testing.T) {
+	t.Parallel()
+	out, err := newRunner("warn").Run(context.Background(), os.Args[0])
+
+	require.NoError(t, err)
+	assert.NotContains(t, string(out), "compose provider", "stderr stays out of the output")
+	assert.True(t, strings.HasPrefix(string(out), `{"Service":"web"}`+"\n"), out)
+}
+
+func TestRunner_RunFailureCarriesStderr(t *testing.T) {
+	t.Parallel()
+	out, err := newRunner("stderrfail").Run(context.Background(), os.Args[0])
+
+	var cmdErr *Error
+	require.ErrorAs(t, err, &cmdErr)
+	assert.True(t, strings.HasPrefix(cmdErr.Output, "Fatal: boom"), cmdErr.Output)
+	assert.NotContains(t, cmdErr.Output, "status", "stdout is left out when stderr has lines")
+	assert.Contains(t, string(out), "status")
 }
 
 func TestRunner_RunKeepsTheLastOutput(t *testing.T) {

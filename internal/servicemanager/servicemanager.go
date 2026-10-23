@@ -32,7 +32,8 @@ var (
 	errUnknownService   = errors.New("service is not in the compose file")
 )
 
-// Runner executes a program and returns its combined output, also on failure.
+// Runner executes a program and returns its stdout, also on failure. Its error carries
+// the program's stderr.
 type Runner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
