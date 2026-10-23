@@ -121,6 +121,12 @@ type incompleteError struct{}
 func (incompleteError) Error() string    { return "snapshot incomplete" }
 func (incompleteError) Incomplete() bool { return true }
 
+// unchangedError is what restic returns when --skip-if-unchanged skipped the snapshot.
+type unchangedError struct{}
+
+func (unchangedError) Error() string   { return "nothing changed" }
+func (unchangedError) Unchanged() bool { return true }
+
 func job(name string, s Services) Job {
 	return Job{Settings: JobSettings{
 		Name: name, Sources: []string{"/data/" + name}, StopServices: true,
@@ -483,4 +489,20 @@ func TestRunJob_BackupTimeout(t *testing.T) {
 	assert.Contains(t, r.err.Error(), "backup: web: backup_timeout of 1ns exceeded")
 	assert.Equal(t, []string{"lock key", "stop", "start", "release key"}, f.rec.list(),
 		"the services are started again")
+}
+
+func TestRunJob_UnchangedIsComplete(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expectLock("key")
+	f.restic.EXPECT().Backup(mock.Anything, "web", mock.Anything, mock.Anything).
+		Return("", fmt.Errorf("w: %w", unchangedError{})).Once()
+	j := job("web", f.services(t, "key"))
+	j.Settings.Pre, j.Settings.Post = "", ""
+
+	r := f.manager(t, Settings{}).runJob(context.Background(), j)
+
+	require.NoError(t, r.err)
+	assert.Equal(t, outcomeComplete, r.outcome, "forget and prune may run")
+	assert.Empty(t, r.snapshotID)
 }

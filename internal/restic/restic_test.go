@@ -92,11 +92,25 @@ func TestClient_BackupIncomplete(t *testing.T) {
 	require.ErrorAs(t, err, &exit, "the runner's error is kept")
 }
 
+func TestClient_BackupIncompleteWithoutSummary(t *testing.T) {
+	t.Parallel()
+	c, r := newClient(t)
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--tag=web", "--", "/a").
+		Return([]byte(jsonExit3), exitError(3))
+
+	id, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
+
+	assert.Empty(t, id)
+	var incomplete *IncompleteError
+	require.ErrorAs(t, err, &incomplete)
+}
+
 func TestClient_BackupWithoutSnapshot(t *testing.T) {
 	t.Parallel()
 	tests := []struct{ name, out string }{
 		{name: "dry run", out: jsonSummary[:len(jsonSummary)-1] + `,"dry_run":true}`},
 		{name: "no summary", out: "Warning: something\n" + jsonStatus},
+		{name: "dry run without ID", out: `{"message_type":"summary","dry_run":true}`},
 		{name: "empty", out: ""},
 	}
 	for _, tt := range tests {
@@ -112,6 +126,24 @@ func TestClient_BackupWithoutSnapshot(t *testing.T) {
 			assert.Empty(t, id)
 		})
 	}
+}
+
+func TestClient_BackupUnchanged(t *testing.T) {
+	t.Parallel()
+	c, r := newClient(t)
+	// restic 0.19 with --skip-if-unchanged when nothing changed: no snapshot_id.
+	out := `{"message_type":"summary","files_unmodified":2,"dirs_unmodified":9,` +
+		`"total_files_processed":2,"total_bytes_processed":9,"total_duration":0.67}`
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--tag=web", "--", "/a").
+		Return([]byte(out), nil)
+
+	id, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
+
+	assert.Empty(t, id)
+	var unchanged *UnchangedError
+	require.ErrorAs(t, err, &unchanged)
+	assert.True(t, unchanged.Unchanged())
+	assert.EqualError(t, err, "restic: backup web: nothing changed, no snapshot created")
 }
 
 func TestClient_BackupOtherExitCodeFails(t *testing.T) {
