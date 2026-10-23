@@ -50,7 +50,7 @@ func TestClient_Backup(t *testing.T) {
 	c, err := New(Settings{GlobalArgs: []string{"--limit-upload=10"}},
 		Deps{Runner: r, Log: zerolog.New(&buf)})
 	require.NoError(t, err)
-	r.EXPECT().Run(mock.Anything, "restic", "--limit-upload=10", "backup", "--json",
+	r.EXPECT().Run(mock.Anything, "restic", "--limit-upload=10", "backup", "--json", "--group-by=host,tags",
 		"--exclude=*.tmp", "--tag=web", "--", "/a", "/b").
 		Return([]byte(jsonStatus+"\n"+jsonSummary+"\n"), nil)
 
@@ -78,7 +78,7 @@ func TestClient_BackupIncomplete(t *testing.T) {
 	t.Parallel()
 	c, r := newClient(t)
 	out := jsonError + "\n" + jsonSummary + "\n" + jsonExit3 + "\n"
-	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--tag=web", "--", "/a").
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--group-by=host,tags", "--tag=web", "--", "/a").
 		Return([]byte(out), fmt.Errorf("command: restic: %w", exitError(3)))
 
 	id, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
@@ -95,7 +95,7 @@ func TestClient_BackupIncomplete(t *testing.T) {
 func TestClient_BackupIncompleteWithoutSummary(t *testing.T) {
 	t.Parallel()
 	c, r := newClient(t)
-	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--tag=web", "--", "/a").
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--group-by=host,tags", "--tag=web", "--", "/a").
 		Return([]byte(jsonExit3), exitError(3))
 
 	id, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
@@ -117,7 +117,7 @@ func TestClient_BackupWithoutSnapshot(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			c, r := newClient(t)
-			r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--tag=web", "--", "/a").
+			r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--group-by=host,tags", "--tag=web", "--", "/a").
 				Return([]byte(tt.out), nil)
 
 			id, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
@@ -134,7 +134,7 @@ func TestClient_BackupUnchanged(t *testing.T) {
 	// restic 0.19 with --skip-if-unchanged when nothing changed: no snapshot_id.
 	out := `{"message_type":"summary","files_unmodified":2,"dirs_unmodified":9,` +
 		`"total_files_processed":2,"total_bytes_processed":9,"total_duration":0.67}`
-	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--tag=web", "--", "/a").
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--group-by=host,tags", "--tag=web", "--", "/a").
 		Return([]byte(out), nil)
 
 	id, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
@@ -149,7 +149,7 @@ func TestClient_BackupUnchanged(t *testing.T) {
 func TestClient_BackupOtherExitCodeFails(t *testing.T) {
 	t.Parallel()
 	c, r := newClient(t)
-	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--tag=web", "--", "/a").
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--group-by=host,tags", "--tag=web", "--", "/a").
 		Return([]byte(jsonSummary), exitError(1))
 
 	id, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
@@ -170,7 +170,7 @@ func TestClient_BackupNoSources(t *testing.T) {
 func TestClient_BackupFails(t *testing.T) {
 	t.Parallel()
 	c, r := newClient(t)
-	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--tag=web", "--", "/a").
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--group-by=host,tags", "--tag=web", "--", "/a").
 		Return(nil, assert.AnError)
 
 	_, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
