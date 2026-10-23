@@ -71,6 +71,20 @@ func (e *IncompleteError) Unwrap() error { return e.Err }
 // Incomplete reports true; callers match it with errors.As without importing restic.
 func (e *IncompleteError) Incomplete() bool { return true }
 
+// UnchangedError is returned by Backup when restic skipped the snapshot because nothing
+// changed since the last one (--skip-if-unchanged): the latest snapshot is still current.
+type UnchangedError struct {
+	// Tag is the job tag of the skipped snapshot.
+	Tag string
+}
+
+func (e *UnchangedError) Error() string {
+	return "restic: backup " + e.Tag + ": nothing changed, no snapshot created"
+}
+
+// Unchanged reports true; callers match it with errors.As without importing restic.
+func (e *UnchangedError) Unchanged() bool { return true }
+
 // Deps are the dependencies of a Client.
 type Deps struct {
 	// Runner executes restic with the repository environment.
@@ -111,7 +125,8 @@ func (c *Client) run(ctx context.Context, command string, args ...string) ([]byt
 
 // Backup runs `restic backup --json [args] --tag=<tag> -- <sources>` and returns the short
 // ID of the new snapshot, or "" when restic reports none. args come from BackupFlags.Args.
-// An incomplete snapshot returns its ID together with an *IncompleteError.
+// An incomplete snapshot returns its ID together with an *IncompleteError, a snapshot
+// that --skip-if-unchanged skipped an *UnchangedError.
 func (c *Client) Backup(ctx context.Context, tag string, sources, args []string) (
 	string, error,
 ) {
@@ -127,8 +142,18 @@ func (c *Client) Backup(ctx context.Context, tag string, sources, args []string)
 	if found {
 		c.logSummary(tag, sum)
 	}
-	if err != nil {
+	return backupResult(tag, sum, found, err)
+}
+
+// backupResult returns the snapshot ID of a backup that ended with err (nil or exit code
+// 3) and the summary sum, if found.
+func backupResult(tag string, sum summary, found bool, err error) (string, error) {
+	switch {
+	case err != nil:
 		return sum.snapshotID(), &IncompleteError{Tag: tag, Err: err}
+	case found && !sum.DryRun && sum.SnapshotID == "":
+		// Only a skipped snapshot leaves the ID out of a real summary.
+		return "", &UnchangedError{Tag: tag}
 	}
 	return sum.snapshotID(), nil
 }

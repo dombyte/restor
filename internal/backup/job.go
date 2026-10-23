@@ -258,7 +258,12 @@ func (m *Manager) startServices(ctx context.Context, j Job, services []string,
 func (m *Manager) backup(ctx context.Context, s JobSettings, log zerolog.Logger) result {
 	id, err := m.resticBackup(ctx, s)
 	var incomplete interface{ Incomplete() bool }
+	var unchanged interface{ Unchanged() bool }
 	switch {
+	case errors.As(err, &unchanged) && unchanged.Unchanged():
+		// The latest snapshot is still current and complete: forget and prune may run.
+		log.Info().Msg("backup completed, nothing changed since the last snapshot")
+		return result{outcome: outcomeComplete}
 	case errors.As(err, &incomplete) && incomplete.Incomplete():
 		log.Warn().Err(err).Str("snapshot_id", id).
 			Msg("backup completed, but some source files could not be read")
