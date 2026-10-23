@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -178,14 +179,28 @@ func testGlobalFlags(t *testing.T) {
 	require.NoError(t, c.Unlock(ctx))
 }
 
-// staticSource returns testdata/static: restic also records the directories above a
-// source, and those of a temporary directory change while other tests run, so a backup
-// there is never unchanged.
+// staticSource returns testdata/static. restic also records the directories above a
+// source, so a backup is only unchanged while none of them changes: those of a temp dir
+// change while other tests run, and even the home directory can change at any time, so
+// the tests that expect a skipped backup retry it (unchangedWithin).
 func staticSource(t *testing.T) string {
 	t.Helper()
 	src, err := filepath.Abs(filepath.Join("testdata", "static"))
 	require.NoError(t, err)
 	return src
+}
+
+// unchangedWithin calls backup up to three times and reports whether one of the calls
+// found nothing changed; a call that saved a snapshot (a directory above the source
+// changed meanwhile) is tried again.
+func unchangedWithin(t *testing.T, backup func() (unchanged bool)) bool {
+	t.Helper()
+	for range 3 {
+		if backup() {
+			return true
+		}
+	}
+	return false
 }
 
 func testSkipIfUnchanged(t *testing.T) {
@@ -194,15 +209,21 @@ func testSkipIfUnchanged(t *testing.T) {
 	src := staticSource(t)
 	c := r.client(t, restic.Settings{})
 	args := restic.BackupFlags{SkipIfUnchanged: true}.Args()
-
 	_, err := c.Backup(context.Background(), "web", []string{src}, args)
 	require.NoError(t, err)
-	id, err := c.Backup(context.Background(), "web", []string{src}, args)
 
-	var unchanged *restic.UnchangedError
-	require.ErrorAs(t, err, &unchanged, "the second backup is skipped")
-	assert.Empty(t, id)
-	assert.Len(t, r.snapshots(t, "web"), 1)
+	skipped := unchangedWithin(t, func() bool {
+		id, err := c.Backup(context.Background(), "web", []string{src}, args)
+		var unchanged *restic.UnchangedError
+		if errors.As(err, &unchanged) {
+			assert.Empty(t, id)
+			return true
+		}
+		require.NoError(t, err)
+		return false
+	})
+
+	assert.True(t, skipped, "a backup of unchanged files is skipped")
 }
 
 func testForget(t *testing.T) {
@@ -338,13 +359,23 @@ jobs:
 		ConfigPath: path, Getenv: func(string) string { return "" }, Environ: environ,
 		Log: zerolog.Nop(),
 	}
-	for range 2 { // the second run skips both snapshots as unchanged
+	run := func() {
 		a, err := New(o)
 		require.NoError(t, err)
 		require.NoError(t, a.Run(context.Background()))
 	}
-	snaps := r.snapshots(t, "a")
-	require.Len(t, snaps, 1)
-	assert.Equal(t, []string{"a.txt"}, r.files(t, snaps[0].ShortID, src))
-	assert.Len(t, r.snapshots(t, "b"), 1)
+	run()
+	first := r.snapshots(t, "a")
+	require.Len(t, first, 1)
+	assert.Equal(t, []string{"a.txt"}, r.files(t, first[0].ShortID, src))
+	require.Len(t, r.snapshots(t, "b"), 1, "b has its own snapshot, although a has the "+
+		"same sources")
+
+	skipped := unchangedWithin(t, func() bool {
+		before := len(r.snapshots(t, "a")) + len(r.snapshots(t, "b"))
+		run()
+		return len(r.snapshots(t, "a"))+len(r.snapshots(t, "b")) == before
+	})
+
+	assert.True(t, skipped, "a later run skips both jobs as unchanged")
 }

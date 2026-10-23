@@ -73,6 +73,7 @@ restor orchestrates **restic** backups of several **jobs** on one host.
 ```bash
 make check                                                # ./scripts/pre-commit.sh, check-only
 make integration                                          # integration tests, restic on PATH
+make integration-oldest                                   # same with the oldest supported restic
 golangci-lint fmt --config .golangci.yml                  # gofumpt + goimports
 golangci-lint run --config .golangci.yml                  # full linter set (section 12)
 go tool deadcode -test ./... # unused exported code
@@ -142,6 +143,8 @@ example/                   config.yaml (full reference, kept valid by a test), r
 packaging/                 .deb/.rpm only: system + user units (/usr/bin/restor) and the
                            install/remove scripts (nfpm in .goreleaser.yaml)
 scripts/pre-commit.sh      local checks (make check)
+scripts/install-restic.sh  downloads a restic release, checksum verified (CI, make
+                           integration-oldest)
 ```
 
 Layout rules:
@@ -150,8 +153,8 @@ Layout rules:
 - `internal/` holds **all** project code; at most 3 levels below `internal/`.
 - `pkg/` only for code meant for other modules, and only with user confirmation.
 - Root files: `AGENTS.md`, `README.md`, `.golangci.yml`, `.goreleaser.yaml`,
-  `.mockery.yaml`, `Makefile`, `renovate.json`, `scripts/pre-commit.sh`, `example/`,
-  `packaging/`.
+  `.mockery.yaml`, `Makefile`, `renovate.json`, `scripts/pre-commit.sh`,
+  `scripts/install-restic.sh`, `example/`, `packaging/`.
 
 ---
 
@@ -705,11 +708,13 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
   for lock files. Tests that need real tools are integration tests behind
   `//go:build integration` and are not part of `go test ./...`.
 - `internal/app/integration_test.go` runs the restic on `PATH` against local repositories
-  (`make integration`): one subtest per restic feature restor uses (every backup, forget,
+  (`make integration`; `make integration-oldest` with the oldest supported release, which
+  CI tests too): one subtest per restic feature restor uses (every backup, forget,
   global and prune flag, skip-if-unchanged, exit codes 3/10/11/12, a whole `restor run`),
   so a failing release shows what it lacks. A new restic option gets a check there.
-  Backups that must be unchanged use `testdata/static`: restic also records the
-  directories above a source, and those of a temp dir change while other tests run.
+  Backups that must be unchanged use `testdata/static` and are retried
+  (`unchangedWithin`): restic also records the directories above a source, those of a
+  temp dir change while other tests run, and even the home directory can change.
 - Tests run with `-race` locally and in CI.
 - New code comes with tests; bug fixes come with a regression test (failing first).
 - Coverage (SHOULD): ≥ 70 % per package with logic, ≥ 80 % for packages with ≥ 5 functions
@@ -723,7 +728,7 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
 |---|---|
 | `.golangci.yml` | v2 config, linters from section 12, formatters gofumpt + goimports |
 | `scripts/pre-commit.sh` | check-only (never rewrites or stages): fmt diff, lint, deadcode, govulncheck, build, `go test -race` |
-| `Makefile` | `build` (ldflags build info), `check` (runs the script), `clean`, `run` |
+| `Makefile` | `build` (ldflags build info), `check` (runs the script), `clean`, `run`, `integration` (restic on PATH), `integration-oldest` (downloads `minSupported` into `~/.cache/restor/restic`) |
 | `.github/workflows/checks.yml` | on push to main, PRs and `workflow_call`: tidy check, build, race tests, deadcode, govulncheck, mock drift, golangci-lint, integration tests against the oldest supported and the newest tested restic (downloaded, checksum verified); a `gate` job skips them on a push to main that is a PR's merge commit (15.5); `concurrency` cancels superseded PR runs only |
 | `.github/workflows/release.yml` | on `vX.Y.Z` / `vX.Y.Z-*` tags: a `guard` job verifies the exact tag format and that the tag is on `main`, then reuses `checks.yml` (granted `pull-requests: read` for the gate); passes `GOVERSION` to goreleaser; `concurrency` runs one release per tag, never cancelled |
 | `.goreleaser.yaml` | `go mod verify` only (never rewrites), `-trimpath`, reproducible (`CommitDate`), `goamd64: v1`, grouped changelog, archives + nfpm `.deb`/`.rpm` (`mtime` = `CommitDate`), no image (section 8) |
