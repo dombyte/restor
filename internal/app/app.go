@@ -145,26 +145,82 @@ func (a *App) Restic(ctx context.Context, stdio Stdio, args []string) error {
 }
 
 // Describe writes the validated plan to w: the jobs in the order they start with
-// concurrency 1, with their type, what they wait for and what they back up. The
-// repository URL is left out, it may hold credentials.
+// concurrency 1, with their type, what they wait for and what they back up, then each
+// distinct retention policy once, labelled in the table. The repository URL is left out,
+// it may hold credentials.
 func (a *App) Describe(w io.Writer) error {
-	p := a.plan
+	jobs := a.orderedJobs()
+	labels, groups := keepGroups(jobs)
 	tw := tabwriter.NewWriter(w, 0, 0, columnPadding, ' ', 0)
-	_, _ = fmt.Fprintf(tw, "concurrency:\t%d (0 = all at once)\n", p.Concurrency)
-	_, _ = fmt.Fprintf(tw, "prune:\t%t\n", p.Repository.Prune)
+	_, _ = fmt.Fprintf(tw, "concurrency:\t%d (0 = all at once)\n", a.plan.Concurrency)
+	_, _ = fmt.Fprintf(tw, "prune:\t%t\n", a.plan.Repository.Prune)
 	_, _ = fmt.Fprintln(tw, "\nJOB\tTYPE\tAFTER\tSTOP\tKEEP\tSOURCES")
-	jobs := map[string]config.Job{}
-	for _, j := range p.Jobs {
-		jobs[j.Name] = j
-	}
-	for _, name := range a.manager.Order() {
-		j := jobs[name]
+	for _, j := range jobs {
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%t\t%s\t%s\n", j.Name, or(j.Type, "files"),
-			or(strings.Join(j.After, ","), "-"), j.StopsServices(),
-			or(strings.ReplaceAll(strings.Join(keep(j.Keep).Args(), " "), "--keep-", ""), "-"),
+			or(strings.Join(j.After, ","), "-"), j.StopsServices(), labels[j.Name],
 			strings.Join(j.Sources, " "))
 	}
+	_, _ = fmt.Fprintln(tw, "\nKEEP")
+	for _, g := range groups {
+		_, _ = fmt.Fprintf(tw, "  %s\t%s\t(%s)\n", g.label, g.policy, strings.Join(g.jobs, ", "))
+	}
 	return tw.Flush()
+}
+
+// orderedJobs returns the jobs in the order they start with concurrency 1.
+func (a *App) orderedJobs() []config.Job {
+	byName := map[string]config.Job{}
+	for _, j := range a.plan.Jobs {
+		byName[j.Name] = j
+	}
+	order := a.manager.Order()
+	jobs := make([]config.Job, 0, len(order))
+	for _, name := range order {
+		jobs = append(jobs, byName[name])
+	}
+	return jobs
+}
+
+// keepGroup is one retention policy and the jobs that use it.
+type keepGroup struct {
+	label, policy string
+	jobs          []string
+}
+
+// keepGroups labels each distinct retention policy of jobs A, B, … in order of first use
+// ("-" for jobs that are never forgotten) and returns the label of every job and the
+// groups in label order.
+func keepGroups(jobs []config.Job) (map[string]string, []keepGroup) {
+	labels := map[string]string{}
+	index := map[string]int{} // policy → position in groups
+	var groups []keepGroup
+	next := 0 // the next letter label
+	for _, j := range jobs {
+		policy := strings.ReplaceAll(strings.Join(keep(j.Keep).Args(), " "), "--keep-", "")
+		i, seen := index[policy]
+		if !seen {
+			g := keepGroup{label: "-", policy: "never forgotten"}
+			if policy != "" {
+				g = keepGroup{label: keepLabel(next), policy: policy}
+				next++
+			}
+			i = len(groups)
+			index[policy] = i
+			groups = append(groups, g)
+		}
+		groups[i].jobs = append(groups[i].jobs, j.Name)
+		labels[j.Name] = groups[i].label
+	}
+	return labels, groups
+}
+
+// keepLabel returns the n-th label: A … Z, then AA, AB, …
+func keepLabel(n int) string {
+	const letters = 26
+	if n < letters {
+		return string(rune('A' + n))
+	}
+	return keepLabel(n/letters-1) + keepLabel(n%letters)
 }
 
 // ShutdownTimeout returns how long Run may take after its context was cancelled, so that

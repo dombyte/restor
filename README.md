@@ -81,7 +81,8 @@ sudo loginctl enable-linger "$USER"   # keep the timer running while logged out
 ```bash
 restor run                      # back up every job, then forget and prune
 restor run web db               # only these jobs (their order among each other is kept)
-restor validate                 # check the config, print the jobs in start order
+restor validate                 # check the config, print the jobs in start order and
+                                # each retention policy once, with the jobs using it
 restor restic snapshots         # run restic with the configured repository and env file
 restor restic restore latest --tag web --target /tmp/restore
 restor version
