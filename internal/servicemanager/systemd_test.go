@@ -2,6 +2,7 @@ package servicemanager
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -100,7 +101,7 @@ func TestSystemd_StopNotLoaded(t *testing.T) {
 	t.Parallel()
 	s, r := newSystemd(t, false)
 	expectSystemctl(r, "stop", "a.service").
-		Return([]byte("Unit a.service not loaded."), assert.AnError).Once()
+		Return(nil, fmt.Errorf("%w: Unit a.service not loaded.", assert.AnError)).Once()
 	expectSystemctl(r, "is-active", "a.service").Return([]byte("inactive"), nil).Once()
 
 	ok, err := s.Stop(context.Background(), []string{"a.service"}, time.Second)

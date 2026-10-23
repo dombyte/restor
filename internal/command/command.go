@@ -21,9 +21,11 @@ const (
 	waitDelay = 10 * time.Second
 	// maxOutputLines is how much of a program's output an error or debug log carries.
 	maxOutputLines = 20
-	// maxOutput bounds the output Run keeps in memory; a long restic run keeps its last
+	// maxOutput bounds the stdout Run keeps in memory; a long restic run keeps its last
 	// part, which holds the summary and the snapshot ID.
 	maxOutput = 1 << 20
+	// maxStderr bounds the stderr Run keeps for errors and debug logs.
+	maxStderr = 64 << 10
 )
 
 // ErrEmptyCommand is returned when Run is called without a program name.
@@ -40,10 +42,12 @@ func New(env []string, log zerolog.Logger) *Runner {
 	return &Runner{env: env, log: log}
 }
 
-// Run executes name with args and returns its combined stdout and stderr (the last
-// maxOutput bytes). A non-zero exit returns the output too, with an error that carries
-// the last lines of it. When ctx ends, the program's process group gets SIGTERM, the
-// program SIGKILL after waitDelay, and what is left of the group SIGKILL when it ended.
+// Run executes name with args and returns its stdout (the last maxOutput bytes). Stderr
+// is kept apart, so warnings there (compose, podman's provider banner) never reach the
+// callers that parse the output. A non-zero exit returns the output too, with an error
+// that carries the last lines of stderr, or of stdout when stderr is empty. When ctx
+// ends, the program's process group gets SIGTERM, the program SIGKILL after waitDelay,
+// and what is left of the group SIGKILL when it ended.
 func (r *Runner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	if name == "" {
 		return nil, ErrEmptyCommand
@@ -59,8 +63,8 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) ([]byte, 
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return signalGroup(cmd.Process.Pid, syscall.SIGTERM) }
 	cmd.WaitDelay = waitDelay
-	buf := &tailBuffer{max: maxOutput}
-	cmd.Stdout, cmd.Stderr = buf, buf
+	stdout, stderr := &tailBuffer{max: maxOutput}, &tailBuffer{max: maxStderr}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	err := cmd.Run()
 	if ctx.Err() != nil && cmd.Process != nil {
 		// Kill what is left of a cancelled group: after waitDelay exec only kills the
@@ -69,12 +73,15 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) ([]byte, 
 			r.log.Warn().Err(kerr).Str("program", name).Msg("cannot kill process group")
 		}
 	}
-	out := buf.Bytes()
+	out, errOut := stdout.Bytes(), stderr.Bytes()
 	if err != nil {
-		return out, &Error{Program: name, Output: tail(out, maxOutputLines), Err: err}
+		if len(bytes.TrimSpace(errOut)) == 0 {
+			errOut = out // programs that report their failure on stdout (scripts)
+		}
+		return out, &Error{Program: name, Output: tail(errOut, maxOutputLines), Err: err}
 	}
 	r.log.Debug().Str("program", name).Str("output", tail(out, maxOutputLines)).
-		Msg("command finished")
+		Str("stderr", tail(errOut, maxOutputLines)).Msg("command finished")
 	return out, nil
 }
 
@@ -116,7 +123,8 @@ func (b *tailBuffer) Bytes() []byte {
 type Error struct {
 	// Program is the executable that failed.
 	Program string
-	// Output holds the last lines of the program's combined output.
+	// Output holds the last lines of the program's stderr, or of its stdout when it wrote
+	// nothing to stderr.
 	Output string
 	// Err is the exec error (exit status, not found, killed by the context).
 	Err error

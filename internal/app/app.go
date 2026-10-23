@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -204,6 +205,23 @@ func warnConfig(log zerolog.Logger, cfg *config.Config, projects []config.Projec
 		log.Warn().Msg("no restic repository: set global.restic_repo or RESTIC_REPOSITORY")
 	}
 	warnEnvFileMode(log, cfg.EnvFile)
+	warnRelativeHooks(log, projects)
+}
+
+// warnRelativeHooks warns about hooks whose program is a relative path such as
+// ./backup.sh: it resolves against the working directory, which is / (system) or the home
+// directory (user) under systemd, not against the config directory.
+func warnRelativeHooks(log zerolog.Logger, projects []config.Project) {
+	for _, p := range projects {
+		for _, hook := range []string{p.PreBackupCmd, p.PostBackupCmd} {
+			fields := strings.Fields(hook)
+			if len(fields) > 0 && strings.Contains(fields[0], "/") && !filepath.IsAbs(fields[0]) {
+				log.Warn().Str("project", p.Name).Str("hook", fields[0]).
+					Msg("hook path is relative to the working directory, not to the config " +
+						"file; use an absolute path")
+			}
+		}
+	}
 }
 
 // warnEnvFileMode warns when the env file, which usually holds the restic password, can

@@ -152,7 +152,7 @@ func (m *Manager) stopServices(ctx context.Context, p Project, log zerolog.Logge
 	case err != nil:
 		log.Warn().Err(err).Msg("cannot stop services, backing up anyway")
 	case !stopped:
-		log.Warn().Dur("timeout", p.Settings.StopTimeout).
+		log.Warn().Stringer("timeout", p.Settings.StopTimeout).
 			Msg("services did not stop within the timeout, backing up anyway")
 	}
 	return services, nil
@@ -175,7 +175,7 @@ func (m *Manager) startServices(ctx context.Context, p Project, services []strin
 		return fmt.Errorf("start services: %w", err)
 	}
 	if !running {
-		log.Warn().Dur("timeout", timeout).Msg("services did not start within the timeout")
+		log.Warn().Stringer("timeout", timeout).Msg("services did not start within the timeout")
 	}
 	return nil
 }

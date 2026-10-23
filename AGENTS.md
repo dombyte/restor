@@ -96,8 +96,8 @@ make build                                                # ./restor with versio
 - Mocks: mockery v3 is a Go tool (see below); `go tool mockery` generates them
   from `.mockery.yaml` into `internal/<pkg>/mocks`. CI checks them for drift (not part of
   `make check`); regenerate after changing an interface.
-- Tool versions are pinned (`tool` directives in `go.mod`, golangci-lint action
-  `version:`) and bumped deliberately, the same version locally and in CI. Go tools
+- Tool versions are pinned (`tool` directives in `go.mod`, the `version:` of the
+  golangci-lint and goreleaser actions) and bumped deliberately, the same version locally and in CI. Go tools
   (mockery, deadcode, govulncheck) are `tool` directives, run with `go tool <name>` and
   bumped with `go get -tool <module>@vX.Y.Z`, rather than pinned `go run` commands: those
   check their modules against sum.golang.org on every CI run, and a checksum-DB hiccup
@@ -220,7 +220,8 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 1. `cmd/main`: cobra parses flags; logger = console writer on stderr, `--debug` = debug
    level; `signal.NotifyContext` for SIGINT/SIGTERM; build info is logged.
 2. `app.New`: `config.Load` (file + env file + inline env, expansion, validation) and
-   wiring. Any error ends the run (exit 1).
+   wiring. Any error ends the run (exit 1); an invalid config is logged one line per
+   problem.
 3. `Manager.Run`: run all projects (sequential or parallel); when the run was not
    cancelled and `global.auto_prune` is set: forget each project that has a complete
    snapshot and a `retention_policy`, then, only when every project has a complete
@@ -309,7 +310,8 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   stopped. Unknown keys are ignored. Startup warns about them
   (typos such as `stop_service`), about projects sharing a compose file or unit in
   parallel mode, about an `env_file` that group or others can access (mode & 077), about
-  a `retention_policy` without `auto_prune` and
+  a `retention_policy` without `auto_prune`, about a hook whose program is a relative
+  path (`./x.sh`; it resolves against the working directory, `/` under systemd) and
   about a missing repository (`restic_repo`, `RESTIC_REPOSITORY`, `RESTIC_REPOSITORY_FILE`).
 - `stop_services: false` backs up without stopping anything. Hooks: global
   `pre_backup_cmd`/`post_backup_cmd` are the default of every project, overridden per
@@ -337,7 +339,8 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 - systemd: `systemctl [--user] stop|start <units>` (stop ignores "not running"/"not
   loaded"); state from `systemctl is-active <units>`. Up (running before the backup, and
   not yet stopped) = `active`, `activating`, `deactivating`, `reloading` or `refreshing`;
-  started = all `active`.
+  started = all `active` (a `Type=simple` unit is `active` as soon as its process runs,
+  so a crash right after the start is not seen; README says so).
   `services` selects some of `systemd_units` (a name that is not one of them is a
   validation error); empty means all units.
 - noop: no services; every operation succeeds.
@@ -354,12 +357,12 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   `summary` message gives the snapshot ID (logged as the 8-character short ID; none for a
   `dry_run` summary or a missing summary, which is a warning, not an error) and the
   counters logged at info (`files_new`, `bytes_added`, `duration`, …). Lines that are not
-  JSON (stderr) are skipped. Exit code 3 returns the ID with a `*restic.IncompleteError`;
+  JSON are skipped. Exit code 3 returns the ID with a `*restic.IncompleteError`;
   `backup` matches it through an `Incomplete() bool` interface, so it does not import
   `restic`.
 - Exit codes 10 (no repository), 11 (repository locked; hint: `--retry-lock`) and 12
   (wrong password) are named in the error before the runner's error, which keeps only
-  restic's last output lines (JSON in backup).
+  restic's last stderr lines (JSON error messages in backup).
 - `restic forget [forget_options] --tag <project> <retention_policy split on whitespace>`.
 - `restic [prune_options] prune` and `restic [prune_options] unlock`.
 - Every list option is passed as one argument per item: write `["-o", "s3.connections=10"]`
@@ -408,6 +411,13 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 - **Repository in the environment:** `RESTIC_REPOSITORY` instead of `-r` keeps
   credentials in repository URLs out of debug logs and command errors (errors carry only
   the program name and the last 20 output lines).
+- **Stdout and stderr apart:** `command.Runner` returns only stdout, which the callers
+  parse (`compose ps --format json`, `config --services`, `systemctl is-active`, restic's
+  JSON). Stderr carries warnings that would break the parsing: Compose's
+  `level=warning` lines (obsolete `version:`, unset variables) and `podman compose`'s
+  "Executing external compose provider" banner. Errors carry the last stderr lines (stdout
+  when stderr is empty, as scripts often report there), so checks for expected failures
+  ("not loaded", "no containers to stop") match the error, not the output.
 
 Design decisions that are not obvious from the code go here, not into long code comments.
 
@@ -619,10 +629,11 @@ project:
 - `enabledManagers` lists exactly the ecosystems restor has: `gomod` (incl. the Go
   tools), `github-actions`, plus `custom.regex` for the regex manager below.
 - Every pinned version in the repo is tracked. Versions no built-in manager sees get a
-  `customManagers` regex; today only the golangci-lint `version:` of the CI action (the
-  `github-actions` manager tracks the action, not that input).
-- Updates that need manual work (Go module majors = new module path, golangci-lint majors
-  = config migration) are disabled with a `description` saying why.
+  `customManagers` regex; today the `version:` of the golangci-lint action in CI and of
+  the goreleaser action in the release (the `github-actions` manager tracks the actions,
+  not that input).
+- Updates that need manual work (Go module majors = new module path, golangci-lint and
+  goreleaser majors = config migration) are disabled with a `description` saying why.
 - Text that only describes a pinning pattern must not match a regex manager.
 - **Auto-merge:** Renovate proposes a version only once it is 3 days old
   (`minimumReleaseAge`; security updates at once) and merges minor, patch and digest

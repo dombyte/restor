@@ -60,7 +60,7 @@ func TestClient_Backup(t *testing.T) {
 	for _, field := range []string{
 		`"files_new":1`, `"files_changed":2`, `"files_unmodified":3`, `"dirs_new":4`,
 		`"bytes_added":3875`, `"files_processed":6`, `"bytes_processed":4096`,
-		`"duration":1500`,
+		`"duration":"1.5s"`,
 	} {
 		assert.Contains(t, buf.String(), field)
 	}
