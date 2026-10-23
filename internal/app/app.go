@@ -29,13 +29,15 @@ import (
 // envFileOthersMask are the permission bits that let group or others access the env file.
 const envFileOthersMask os.FileMode = 0o077
 
-// ErrUnknownType is returned by CreateServiceManager for an unknown service manager.
-var ErrUnknownType = errors.New("app: unknown service manager")
+// ErrUnknownType is returned by CreateServiceManager for an unknown job type.
+var ErrUnknownType = errors.New("app: unknown job type")
 
 // Options are the inputs of New.
 type Options struct {
 	// ConfigPath is the configuration file.
 	ConfigPath string
+	// Jobs selects the jobs to run; empty runs all.
+	Jobs []string
 	// Getenv resolves ${VAR} references in the configuration.
 	Getenv func(string) string
 	// Environ is the process environment the external programs inherit.
@@ -47,45 +49,41 @@ type Options struct {
 // App is one wired backup run.
 type App struct {
 	manager *backup.Manager
-	empty   bool
 	log     zerolog.Logger
 }
 
 // New loads the configuration and wires all components; it starts nothing.
 func New(o Options) (*App, error) {
-	cfg, err := config.Load(o.ConfigPath, o.Getenv)
+	plan, err := config.Load(o.ConfigPath, o.Getenv)
 	if err != nil {
 		return nil, err
 	}
-	projects := cfg.ResolvedProjects()
-	logProjects(o.Log, projects)
-	env := append(slices.Clone(o.Environ), cfg.EnvPairs()...)
-	warnConfig(o.Log, cfg, projects, env)
-	warnMissingBinaries(o.Log, projects, exec.LookPath)
+	if plan, err = plan.Select(o.Jobs); err != nil {
+		return nil, err
+	}
+	logJobs(o.Log, plan.Jobs)
+	resticEnv := resticEnv(o.Environ, plan.Repository)
+	warnConfig(o.Log, plan, resticEnv)
+	warnMissingBinaries(o.Log, plan.Jobs, exec.LookPath)
 
-	runner := command.New(env, component(o.Log, "command"))
-	clock := util.NewRealClock()
-	manager, err := createManager(cfg, projects, managerDeps{
-		runner: runner, resticRunner: resticRunner(env, cfg.Global.ResticRepo, o.Log),
-		clock: clock, lockDir: lockDir(o.Getenv), log: o.Log,
+	manager, err := createManager(plan, managerDeps{
+		runner:       command.New(o.Environ, component(o.Log, "command")),
+		resticRunner: command.New(resticEnv, component(o.Log, "restic")),
+		clock:        util.NewRealClock(), lockDir: lockDir(o.Getenv), log: o.Log,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &App{manager: manager, empty: len(projects) == 0, log: o.Log}, nil
+	return &App{manager: manager, log: o.Log}, nil
 }
 
 // Run runs one backup cycle.
 func (a *App) Run(ctx context.Context) error {
-	if a.empty {
-		a.log.Warn().Msg("no projects configured")
-		return nil
-	}
 	return a.manager.Run(ctx)
 }
 
 // ShutdownTimeout returns how long Run may take after its context was cancelled, so that
-// every project can restart the services it stopped.
+// every job can restart the services it stopped.
 func (a *App) ShutdownTimeout() time.Duration { return a.manager.ShutdownTimeout() }
 
 type managerDeps struct {
@@ -103,10 +101,8 @@ func lockDir(getenv func(string) string) string {
 	})
 }
 
-func createManager(cfg *config.Config, projects []config.Project, d managerDeps) (
-	*backup.Manager, error,
-) {
-	resticClient, err := restic.New(restic.Settings{GlobalArgs: cfg.Global.PruneOptions},
+func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
+	resticClient, err := restic.New(resticSettings(plan.Repository),
 		restic.Deps{Runner: d.resticRunner, Log: component(d.log, "restic")})
 	if err != nil {
 		return nil, err
@@ -116,115 +112,139 @@ func createManager(cfg *config.Config, projects []config.Project, d managerDeps)
 		return nil, err
 	}
 	smDeps := servicemanager.Deps{Runner: d.runner, Clock: d.clock}
-	bps := make([]backup.Project, 0, len(projects))
-	for _, p := range projects {
-		services, err := CreateServiceManager(p, smDeps)
+	bps := make([]backup.Project, 0, len(plan.Jobs))
+	for _, j := range plan.Jobs {
+		services, err := CreateServiceManager(j, smDeps)
 		if err != nil {
-			return nil, fmt.Errorf("app: project %s: %w", p.Name, err)
+			return nil, fmt.Errorf("app: job %s: %w", j.Name, err)
 		}
-		bps = append(bps, backup.Project{Settings: projectSettings(p), Services: services})
+		bps = append(bps, backup.Project{Settings: jobSettings(j), Services: services})
 	}
-	parallel := cfg.RunMode() == config.ModeParallel
+	parallel := plan.Concurrency != 1
 	if parallel {
 		warnSharedLocks(d.log, bps)
 	}
 	return backup.NewManager(backup.Settings{
-		Parallel:  parallel,
-		AutoPrune: cfg.Global.AutoPrune,
+		Parallel: parallel, AutoPrune: plan.Repository.Prune,
 	}, bps, backup.Deps{
 		Restic: resticClient, Locker: locker, Hooks: d.runner, Log: component(d.log, "backup"),
 	})
 }
 
-// CreateServiceManager builds the service manager a project is configured with.
-func CreateServiceManager(p config.Project, d servicemanager.Deps) (backup.Services, error) {
-	switch p.ServiceManager {
-	case config.ManagerDockerCompose:
+// CreateServiceManager builds the service manager of a job's type.
+func CreateServiceManager(j config.Job, d servicemanager.Deps) (backup.Services, error) {
+	switch j.Type {
+	case config.TypeDockerCompose:
 		return servicemanager.NewCompose(
-			servicemanager.ComposeSettings{Binary: "docker", File: p.ComposeFile}, d)
-	case config.ManagerPodmanCompose:
+			servicemanager.ComposeSettings{Binary: "docker", File: j.ComposeFile}, d)
+	case config.TypePodmanCompose:
 		return servicemanager.NewCompose(
-			servicemanager.ComposeSettings{Binary: "podman", File: p.ComposeFile}, d)
-	case config.ManagerSystemd:
+			servicemanager.ComposeSettings{Binary: "podman", File: j.ComposeFile}, d)
+	case config.TypeSystemd:
 		return servicemanager.NewSystemd(servicemanager.SystemdSettings{
-			Units: p.SystemdUnits, User: p.SystemdScope == config.ScopeUser,
+			Units: j.Units, User: j.Scope == config.ScopeUser,
 		}, d)
-	case config.ManagerNoop:
-		// Keyed by project: noop projects share no services and may run in parallel.
-		return servicemanager.NewNoop(servicemanager.NoopSettings{LockKey: "noop-" + p.Name}),
+	case config.TypeFiles:
+		// Keyed by job: file jobs share no services and may run at the same time.
+		return servicemanager.NewNoop(servicemanager.NoopSettings{LockKey: "files-" + j.Name}),
 			nil
 	default:
-		return nil, fmt.Errorf("%w: %q", ErrUnknownType, p.ServiceManager)
+		return nil, fmt.Errorf("%w: %q", ErrUnknownType, j.Type)
 	}
 }
 
-func projectSettings(p config.Project) backup.ProjectSettings {
+func jobSettings(j config.Job) backup.ProjectSettings {
 	return backup.ProjectSettings{
-		Name: p.Name, Services: p.Services, Sources: p.Sources, StopServices: p.StopServices,
-		StopTimeout: p.StopTimeout, StartTimeout: p.StartTimeout,
-		BackupArgs: p.BackupOptions, ForgetArgs: forgetArgs(p),
-		PreBackupCmd: p.PreBackupCmd, PostBackupCmd: p.PostBackupCmd,
+		Name: j.Name, Services: j.Services, Sources: j.Sources, StopServices: j.StopsServices(),
+		StopTimeout: j.StopTimeout, StartTimeout: j.StartTimeout,
+		BackupArgs: backupFlags(j).Args(), ForgetArgs: keep(j.Keep).Args(),
+		PreBackupCmd: j.Pre, PostBackupCmd: j.Post,
 	}
 }
 
-// forgetArgs returns the forget options and the retention policy; none without a policy.
-func forgetArgs(p config.Project) []string {
-	if p.RetentionPolicy == "" {
-		return nil
+func backupFlags(j config.Job) restic.BackupFlags {
+	return restic.BackupFlags{
+		Exclude: j.Exclude, IExclude: j.IExclude, ExcludeFile: j.ExcludeFile,
+		ExcludeIfPresent: j.ExcludeIfPresent, ExcludeCaches: j.ExcludeCaches,
+		ExcludeLargerThan: j.ExcludeLargerThan, OneFileSystem: j.OneFileSystem,
+		SkipIfUnchanged: j.SkipIfUnchanged, Tags: j.Tags,
 	}
-	return append(slices.Clone(p.ForgetOptions), strings.Fields(p.RetentionPolicy)...)
 }
 
-// resticRunner runs restic with the repository in RESTIC_REPOSITORY, so it never shows up
-// in arguments or debug logs. An empty repo leaves a RESTIC_REPOSITORY from the env alone.
-func resticRunner(env []string, repo string, log zerolog.Logger) *command.Runner {
-	if repo != "" {
-		env = append(slices.Clone(env), "RESTIC_REPOSITORY="+repo)
+func keep(k config.Keep) restic.Keep {
+	return restic.Keep{
+		Last: k.Last, Hourly: k.Hourly, Daily: k.Daily, Weekly: k.Weekly, Monthly: k.Monthly,
+		Yearly: k.Yearly, Within: k.Within, WithinHourly: k.WithinHourly,
+		WithinDaily: k.WithinDaily, WithinWeekly: k.WithinWeekly,
+		WithinMonthly: k.WithinMonthly, WithinYearly: k.WithinYearly, Tags: k.Tags,
 	}
-	return command.New(env, component(log, "restic"))
+}
+
+func resticSettings(r config.Repository) restic.Settings {
+	return restic.Settings{
+		GlobalArgs: restic.Repository{
+			BackendOptions: r.BackendOptions, LimitUpload: r.LimitUpload,
+			LimitDownload: r.LimitDownload, RetryLock: r.RetryLock,
+		}.Args(),
+		PruneArgs: restic.PruneFlags{MaxUnused: r.MaxUnused}.Args(),
+	}
+}
+
+// resticEnv is the environment of restic: the process environment, the env file and the
+// repository in RESTIC_REPOSITORY, so it never shows up in arguments or debug logs. An
+// empty URL leaves a RESTIC_REPOSITORY from the environment alone.
+func resticEnv(environ []string, r config.Repository) []string {
+	env := slices.Concat(environ, r.Env)
+	if r.URL != "" {
+		env = append(env, "RESTIC_REPOSITORY="+r.URL)
+	}
+	return env
 }
 
 func component(log zerolog.Logger, name string) zerolog.Logger {
 	return log.With().Str("component", name).Logger()
 }
 
-func logProjects(log zerolog.Logger, projects []config.Project) {
-	for _, p := range projects {
-		log.Info().Str("project", p.Name).Str("service_manager", p.ServiceManager).
-			Strs("sources", p.Sources).Bool("stop_services", p.StopServices).
-			Msg("project configured")
+func logJobs(log zerolog.Logger, jobs []config.Job) {
+	for _, j := range jobs {
+		log.Info().Str("job", j.Name).Str("type", or(j.Type, "files")).
+			Strs("sources", j.Sources).Strs("after", j.After).
+			Bool("stop", j.StopsServices()).Msg("job configured")
 	}
 }
 
+func or(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
+}
+
 // warnConfig warns about settings that load fine but are probably not what was meant.
-func warnConfig(log zerolog.Logger, cfg *config.Config, projects []config.Project,
-	env []string,
-) {
-	for _, key := range cfg.UnknownKeys {
-		log.Warn().Str("key", key).Msg("unknown configuration key ignored")
+func warnConfig(log zerolog.Logger, plan *config.Plan, resticEnv []string) {
+	if !hasRepository(resticEnv) {
+		log.Warn().Msg("no restic repository: set repository.url, or RESTIC_REPOSITORY " +
+			"in the env file")
 	}
-	if !cfg.Global.AutoPrune {
-		warnIgnoredRetention(log, projects)
-	}
-	if len(projects) > 0 && cfg.Global.ResticRepo == "" && !hasRepository(env) {
-		log.Warn().Msg("no restic repository: set global.restic_repo or RESTIC_REPOSITORY")
-	}
-	warnEnvFileMode(log, cfg.EnvFile)
-	warnRelativeHooks(log, projects)
+	warnEnvFileMode(log, plan.Repository.EnvFile)
+	warnRelativeHooks(log, plan)
 }
 
 // warnRelativeHooks warns about hooks whose program is a relative path such as
 // ./backup.sh: it resolves against the working directory, which is / (system) or the home
 // directory (user) under systemd, not against the config directory.
-func warnRelativeHooks(log zerolog.Logger, projects []config.Project) {
-	for _, p := range projects {
-		for _, hook := range []string{p.PreBackupCmd, p.PostBackupCmd} {
-			fields := strings.Fields(hook)
-			if len(fields) > 0 && strings.Contains(fields[0], "/") && !filepath.IsAbs(fields[0]) {
-				log.Warn().Str("project", p.Name).Str("hook", fields[0]).
-					Msg("hook path is relative to the working directory, not to the config " +
-						"file; use an absolute path")
-			}
+func warnRelativeHooks(log zerolog.Logger, plan *config.Plan) {
+	hooks := [][2]string{{"", plan.OnFailure}}
+	for _, j := range plan.Jobs {
+		hooks = append(hooks, [2]string{j.Name, j.Pre}, [2]string{j.Name, j.Post},
+			[2]string{j.Name, j.OnFailure})
+	}
+	for _, h := range hooks {
+		fields := strings.Fields(h[1])
+		if len(fields) > 0 && strings.Contains(fields[0], "/") && !filepath.IsAbs(fields[0]) {
+			log.Warn().Str("job", h[0]).Str("hook", fields[0]).
+				Msg("hook path is relative to the working directory, not to the config " +
+					"file; use an absolute path")
 		}
 	}
 }
@@ -245,16 +265,6 @@ func warnEnvFileMode(log zerolog.Logger, path string) {
 	}
 }
 
-// warnIgnoredRetention warns about each project with a retention policy.
-func warnIgnoredRetention(log zerolog.Logger, projects []config.Project) {
-	for _, p := range projects {
-		if p.RetentionPolicy != "" {
-			log.Warn().Str("project", p.Name).
-				Msg("retention_policy is ignored because global.auto_prune is off")
-		}
-	}
-}
-
 // hasRepository reports whether env (KEY=value, later entries win) names a repository.
 func hasRepository(env []string) bool {
 	vars := map[string]string{}
@@ -265,16 +275,16 @@ func hasRepository(env []string) bool {
 	return vars["RESTIC_REPOSITORY"] != "" || vars["RESTIC_REPOSITORY_FILE"] != ""
 }
 
-// warnSharedLocks warns about projects that share a lock key (a compose file or a systemd
+// warnSharedLocks warns about jobs that share a lock key (a compose file or a systemd
 // unit): in parallel mode they start at the same time, so all but one fail as locked.
 func warnSharedLocks(log zerolog.Logger, projects []backup.Project) {
 	owner := map[string]string{}
 	for _, p := range projects {
 		for _, key := range p.Services.LockKeys() {
 			if first, ok := owner[key]; ok {
-				log.Warn().Str("project", p.Settings.Name).Str("other_project", first).
-					Str("lock", key).Msg("projects share services and cannot run in " +
-					"parallel: one of them will fail as locked; use mode: sequential")
+				log.Warn().Str("job", p.Settings.Name).Str("other_job", first).
+					Str("lock", key).Msg("jobs share services and cannot run in " +
+					"parallel: one of them will fail as locked; use concurrency: 1")
 				continue
 			}
 			owner[key] = p.Settings.Name
@@ -283,17 +293,17 @@ func warnSharedLocks(log zerolog.Logger, projects []backup.Project) {
 }
 
 // warnMissingBinaries warns about programs the run will need but PATH does not have.
-func warnMissingBinaries(log zerolog.Logger, projects []config.Project,
+func warnMissingBinaries(log zerolog.Logger, jobs []config.Job,
 	lookPath func(string) (string, error),
 ) {
 	binaries := []string{"restic"}
-	for _, p := range projects {
-		switch p.ServiceManager {
-		case config.ManagerDockerCompose:
+	for _, j := range jobs {
+		switch j.Type {
+		case config.TypeDockerCompose:
 			binaries = append(binaries, "docker")
-		case config.ManagerPodmanCompose:
+		case config.TypePodmanCompose:
 			binaries = append(binaries, "podman")
-		case config.ManagerSystemd:
+		case config.TypeSystemd:
 			binaries = append(binaries, "systemctl")
 		}
 	}

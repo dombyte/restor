@@ -10,33 +10,23 @@ import (
 
 func TestLoadEnvFile(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	want := map[string]string{"A": "1", "B": "two"}
 	tests := []struct {
-		name, file, content string
-		want                map[string]string
-		wantErr             bool
+		name, content string
+		want          map[string]string
+		wantErr       bool
 	}{
-		{name: "dotenv", file: "x.env", content: "A=1\n# c\n\nB=\"two\"\n", want: want},
-		{name: "dotenv without =", file: "x.env", content: "A=1\nbroken\n", wantErr: true},
-		{name: "dotenv unterminated quote", file: "x.env", content: "A=\"1\n", wantErr: true},
-		{name: "unknown extension as yaml", file: "env", content: "A: \"1\"\nB: two\n", want: want},
-		{name: "unknown extension as json", file: "env", content: `{"A":"1","B":"two"}`, want: want},
-		{name: "yaml", file: "x.yaml", content: "A: \"1\"\nB: two\n", want: want},
-		{name: "yml", file: "x.yml", content: "A: \"1\"\nB: two\n", want: want},
-		{name: "json", file: "x.json", content: `{"A":"1","B":"two"}`, want: want},
-		{name: "unknown extension as dotenv", file: "env", content: "A=1\nB=two\n", want: want},
-		{name: "broken yaml", file: "x.yaml", content: "A: [", wantErr: true},
-		{name: "broken json", file: "x.json", content: "{", wantErr: true},
 		{
-			name: "dotenv line too long", file: "x.env", content: string(make([]byte, 70000)),
-			wantErr: true,
+			name: "values", content: "A=1\n# c\n\nB=\"two\"\n",
+			want: map[string]string{"A": "1", "B": "two"},
 		},
+		{name: "line without =", content: "A=1\nbroken\n", wantErr: true},
+		{name: "unterminated quote", content: "A=\"1\n", wantErr: true},
+		{name: "line too long", content: string(make([]byte, 70000)), wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := loadEnvFile(writeFile(t, t.TempDir(), tt.file, tt.content))
+			got, err := loadEnvFile(writeFile(t, t.TempDir(), "restic.env", tt.content))
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -45,16 +35,8 @@ func TestLoadEnvFile(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
-	_, err := loadEnvFile(dir + "/missing.env")
+	_, err := loadEnvFile(t.TempDir() + "/missing.env")
 	require.Error(t, err)
-}
-
-func TestLoadEnvFile_UnknownFormat(t *testing.T) {
-	t.Parallel()
-	// Too long for the .env scanner, not YAML or JSON either.
-	content := "{" + string(make([]byte, 70000))
-	_, err := loadEnvFile(writeFile(t, t.TempDir(), "env", content))
-	require.ErrorIs(t, err, ErrEnvFormat)
 }
 
 func TestParseDotEnv_Values(t *testing.T) {
@@ -68,29 +50,14 @@ func TestParseDotEnv_Values(t *testing.T) {
 		`F='pa$word'`,
 		`G="a # b"`,
 		`H=a#b`,
+		`I=pa$word`,
+		`J=${HOME}`,
 	}, "\n")))
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{
-		"A": "1", "B": `secret"`, "C": "x'", "D": "v", "E": "", "F": "pa$$word",
-		"G": "a # b", "H": "a#b",
-	}, got)
-}
-
-func TestMergeEnvironments_LiteralDollar(t *testing.T) {
-	t.Parallel()
-	path := writeFile(t, t.TempDir(), "x.env", "A='pa$word'\nB=pa$$word\n")
-	got, err := mergeEnvironments(path, map[string]string{"C": "x$$y"}, getenv(nil))
-	require.NoError(t, err)
-	assert.Equal(t, map[string]string{"A": "pa$word", "B": "pa$word", "C": "x$y"}, got)
-}
-
-func TestMergeEnvironments(t *testing.T) {
-	t.Parallel()
-	path := writeFile(t, t.TempDir(), "x.env", "A=${X}\nB=file\n")
-	got, err := mergeEnvironments(path, map[string]string{"B": "inline-${X}"},
-		getenv(map[string]string{"X": "x"}))
-	require.NoError(t, err)
-	assert.Equal(t, map[string]string{"A": "x", "B": "inline-x"}, got)
+		"A": "1", "B": `secret"`, "C": "x'", "D": "v", "E": "", "F": "pa$word",
+		"G": "a # b", "H": "a#b", "I": "pa$word", "J": "${HOME}",
+	}, got, "values are literal: no $ expansion")
 }
 
 func TestExpand(t *testing.T) {

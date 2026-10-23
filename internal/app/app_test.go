@@ -33,22 +33,20 @@ func options(path string) Options {
 	}
 }
 
-func TestNew_WiresAllServiceManagers(t *testing.T) {
+func TestNew_WiresAllJobTypes(t *testing.T) {
 	t.Parallel()
 	path := writeConfig(t, `
-global: {restic_repo: /repo, auto_prune: true}
-projects:
-  docker: {service_manager: docker-compose, compose_file: /d.yml, sources: [/d],
-           stop_timeout: 10, start_timeout: 10}
-  podman: {service_manager: podman-compose, compose_file: /p.yml, sources: [/p],
-           stop_timeout: 10, start_timeout: 10}
-  units: {service_manager: systemd, systemd_units: [a.service], sources: [/u],
-          stop_timeout: 10, start_timeout: 10}
-  files: {service_manager: noop, sources: [/f]}
+version: 2
+repository: {url: /repo, prune: true}
+jobs:
+  docker: {type: docker-compose, compose_file: /d.yml, sources: [/d]}
+  podman: {type: podman-compose, compose_file: /p.yml, sources: [/p]}
+  units: {type: systemd, units: [a.service], sources: [/u]}
+  files: {sources: [/f]}
 `)
 	a, err := New(options(path))
 	require.NoError(t, err)
-	assert.False(t, a.empty)
+	assert.NotNil(t, a.manager)
 }
 
 func TestNew_Errors(t *testing.T) {
@@ -56,20 +54,13 @@ func TestNew_Errors(t *testing.T) {
 	_, err := New(options(filepath.Join(t.TempDir(), "missing.yaml")))
 	require.Error(t, err)
 
-	_, err = New(options(writeConfig(t, "projects:\n  x: {service_manager: nope}\n")))
+	_, err = New(options(writeConfig(t, "version: 2\njobs:\n  x: {type: nope}\n")))
 	require.ErrorIs(t, err, config.ErrInvalid)
-}
 
-func TestApp_RunWithoutProjects(t *testing.T) {
-	t.Parallel()
-	var buf bytes.Buffer
-	o := options(writeConfig(t, "global: {restic_repo: /repo}\n"))
-	o.Log = zerolog.New(&buf)
-	a, err := New(o)
-	require.NoError(t, err)
-
-	require.NoError(t, a.Run(context.Background()))
-	assert.Contains(t, buf.String(), "no projects configured")
+	o := options(writeConfig(t, "version: 2\njobs:\n  x: {sources: [/x]}\n"))
+	o.Jobs = []string{"y"}
+	_, err = New(o)
+	require.ErrorIs(t, err, config.ErrUnknownJob)
 }
 
 func TestLockDir_UsesRuntimeDir(t *testing.T) {
@@ -92,36 +83,35 @@ func TestCreateServiceManager(t *testing.T) {
 		Runner: nopRunner{}, Clock: clocktest.New(time.Unix(0, 0)),
 	}
 	tests := []struct {
-		project  config.Project
+		job      config.Job
 		lockKeys []string
 		wantErr  error
 	}{
 		{
-			project:  config.Project{ServiceManager: config.ManagerDockerCompose, ComposeFile: "/d"},
+			job:      config.Job{Type: config.TypeDockerCompose, ComposeFile: "/d"},
 			lockKeys: []string{"/d"},
 		},
 		{
-			project:  config.Project{ServiceManager: config.ManagerPodmanCompose, ComposeFile: "/p"},
+			job:      config.Job{Type: config.TypePodmanCompose, ComposeFile: "/p"},
 			lockKeys: []string{"/p"},
 		},
-		{project: config.Project{
-			ServiceManager: config.ManagerSystemd, SystemdUnits: []string{"b", "a"},
-			SystemdScope: config.ScopeUser,
+		{job: config.Job{
+			Type: config.TypeSystemd, Units: []string{"b", "a"}, Scope: config.ScopeUser,
 		}, lockKeys: []string{"a", "b"}},
 		{
-			project:  config.Project{Name: "files", ServiceManager: config.ManagerNoop},
-			lockKeys: []string{"noop-files"},
+			job:      config.Job{Name: "etc", Type: config.TypeFiles},
+			lockKeys: []string{"files-etc"},
 		},
-		{project: config.Project{ServiceManager: "nope"}, wantErr: ErrUnknownType},
+		{job: config.Job{Type: "nope"}, wantErr: ErrUnknownType},
 		{
-			project: config.Project{ServiceManager: config.ManagerDockerCompose},
+			job:     config.Job{Type: config.TypeDockerCompose},
 			wantErr: servicemanager.ErrMissingDependency,
 		},
 	}
 	for _, tt := range tests {
-		t.Run(tt.project.ServiceManager, func(t *testing.T) {
+		t.Run(tt.job.Type, func(t *testing.T) {
 			t.Parallel()
-			s, err := CreateServiceManager(tt.project, d)
+			s, err := CreateServiceManager(tt.job, d)
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 				return
@@ -136,25 +126,43 @@ type nopRunner struct{}
 
 func (nopRunner) Run(context.Context, string, ...string) ([]byte, error) { return nil, nil }
 
-func TestProjectSettings(t *testing.T) {
+func TestJobSettings(t *testing.T) {
 	t.Parallel()
-	p := config.Project{
-		Name: "web", Services: []string{"s"}, Sources: []string{"/x"}, StopServices: true,
-		StopTimeout: time.Second, StartTimeout: 2 * time.Second, RetentionPolicy: "--keep-last 1",
-		BackupOptions: []string{"-b"}, ForgetOptions: []string{"-f"},
-		PreBackupCmd: "pre", PostBackupCmd: "post",
+	j := config.Job{
+		Name: "web", Type: config.TypeSystemd, Services: []string{"s"}, Sources: []string{"/x"},
+		Stop: true, StopTimeout: time.Second, StartTimeout: 2 * time.Second,
+		Keep: config.Keep{Last: 1, Tags: []string{"k"}}, Exclude: []string{"*.tmp"},
+		OneFileSystem: true, Tags: []string{"prod"}, Pre: "pre", Post: "post",
 	}
-	s := projectSettings(p)
+	s := jobSettings(j)
 	assert.Equal(t, "web", s.Name)
 	assert.Equal(t, []string{"s"}, s.Services)
 	assert.Equal(t, []string{"/x"}, s.Sources)
 	assert.True(t, s.StopServices)
 	assert.Equal(t, time.Second, s.StopTimeout)
 	assert.Equal(t, 2*time.Second, s.StartTimeout)
-	assert.Equal(t, []string{"-b"}, s.BackupArgs)
-	assert.Equal(t, []string{"-f", "--keep-last", "1"}, s.ForgetArgs)
+	assert.Equal(t, []string{"--exclude=*.tmp", "--one-file-system", "--tag=prod"},
+		s.BackupArgs)
+	assert.Equal(t, []string{"--keep-last=1", "--keep-tag=k"}, s.ForgetArgs)
 	assert.Equal(t, "pre", s.PreBackupCmd)
 	assert.Equal(t, "post", s.PostBackupCmd)
+
+	j.Type = config.TypeFiles
+	assert.False(t, jobSettings(j).StopServices, "file jobs stop nothing")
+}
+
+func TestResticSettingsAndEnv(t *testing.T) {
+	t.Parallel()
+	r := config.Repository{
+		URL: "/repo", Env: []string{"RESTIC_PASSWORD=x"}, LimitUpload: 5,
+		BackendOptions: map[string]string{"s3.connections": "2"}, MaxUnused: "1%",
+	}
+	s := resticSettings(r)
+	assert.Equal(t, []string{"--option=s3.connections=2", "--limit-upload=5"}, s.GlobalArgs)
+	assert.Equal(t, []string{"--max-unused=1%"}, s.PruneArgs)
+	assert.Equal(t, []string{"PATH=/bin", "RESTIC_PASSWORD=x", "RESTIC_REPOSITORY=/repo"},
+		resticEnv([]string{"PATH=/bin"}, r))
+	assert.Equal(t, []string{"PATH=/bin"}, resticEnv([]string{"PATH=/bin"}, config.Repository{}))
 }
 
 func TestWarnMissingBinaries(t *testing.T) {
@@ -168,12 +176,12 @@ func TestWarnMissingBinaries(t *testing.T) {
 		}
 		return "/usr/bin/" + b, nil
 	}
-	warnMissingBinaries(zerolog.New(&buf), []config.Project{
-		{ServiceManager: config.ManagerPodmanCompose},
-		{ServiceManager: config.ManagerPodmanCompose},
-		{ServiceManager: config.ManagerDockerCompose},
-		{ServiceManager: config.ManagerSystemd},
-		{ServiceManager: config.ManagerNoop},
+	warnMissingBinaries(zerolog.New(&buf), []config.Job{
+		{Type: config.TypePodmanCompose},
+		{Type: config.TypePodmanCompose},
+		{Type: config.TypeDockerCompose},
+		{Type: config.TypeSystemd},
+		{Type: config.TypeFiles},
 	}, lookPath)
 
 	assert.Equal(t, []string{"docker", "podman", "restic", "systemctl"}, looked)
@@ -184,69 +192,51 @@ func TestWarnMissingBinaries(t *testing.T) {
 func TestWarnConfig(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
-	cfg := &config.Config{UnknownKeys: []string{"projects[web].stop_service"}}
-	projects := []config.Project{{Name: "web", RetentionPolicy: "--keep-last 1"}}
-
-	warnConfig(zerolog.New(&buf), cfg, projects, []string{
-		"RESTIC_REPOSITORY=/r",
-		"RESTIC_REPOSITORY=",
-	})
-
-	out := buf.String()
-	assert.Contains(t, out, `"key":"projects[web].stop_service"`)
-	assert.Contains(t, out, "retention_policy is ignored")
-	assert.Contains(t, out, "no restic repository", "the later, empty value wins")
-}
-
-func TestWarnConfig_Quiet(t *testing.T) {
-	t.Parallel()
-	var buf bytes.Buffer
-	projects := []config.Project{{Name: "web", RetentionPolicy: "--keep-last 1"}}
 	log := zerolog.New(&buf)
 
-	warnConfig(log, &config.Config{Global: config.GlobalConfig{AutoPrune: true}}, projects,
-		[]string{"RESTIC_REPOSITORY_FILE=/etc/repo"})
-	warnConfig(log, &config.Config{Global: config.GlobalConfig{ResticRepo: "/r"}}, nil, nil)
+	warnConfig(log, &config.Plan{}, []string{"RESTIC_REPOSITORY=/r", "RESTIC_REPOSITORY="})
+	assert.Contains(t, buf.String(), "no restic repository", "the later, empty value wins")
 
+	buf.Reset()
+	warnConfig(log, &config.Plan{}, []string{"RESTIC_REPOSITORY_FILE=/etc/repo"})
 	assert.Empty(t, buf.String())
 }
 
 func TestWarnRelativeHooks(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
-	projects := []config.Project{
-		{Name: "rel", PreBackupCmd: "./hooks/pre.sh --flag", PostBackupCmd: "bin/post"},
-		{Name: "ok", PreBackupCmd: "/usr/local/bin/pre.sh ./arg", PostBackupCmd: "pg_dump"},
-	}
+	plan := &config.Plan{OnFailure: "notify/x", Jobs: []config.Job{
+		{Name: "rel", Pre: "./hooks/pre.sh --flag", Post: "bin/post"},
+		{Name: "ok", Pre: "/usr/local/bin/pre.sh ./arg", Post: "pg_dump", OnFailure: "/x"},
+	}}
 
-	warnRelativeHooks(zerolog.New(&buf), projects)
+	warnRelativeHooks(zerolog.New(&buf), plan)
 
 	out := buf.String()
-	assert.Contains(t, out, `"project":"rel","hook":"./hooks/pre.sh"`)
-	assert.Contains(t, out, `"project":"rel","hook":"bin/post"`)
-	assert.NotContains(t, out, `"project":"ok"`, "absolute paths and PATH lookups are fine")
+	assert.Contains(t, out, `"job":"","hook":"notify/x"`)
+	assert.Contains(t, out, `"job":"rel","hook":"./hooks/pre.sh"`)
+	assert.Contains(t, out, `"job":"rel","hook":"bin/post"`)
+	assert.NotContains(t, out, `"job":"ok"`, "absolute paths and PATH lookups are fine")
 }
 
 func TestNew_WarnsAboutSharedLocksInParallelMode(t *testing.T) {
 	t.Parallel()
-	projects := `
-projects:
-  a: {service_manager: docker-compose, compose_file: /c.yml, sources: [/a],
-      stop_timeout: 1, start_timeout: 1}
-  b: {service_manager: docker-compose, compose_file: /c.yml, sources: [/b],
-      stop_timeout: 1, start_timeout: 1}
-  c: {service_manager: noop, sources: [/c]}
+	jobs := `
+jobs:
+  a: {type: docker-compose, compose_file: /c.yml, sources: [/a]}
+  b: {type: docker-compose, compose_file: /c.yml, sources: [/b]}
+  c: {sources: [/c]}
 `
-	for _, mode := range []string{"parallel", "sequential"} {
+	for _, concurrency := range []string{"0", "1"} {
 		var buf bytes.Buffer
-		o := options(writeConfig(t, "mode: "+mode+"\n"+projects))
+		o := options(writeConfig(t, "version: 2\nconcurrency: "+concurrency+"\n"+jobs))
 		o.Log = zerolog.New(&buf)
 
 		_, err := New(o)
 
 		require.NoError(t, err)
-		if mode == "parallel" {
-			assert.Contains(t, buf.String(), `"project":"b","other_project":"a","lock":"/c.yml"`)
+		if concurrency == "0" {
+			assert.Contains(t, buf.String(), `"job":"b","other_job":"a","lock":"/c.yml"`)
 		} else {
 			assert.NotContains(t, buf.String(), "cannot run in parallel")
 		}
