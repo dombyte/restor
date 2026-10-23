@@ -164,8 +164,13 @@ func (c *Client) logSummary(tag string, s summary) {
 		Int64("dirs_changed", s.DirsChanged).Int64("dirs_unmodified", s.DirsUnmodified).
 		Int64("bytes_added", s.DataAdded).Int64("files_processed", s.FilesProcessed).
 		Int64("bytes_processed", s.BytesProcessed).
-		Dur("duration", time.Duration(s.DurationSeconds*float64(time.Second))).
+		Stringer("duration", seconds(s.DurationSeconds)).
 		Msg("backup summary")
+}
+
+// seconds converts restic's float seconds to a duration that logs as e.g. "1m2.345s".
+func seconds(s float64) time.Duration {
+	return time.Duration(s * float64(time.Second)).Round(time.Millisecond)
 }
 
 // failed wraps the error of a restic run, naming the cause of the exit codes restic uses

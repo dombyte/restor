@@ -129,7 +129,10 @@ func runBackup(ctx context.Context, configPath string, log zerolog.Logger) error
 		ConfigPath: configPath, Getenv: os.Getenv, Environ: os.Environ(), Log: log,
 	})
 	if err != nil {
-		log.Error().Err(err).Msg("startup failed")
+		// One line per problem: an invalid config lists all of its problems at once.
+		for _, problem := range joined(err) {
+			log.Error().Err(problem).Msg("startup failed")
+		}
 		return errReported
 	}
 	done := make(chan error, 1)
@@ -142,6 +145,20 @@ func runBackup(ctx context.Context, configPath string, log zerolog.Logger) error
 	return nil
 }
 
+// joined returns the errors that err joins (errors.Join, also wrapped), flattened, or err
+// itself.
+func joined(err error) []error {
+	var multi interface{ Unwrap() []error }
+	if !errors.As(err, &multi) {
+		return []error{err}
+	}
+	var all []error
+	for _, e := range multi.Unwrap() {
+		all = append(all, joined(e)...)
+	}
+	return all
+}
+
 // waitForRun waits for the run to finish; after ctx is cancelled it waits at most timeout
 // (the time the running projects need to restart their services), then gives up.
 func waitForRun(ctx context.Context, done <-chan error, timeout time.Duration,
@@ -152,7 +169,7 @@ func waitForRun(ctx context.Context, done <-chan error, timeout time.Duration,
 		return err
 	case <-ctx.Done():
 	}
-	log.Warn().Dur("timeout", timeout).
+	log.Warn().Stringer("timeout", timeout).
 		Msg("shutdown requested, waiting for running projects to restart their services")
 	select {
 	case err := <-done:

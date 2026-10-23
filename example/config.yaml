@@ -182,7 +182,8 @@ global:
   #     (so it can undo the pre hook); not after a cancel (SIGTERM)
   #   post_backup_cmd fails -> logged, does not change the project's result
   # Commands are split on spaces and run without a shell (no quotes, pipes or redirects);
-  # use a script for anything more.
+  # use a script for anything more, with its absolute path (a relative path resolves
+  # against the working directory, "/" under systemd, not this file's directory).
   # pre_backup_cmd: "/usr/local/bin/global-pre-backup-hook.sh"
   # post_backup_cmd: "/usr/local/bin/global-post-backup-hook.sh"
 

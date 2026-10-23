@@ -113,7 +113,7 @@ func NewManager(s Settings, projects []Project, d Deps) (*Manager, error) {
 // the returned ErrProjectsFailed; forget, prune and unlock failures are only logged.
 func (m *Manager) Run(ctx context.Context) error {
 	m.d.Log.Info().Bool("parallel", m.s.Parallel).Int("projects", len(m.projects)).
-		Dur("shutdown_timeout", m.ShutdownTimeout()).Msg("starting backup run")
+		Stringer("shutdown_timeout", m.ShutdownTimeout()).Msg("starting backup run")
 
 	outcomes := m.runProjects(ctx)
 	if ctx.Err() == nil {

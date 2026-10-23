@@ -212,6 +212,22 @@ func TestWarnConfig_Quiet(t *testing.T) {
 	assert.Empty(t, buf.String())
 }
 
+func TestWarnRelativeHooks(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	projects := []config.Project{
+		{Name: "rel", PreBackupCmd: "./hooks/pre.sh --flag", PostBackupCmd: "bin/post"},
+		{Name: "ok", PreBackupCmd: "/usr/local/bin/pre.sh ./arg", PostBackupCmd: "pg_dump"},
+	}
+
+	warnRelativeHooks(zerolog.New(&buf), projects)
+
+	out := buf.String()
+	assert.Contains(t, out, `"project":"rel","hook":"./hooks/pre.sh"`)
+	assert.Contains(t, out, `"project":"rel","hook":"bin/post"`)
+	assert.NotContains(t, out, `"project":"ok"`, "absolute paths and PATH lookups are fine")
+}
+
 func TestNew_WarnsAboutSharedLocksInParallelMode(t *testing.T) {
 	t.Parallel()
 	projects := `
