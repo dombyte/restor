@@ -117,12 +117,7 @@ jobs:
         env:
           VERSION: ${{ matrix.restic }}
         run: |
-          base="https://github.com/restic/restic/releases/download/v$VERSION"
-          file="restic_${VERSION}_linux_amd64.bz2"
-          mkdir -p "$RUNNER_TEMP/restic" && cd "$RUNNER_TEMP/restic"
-          curl -fsSLO "$base/$file" -fsSLO "$base/SHA256SUMS"
-          grep " $file\$" SHA256SUMS | sha256sum --check --strict
-          bunzip2 "$file" && install -m 0755 "${file%.bz2}" restic
+          ./scripts/install-restic.sh "$VERSION" "$RUNNER_TEMP/restic"
           echo "$RUNNER_TEMP/restic" >> "$GITHUB_PATH"
 
       - name: Integration tests
