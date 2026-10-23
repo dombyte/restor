@@ -15,11 +15,22 @@
   ],
   "labels": ["renovate"],
   "ignoreUnstable": true,
+  "timezone": "Europe/Berlin",
+  "minimumReleaseAge": "3 days",
+  "automergeType": "pr",
+  "automergeStrategy": "merge-commit",
+  "platformAutomerge": false,
+  "automergeSchedule": ["* 0-5 * * *"],
   "packageRules": [
     {
       "matchManagers": ["gomod"],
       "groupName": "Go dependencies",
       "postUpdateOptions": ["gomodTidy"]
+    },
+    {
+      "description": "Non-major updates merge by themselves once the required checks pass, only within automergeSchedule",
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
+      "automerge": true
     },
     {
       "description": "A Go major version is a new module path (mockery/v3 -> mockery/v4) and needs code changes; update by hand",
