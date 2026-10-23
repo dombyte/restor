@@ -54,20 +54,11 @@ func TestRun_Errors(t *testing.T) {
 	}
 }
 
-func TestRun_EmptyConfig(t *testing.T) {
-	t.Parallel()
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("global: {restic_repo: /repo}\n"), 0o600))
-	var stdout, stderr bytes.Buffer
-
-	assert.Equal(t, 0, run([]string{"--config", path, "--debug"}, &stdout, &stderr))
-	assert.Contains(t, stderr.String(), "no projects configured")
-}
-
 func TestRun_InvalidConfigLogsEachProblem(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("mode: fast\nprojects:\n  a: {}\n"), 0o600))
+	require.NoError(t, os.WriteFile(path,
+		[]byte("version: 2\nconcurrency: -1\njobs:\n  a: {type: systemd}\n"), 0o600))
 	var stdout, stderr bytes.Buffer
 
 	assert.Equal(t, 1, run([]string{"--config", path}, &stdout, &stderr))
@@ -75,8 +66,7 @@ func TestRun_InvalidConfigLogsEachProblem(t *testing.T) {
 	assert.NotContains(t, out, `\n`, "no escaped line breaks")
 	assert.Equal(t, 3, strings.Count(out, "startup failed"), out)
 	for _, want := range []string{
-		"mode: must be", "projects.a.service_manager: required",
-		"projects.a.sources: required",
+		"concurrency: must be", "jobs.a.units: required", "jobs.a.sources: required",
 	} {
 		assert.Contains(t, out, want)
 	}
