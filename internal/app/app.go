@@ -312,15 +312,17 @@ func warnConfig(log zerolog.Logger, plan *config.Plan, resticEnv []string) {
 // ./backup.sh: it resolves against the working directory, which is / (system) or the home
 // directory (user) under systemd, not against the config directory.
 func warnRelativeHooks(log zerolog.Logger, plan *config.Plan) {
-	hooks := [][2]string{{"", plan.OnFailure}}
+	// The setting as a config path, so the run-level hook needs no job.
+	hooks := [][2]string{{"on_failure", plan.OnFailure}}
 	for _, j := range plan.Jobs {
-		hooks = append(hooks, [2]string{j.Name, j.Pre}, [2]string{j.Name, j.Post},
-			[2]string{j.Name, j.OnFailure})
+		path := "jobs." + j.Name + "."
+		hooks = append(hooks, [2]string{path + "pre", j.Pre},
+			[2]string{path + "post", j.Post}, [2]string{path + "on_failure", j.OnFailure})
 	}
 	for _, h := range hooks {
 		fields := strings.Fields(h[1])
 		if len(fields) > 0 && strings.Contains(fields[0], "/") && !filepath.IsAbs(fields[0]) {
-			log.Warn().Str("job", h[0]).Str("hook", fields[0]).
+			log.Warn().Str("field", h[0]).Str("hook", fields[0]).
 				Msg("hook path is relative to the working directory, not to the config " +
 					"file; use an absolute path")
 		}
