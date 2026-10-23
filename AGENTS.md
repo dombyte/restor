@@ -833,10 +833,12 @@ change keeps its own branch and merge commit:
 protection):
 
 - "main: signed commits": every commit signed; no bypass, not even for the admin.
-- "main: required checks": the `checks.yml` jobs `Gate`, `golangci-lint`,
-  `Build, test, deadcode, govulncheck`, `Integration (oldest restic)` and
-  `Integration (newest restic)` must pass, with "branches must be up to date" on. The
-  integration job names hold no version, so a restic bump does not rename them.
+- "main: required checks": the `checks.yml` jobs `Gate`, `golangci-lint` and
+  `Build, test, deadcode, govulncheck` must pass, with "branches must be up to date" on.
+  The `Integration (oldest restic)` and `Integration (newest restic)` jobs are not in the
+  ruleset on purpose: they gate releases (`release.yml` reuses `checks.yml`, so a tag only
+  ships when they pass) and Renovate's merges (it waits for every check), while a direct
+  push to `main` does not wait for a restic download.
   Bypass: only the Repository admin role, mode "always". Bots (Renovate) and other
   contributors are never on the bypass list.
 - Renaming one of these jobs means updating the ruleset in the same change, or every PR
