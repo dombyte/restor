@@ -28,11 +28,12 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
-    # CommitDate (not Date) keeps rebuilds of the same tag byte-identical.
+    # CommitDate (not Date) keeps rebuilds of the same tag byte-identical. .Version drops
+    # the tag's "v"; v{{ .Version }} prints the tag as `make build` does.
     ldflags:
       - >-
         -s -w
-        -X main.Version={{ .Version }}
+        -X main.Version=v{{ .Version }}
         -X main.Commit={{ .ShortCommit }}
         -X main.BuildDate={{ .CommitDate }}
         -X main.GoVersion={{ envOrDefault "GOVERSION" "unknown" }}

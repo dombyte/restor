@@ -220,7 +220,8 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 1. `cmd/main`: cobra parses flags; logger = console writer on stderr, `--debug` = debug
    level; `signal.NotifyContext` for SIGINT/SIGTERM; build info is logged.
 2. `app.New`: `config.Load` (file + env file + inline env, expansion, validation) and
-   wiring. Any error ends the run (exit 1).
+   wiring. Any error ends the run (exit 1); an invalid config is logged one line per
+   problem.
 3. `Manager.Run`: run all projects (sequential or parallel); when the run was not
    cancelled and `global.auto_prune` is set: forget each project that has a complete
    snapshot and a `retention_policy`, then, only when every project has a complete
@@ -309,7 +310,8 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   stopped. Unknown keys are ignored. Startup warns about them
   (typos such as `stop_service`), about projects sharing a compose file or unit in
   parallel mode, about an `env_file` that group or others can access (mode & 077), about
-  a `retention_policy` without `auto_prune` and
+  a `retention_policy` without `auto_prune`, about a hook whose program is a relative
+  path (`./x.sh`; it resolves against the working directory, `/` under systemd) and
   about a missing repository (`restic_repo`, `RESTIC_REPOSITORY`, `RESTIC_REPOSITORY_FILE`).
 - `stop_services: false` backs up without stopping anything. Hooks: global
   `pre_backup_cmd`/`post_backup_cmd` are the default of every project, overridden per
@@ -337,7 +339,8 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 - systemd: `systemctl [--user] stop|start <units>` (stop ignores "not running"/"not
   loaded"); state from `systemctl is-active <units>`. Up (running before the backup, and
   not yet stopped) = `active`, `activating`, `deactivating`, `reloading` or `refreshing`;
-  started = all `active`.
+  started = all `active` (a `Type=simple` unit is `active` as soon as its process runs,
+  so a crash right after the start is not seen; README says so).
   `services` selects some of `systemd_units` (a name that is not one of them is a
   validation error); empty means all units.
 - noop: no services; every operation succeeds.

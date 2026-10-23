@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +62,33 @@ func TestRun_EmptyConfig(t *testing.T) {
 
 	assert.Equal(t, 0, run([]string{"--config", path, "--debug"}, &stdout, &stderr))
 	assert.Contains(t, stderr.String(), "no projects configured")
+}
+
+func TestRun_InvalidConfigLogsEachProblem(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("mode: fast\nprojects:\n  a: {}\n"), 0o600))
+	var stdout, stderr bytes.Buffer
+
+	assert.Equal(t, 1, run([]string{"--config", path}, &stdout, &stderr))
+	out := stderr.String()
+	assert.NotContains(t, out, `\n`, "no escaped line breaks")
+	assert.Equal(t, 3, strings.Count(out, "startup failed"), out)
+	for _, want := range []string{
+		"mode: must be", "projects.a.service_manager: required",
+		"projects.a.sources: required",
+	} {
+		assert.Contains(t, out, want)
+	}
+}
+
+func TestJoined(t *testing.T) {
+	t.Parallel()
+	a, b, c := errors.New("a"), errors.New("b"), errors.New("c")
+	nested := fmt.Errorf("config: %w", errors.Join(a, errors.Join(b, c)))
+
+	assert.Equal(t, []error{a, b, c}, joined(nested))
+	assert.Equal(t, []error{a}, joined(a))
 }
 
 func TestNewLogger_NoColorWithoutTerminal(t *testing.T) {
