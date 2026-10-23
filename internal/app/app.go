@@ -7,12 +7,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -26,11 +28,25 @@ import (
 	"github.com/dombyte/restor/internal/util"
 )
 
+const (
+	// columnPadding separates the columns of Describe.
+	columnPadding = 2
+	// retryLockMinor and skipIfUnchangedMinor are the restic 0.x releases that brought
+	// --retry-lock and --skip-if-unchanged.
+	retryLockMinor       = 16
+	skipIfUnchangedMinor = 17
+)
+
 // envFileOthersMask are the permission bits that let group or others access the env file.
 const envFileOthersMask os.FileMode = 0o077
 
-// ErrUnknownType is returned by CreateServiceManager for an unknown job type.
-var ErrUnknownType = errors.New("app: unknown job type")
+var (
+	// ErrUnknownType is returned by CreateServiceManager for an unknown job type.
+	ErrUnknownType = errors.New("app: unknown job type")
+	// ErrResticVersion is returned by Run when restic is older than the configuration
+	// needs.
+	ErrResticVersion = errors.New("app: restic is too old")
+)
 
 // Options are the inputs of New.
 type Options struct {
@@ -48,8 +64,11 @@ type Options struct {
 
 // App is one wired backup run.
 type App struct {
-	manager *backup.Manager
-	log     zerolog.Logger
+	plan         *config.Plan
+	manager      *backup.Manager
+	restic       *restic.Client
+	resticRunner *command.Runner
+	log          zerolog.Logger
 }
 
 // New loads the configuration and wires all components; it starts nothing.
@@ -66,20 +85,93 @@ func New(o Options) (*App, error) {
 	warnConfig(o.Log, plan, resticEnv)
 	warnMissingBinaries(o.Log, plan.Jobs, exec.LookPath)
 
+	resticRunner := command.New(resticEnv, component(o.Log, "restic"))
+	resticClient, err := restic.New(resticSettings(plan.Repository),
+		restic.Deps{Runner: resticRunner, Log: component(o.Log, "restic")})
+	if err != nil {
+		return nil, err
+	}
 	manager, err := createManager(plan, managerDeps{
-		runner:       command.New(o.Environ, component(o.Log, "command")),
-		resticRunner: command.New(resticEnv, component(o.Log, "restic")),
-		clock:        util.NewRealClock(), lockDir: lockDir(o.Getenv), log: o.Log,
+		runner: command.New(o.Environ, component(o.Log, "command")), restic: resticClient,
+		clock: util.NewRealClock(), lockDir: lockDir(o.Getenv), log: o.Log,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &App{manager: manager, log: o.Log}, nil
+	return &App{
+		plan: plan, manager: manager, restic: resticClient, resticRunner: resticRunner,
+		log: o.Log,
+	}, nil
 }
 
-// Run runs one backup cycle.
+// Run checks the restic version, then runs one backup cycle.
 func (a *App) Run(ctx context.Context) error {
+	if err := a.checkRestic(ctx); err != nil {
+		return err
+	}
 	return a.manager.Run(ctx)
+}
+
+// checkRestic fails when restic is missing or older than the configuration needs, before
+// any service is stopped.
+func (a *App) checkRestic(ctx context.Context) error {
+	v, err := a.restic.Version(ctx)
+	if err != nil {
+		return err
+	}
+	a.log.Info().Stringer("restic_version", v).Msg("restic found")
+	if need, reason := requiredResticVersion(a.plan); !v.AtLeast(need) {
+		return fmt.Errorf("%w: %s, %s needs %s", ErrResticVersion, v, reason, need)
+	}
+	return nil
+}
+
+// requiredResticVersion returns the oldest restic release the plan works with, and the
+// setting that needs it; the zero Version when any release does.
+func requiredResticVersion(plan *config.Plan) (restic.Version, string) {
+	for _, j := range plan.Jobs {
+		if j.SkipIfUnchanged {
+			return restic.Version{Minor: skipIfUnchangedMinor},
+				"jobs." + j.Name + ".skip_if_unchanged"
+		}
+	}
+	if plan.Repository.RetryLock > 0 {
+		return restic.Version{Minor: retryLockMinor}, "repository.retry_lock"
+	}
+	return restic.Version{}, ""
+}
+
+// Stdio are the standard streams of `restor restic`.
+type Stdio = command.Stdio
+
+// Restic runs restic with args, the repository settings and env file, connected to
+// stdio: `restor restic snapshots` and the like.
+func (a *App) Restic(ctx context.Context, stdio Stdio, args []string) error {
+	global := resticSettings(a.plan.Repository).GlobalArgs
+	return a.resticRunner.Attach(ctx, stdio, "restic", slices.Concat(global, args)...)
+}
+
+// Describe writes the validated plan to w: the jobs in the order they start with
+// concurrency 1, with their type, what they wait for and what they back up. The
+// repository URL is left out, it may hold credentials.
+func (a *App) Describe(w io.Writer) error {
+	p := a.plan
+	tw := tabwriter.NewWriter(w, 0, 0, columnPadding, ' ', 0)
+	_, _ = fmt.Fprintf(tw, "concurrency:\t%d (0 = all at once)\n", p.Concurrency)
+	_, _ = fmt.Fprintf(tw, "prune:\t%t\n", p.Repository.Prune)
+	_, _ = fmt.Fprintln(tw, "\nJOB\tTYPE\tAFTER\tSTOP\tKEEP\tSOURCES")
+	jobs := map[string]config.Job{}
+	for _, j := range p.Jobs {
+		jobs[j.Name] = j
+	}
+	for _, name := range a.manager.Order() {
+		j := jobs[name]
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%t\t%s\t%s\n", j.Name, or(j.Type, "files"),
+			or(strings.Join(j.After, ","), "-"), j.StopsServices(),
+			or(strings.ReplaceAll(strings.Join(keep(j.Keep).Args(), " "), "--keep-", ""), "-"),
+			strings.Join(j.Sources, " "))
+	}
+	return tw.Flush()
 }
 
 // ShutdownTimeout returns how long Run may take after its context was cancelled, so that
@@ -87,10 +179,11 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) ShutdownTimeout() time.Duration { return a.manager.ShutdownTimeout() }
 
 type managerDeps struct {
-	runner, resticRunner *command.Runner
-	clock                util.Clock
-	lockDir              string
-	log                  zerolog.Logger
+	runner  *command.Runner
+	restic  *restic.Client
+	clock   util.Clock
+	lockDir string
+	log     zerolog.Logger
 }
 
 // lockDir picks the lock directory of the user running restor.
@@ -102,11 +195,6 @@ func lockDir(getenv func(string) string) string {
 }
 
 func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
-	resticClient, err := restic.New(resticSettings(plan.Repository),
-		restic.Deps{Runner: d.resticRunner, Log: component(d.log, "restic")})
-	if err != nil {
-		return nil, err
-	}
 	locker, err := lock.New(lock.Settings{Dir: d.lockDir})
 	if err != nil {
 		return nil, err
@@ -123,7 +211,7 @@ func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
 	return backup.NewManager(backup.Settings{
 		Concurrency: plan.Concurrency, Prune: plan.Repository.Prune, OnFailure: plan.OnFailure,
 	}, jobs, backup.Deps{
-		Restic: resticClient, Locker: locker, Hooks: d.runner, Log: component(d.log, "backup"),
+		Restic: d.restic, Locker: locker, Hooks: d.runner, Log: component(d.log, "backup"),
 	})
 }
 

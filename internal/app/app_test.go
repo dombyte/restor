@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dombyte/restor/internal/config"
+	"github.com/dombyte/restor/internal/restic"
 	"github.com/dombyte/restor/internal/servicemanager"
 	"github.com/dombyte/restor/internal/util/clocktest"
 )
@@ -244,4 +245,46 @@ func TestWarnEnvFileMode(t *testing.T) {
 	warnEnvFileMode(zerolog.New(&buf), "")
 	warnEnvFileMode(zerolog.New(&buf), filepath.Join(dir, "missing"))
 	assert.Empty(t, buf.String())
+}
+
+// fakeRestic puts a restic script that prints out first on PATH (the test must not be
+// parallel) and returns the options for the config at path.
+func fakeRestic(t *testing.T, path, out string) Options {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\necho '" + out + "'\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "restic"), []byte(script), 0o700))
+	t.Setenv("PATH", dir)
+	return options(path)
+}
+
+// TestApp_RunChecksResticVersion is not parallel: it sets PATH.
+func TestApp_RunChecksResticVersion(t *testing.T) {
+	path := writeConfig(t, "version: 2\nrepository: {url: /r, retry_lock: 1m}\n"+
+		"jobs: {a: {sources: [/a]}}\n")
+
+	a, err := New(fakeRestic(t, path, "restic 0.15.2 compiled with go1.20"))
+	require.NoError(t, err)
+	err = a.Run(context.Background())
+	require.ErrorIs(t, err, ErrResticVersion)
+	assert.EqualError(t, err,
+		"app: restic is too old: 0.15.2, repository.retry_lock needs 0.16.0")
+
+	a, err = New(fakeRestic(t, path, "not restic"))
+	require.NoError(t, err)
+	require.ErrorIs(t, a.Run(context.Background()), restic.ErrVersion)
+}
+
+func TestRequiredResticVersion(t *testing.T) {
+	t.Parallel()
+	v, reason := requiredResticVersion(&config.Plan{Jobs: []config.Job{{Name: "a"}}})
+	assert.Equal(t, restic.Version{}, v)
+	assert.Empty(t, reason)
+
+	v, reason = requiredResticVersion(&config.Plan{
+		Repository: config.Repository{RetryLock: time.Minute},
+		Jobs:       []config.Job{{Name: "a"}, {Name: "b", SkipIfUnchanged: true}},
+	})
+	assert.Equal(t, "0.17.0", v.String())
+	assert.Equal(t, "jobs.b.skip_if_unchanged", reason)
 }
