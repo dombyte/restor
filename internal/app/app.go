@@ -112,21 +112,17 @@ func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
 		return nil, err
 	}
 	smDeps := servicemanager.Deps{Runner: d.runner, Clock: d.clock}
-	bps := make([]backup.Project, 0, len(plan.Jobs))
+	jobs := make([]backup.Job, 0, len(plan.Jobs))
 	for _, j := range plan.Jobs {
 		services, err := CreateServiceManager(j, smDeps)
 		if err != nil {
 			return nil, fmt.Errorf("app: job %s: %w", j.Name, err)
 		}
-		bps = append(bps, backup.Project{Settings: jobSettings(j), Services: services})
-	}
-	parallel := plan.Concurrency != 1
-	if parallel {
-		warnSharedLocks(d.log, bps)
+		jobs = append(jobs, backup.Job{Settings: jobSettings(j), Services: services})
 	}
 	return backup.NewManager(backup.Settings{
-		Parallel: parallel, AutoPrune: plan.Repository.Prune,
-	}, bps, backup.Deps{
+		Concurrency: plan.Concurrency, Prune: plan.Repository.Prune, OnFailure: plan.OnFailure,
+	}, jobs, backup.Deps{
 		Restic: resticClient, Locker: locker, Hooks: d.runner, Log: component(d.log, "backup"),
 	})
 }
@@ -153,12 +149,13 @@ func CreateServiceManager(j config.Job, d servicemanager.Deps) (backup.Services,
 	}
 }
 
-func jobSettings(j config.Job) backup.ProjectSettings {
-	return backup.ProjectSettings{
-		Name: j.Name, Services: j.Services, Sources: j.Sources, StopServices: j.StopsServices(),
-		StopTimeout: j.StopTimeout, StartTimeout: j.StartTimeout,
+func jobSettings(j config.Job) backup.JobSettings {
+	return backup.JobSettings{
+		Name: j.Name, After: j.After, Services: j.Services, Sources: j.Sources,
+		StopServices: j.StopsServices(), StopTimeout: j.StopTimeout,
+		StartTimeout: j.StartTimeout, BackupTimeout: j.BackupTimeout,
 		BackupArgs: backupFlags(j).Args(), ForgetArgs: keep(j.Keep).Args(),
-		PreBackupCmd: j.Pre, PostBackupCmd: j.Post,
+		Pre: j.Pre, Post: j.Post, OnFailure: j.OnFailure,
 	}
 }
 
@@ -273,23 +270,6 @@ func hasRepository(env []string) bool {
 		vars[k] = v
 	}
 	return vars["RESTIC_REPOSITORY"] != "" || vars["RESTIC_REPOSITORY_FILE"] != ""
-}
-
-// warnSharedLocks warns about jobs that share a lock key (a compose file or a systemd
-// unit): in parallel mode they start at the same time, so all but one fail as locked.
-func warnSharedLocks(log zerolog.Logger, projects []backup.Project) {
-	owner := map[string]string{}
-	for _, p := range projects {
-		for _, key := range p.Services.LockKeys() {
-			if first, ok := owner[key]; ok {
-				log.Warn().Str("job", p.Settings.Name).Str("other_job", first).
-					Str("lock", key).Msg("jobs share services and cannot run in " +
-					"parallel: one of them will fail as locked; use concurrency: 1")
-				continue
-			}
-			owner[key] = p.Settings.Name
-		}
-	}
 }
 
 // warnMissingBinaries warns about programs the run will need but PATH does not have.

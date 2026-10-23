@@ -47,8 +47,8 @@ func (_m *MockRestic) EXPECT() *MockRestic_Expecter {
 }
 
 // Backup provides a mock function for the type MockRestic
-func (_mock *MockRestic) Backup(ctx context.Context, tag string, sources []string, opts []string) (string, error) {
-	ret := _mock.Called(ctx, tag, sources, opts)
+func (_mock *MockRestic) Backup(ctx context.Context, tag string, sources []string, args []string) (string, error) {
+	ret := _mock.Called(ctx, tag, sources, args)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Backup")
@@ -57,15 +57,15 @@ func (_mock *MockRestic) Backup(ctx context.Context, tag string, sources []strin
 	var r0 string
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []string, []string) (string, error)); ok {
-		return returnFunc(ctx, tag, sources, opts)
+		return returnFunc(ctx, tag, sources, args)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []string, []string) string); ok {
-		r0 = returnFunc(ctx, tag, sources, opts)
+		r0 = returnFunc(ctx, tag, sources, args)
 	} else {
 		r0 = ret.Get(0).(string)
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string, []string, []string) error); ok {
-		r1 = returnFunc(ctx, tag, sources, opts)
+		r1 = returnFunc(ctx, tag, sources, args)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -81,12 +81,12 @@ type MockRestic_Backup_Call struct {
 //   - ctx context.Context
 //   - tag string
 //   - sources []string
-//   - opts []string
-func (_e *MockRestic_Expecter) Backup(ctx any, tag any, sources any, opts any) *MockRestic_Backup_Call {
-	return &MockRestic_Backup_Call{Call: _e.mock.On("Backup", ctx, tag, sources, opts)}
+//   - args []string
+func (_e *MockRestic_Expecter) Backup(ctx any, tag any, sources any, args any) *MockRestic_Backup_Call {
+	return &MockRestic_Backup_Call{Call: _e.mock.On("Backup", ctx, tag, sources, args)}
 }
 
-func (_c *MockRestic_Backup_Call) Run(run func(ctx context.Context, tag string, sources []string, opts []string)) *MockRestic_Backup_Call {
+func (_c *MockRestic_Backup_Call) Run(run func(ctx context.Context, tag string, sources []string, args []string)) *MockRestic_Backup_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -119,7 +119,7 @@ func (_c *MockRestic_Backup_Call) Return(s string, err error) *MockRestic_Backup
 	return _c
 }
 
-func (_c *MockRestic_Backup_Call) RunAndReturn(run func(ctx context.Context, tag string, sources []string, opts []string) (string, error)) *MockRestic_Backup_Call {
+func (_c *MockRestic_Backup_Call) RunAndReturn(run func(ctx context.Context, tag string, sources []string, args []string) (string, error)) *MockRestic_Backup_Call {
 	_c.Call.Return(run)
 	return _c
 }

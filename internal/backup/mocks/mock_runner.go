@@ -46,89 +46,95 @@ func (_m *MockRunner) EXPECT() *MockRunner_Expecter {
 	return &MockRunner_Expecter{mock: &_m.Mock}
 }
 
-// Run provides a mock function for the type MockRunner
-func (_mock *MockRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+// RunEnv provides a mock function for the type MockRunner
+func (_mock *MockRunner) RunEnv(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 	// string
 	_va := make([]any, len(args))
 	for _i := range args {
 		_va[_i] = args[_i]
 	}
 	var _ca []any
-	_ca = append(_ca, ctx, name)
+	_ca = append(_ca, ctx, env, name)
 	_ca = append(_ca, _va...)
 	ret := _mock.Called(_ca...)
 
 	if len(ret) == 0 {
-		panic("no return value specified for Run")
+		panic("no return value specified for RunEnv")
 	}
 
 	var r0 []byte
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, ...string) ([]byte, error)); ok {
-		return returnFunc(ctx, name, args...)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []string, string, ...string) ([]byte, error)); ok {
+		return returnFunc(ctx, env, name, args...)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, ...string) []byte); ok {
-		r0 = returnFunc(ctx, name, args...)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []string, string, ...string) []byte); ok {
+		r0 = returnFunc(ctx, env, name, args...)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]byte)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, ...string) error); ok {
-		r1 = returnFunc(ctx, name, args...)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, []string, string, ...string) error); ok {
+		r1 = returnFunc(ctx, env, name, args...)
 	} else {
 		r1 = ret.Error(1)
 	}
 	return r0, r1
 }
 
-// MockRunner_Run_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Run'
-type MockRunner_Run_Call struct {
+// MockRunner_RunEnv_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RunEnv'
+type MockRunner_RunEnv_Call struct {
 	*mock.Call
 }
 
-// Run is a helper method to define mock.On call
+// RunEnv is a helper method to define mock.On call
 //   - ctx context.Context
+//   - env []string
 //   - name string
 //   - args ...string
-func (_e *MockRunner_Expecter) Run(ctx any, name any, args ...any) *MockRunner_Run_Call {
-	return &MockRunner_Run_Call{Call: _e.mock.On("Run",
-		append([]any{ctx, name}, args...)...)}
+func (_e *MockRunner_Expecter) RunEnv(ctx any, env any, name any, args ...any) *MockRunner_RunEnv_Call {
+	return &MockRunner_RunEnv_Call{Call: _e.mock.On("RunEnv",
+		append([]any{ctx, env, name}, args...)...)}
 }
 
-func (_c *MockRunner_Run_Call) Run(run func(ctx context.Context, name string, args ...string)) *MockRunner_Run_Call {
+func (_c *MockRunner_RunEnv_Call) Run(run func(ctx context.Context, env []string, name string, args ...string)) *MockRunner_RunEnv_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
 			arg0 = args[0].(context.Context)
 		}
-		var arg1 string
+		var arg1 []string
 		if args[1] != nil {
-			arg1 = args[1].(string)
+			arg1 = args[1].([]string)
 		}
-		var arg2 []string
-		variadicArgs := make([]string, len(args)-2)
-		for i, a := range args[2:] {
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		var arg3 []string
+		variadicArgs := make([]string, len(args)-3)
+		for i, a := range args[3:] {
 			if a != nil {
 				variadicArgs[i] = a.(string)
 			}
 		}
-		arg2 = variadicArgs
+		arg3 = variadicArgs
 		run(
 			arg0,
 			arg1,
-			arg2...,
+			arg2,
+			arg3...,
 		)
 	})
 	return _c
 }
 
-func (_c *MockRunner_Run_Call) Return(bytes []byte, err error) *MockRunner_Run_Call {
+func (_c *MockRunner_RunEnv_Call) Return(bytes []byte, err error) *MockRunner_RunEnv_Call {
 	_c.Call.Return(bytes, err)
 	return _c
 }
 
-func (_c *MockRunner_Run_Call) RunAndReturn(run func(ctx context.Context, name string, args ...string) ([]byte, error)) *MockRunner_Run_Call {
+func (_c *MockRunner_RunEnv_Call) RunAndReturn(run func(ctx context.Context, env []string, name string, args ...string) ([]byte, error)) *MockRunner_RunEnv_Call {
 	_c.Call.Return(run)
 	return _c
 }
