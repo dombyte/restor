@@ -354,12 +354,12 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
   `summary` message gives the snapshot ID (logged as the 8-character short ID; none for a
   `dry_run` summary or a missing summary, which is a warning, not an error) and the
   counters logged at info (`files_new`, `bytes_added`, `duration`, …). Lines that are not
-  JSON (stderr) are skipped. Exit code 3 returns the ID with a `*restic.IncompleteError`;
+  JSON are skipped. Exit code 3 returns the ID with a `*restic.IncompleteError`;
   `backup` matches it through an `Incomplete() bool` interface, so it does not import
   `restic`.
 - Exit codes 10 (no repository), 11 (repository locked; hint: `--retry-lock`) and 12
   (wrong password) are named in the error before the runner's error, which keeps only
-  restic's last output lines (JSON in backup).
+  restic's last stderr lines (JSON error messages in backup).
 - `restic forget [forget_options] --tag <project> <retention_policy split on whitespace>`.
 - `restic [prune_options] prune` and `restic [prune_options] unlock`.
 - Every list option is passed as one argument per item: write `["-o", "s3.connections=10"]`
@@ -408,6 +408,13 @@ restor is a **oneshot** process: one run = one backup cycle, then exit.
 - **Repository in the environment:** `RESTIC_REPOSITORY` instead of `-r` keeps
   credentials in repository URLs out of debug logs and command errors (errors carry only
   the program name and the last 20 output lines).
+- **Stdout and stderr apart:** `command.Runner` returns only stdout, which the callers
+  parse (`compose ps --format json`, `config --services`, `systemctl is-active`, restic's
+  JSON). Stderr carries warnings that would break the parsing: Compose's
+  `level=warning` lines (obsolete `version:`, unset variables) and `podman compose`'s
+  "Executing external compose provider" banner. Errors carry the last stderr lines (stdout
+  when stderr is empty, as scripts often report there), so checks for expected failures
+  ("not loaded", "no containers to stop") match the error, not the output.
 
 Design decisions that are not obvious from the code go here, not into long code comments.
 

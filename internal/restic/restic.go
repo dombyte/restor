@@ -44,7 +44,8 @@ var (
 	errWrongPassword = errors.New("wrong password or no key found")
 )
 
-// Runner executes a program and returns its combined output.
+// Runner executes a program and returns its stdout; its error carries the program's
+// stderr.
 type Runner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
@@ -142,7 +143,7 @@ func (s summary) snapshotID() string {
 }
 
 // parseSummary returns the last summary message of restic's JSON lines. Other lines
-// (status, errors, plain text from stderr) are skipped.
+// (status messages, plain text) are skipped.
 func parseSummary(out []byte) (summary, bool) {
 	var last summary
 	found := false
