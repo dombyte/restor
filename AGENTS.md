@@ -96,8 +96,8 @@ make build                                                # ./restor with versio
 - Mocks: mockery v3 is a Go tool (see below); `go tool mockery` generates them
   from `.mockery.yaml` into `internal/<pkg>/mocks`. CI checks them for drift (not part of
   `make check`); regenerate after changing an interface.
-- Tool versions are pinned (`tool` directives in `go.mod`, golangci-lint action
-  `version:`) and bumped deliberately, the same version locally and in CI. Go tools
+- Tool versions are pinned (`tool` directives in `go.mod`, the `version:` of the
+  golangci-lint and goreleaser actions) and bumped deliberately, the same version locally and in CI. Go tools
   (mockery, deadcode, govulncheck) are `tool` directives, run with `go tool <name>` and
   bumped with `go get -tool <module>@vX.Y.Z`, rather than pinned `go run` commands: those
   check their modules against sum.golang.org on every CI run, and a checksum-DB hiccup
@@ -629,10 +629,11 @@ project:
 - `enabledManagers` lists exactly the ecosystems restor has: `gomod` (incl. the Go
   tools), `github-actions`, plus `custom.regex` for the regex manager below.
 - Every pinned version in the repo is tracked. Versions no built-in manager sees get a
-  `customManagers` regex; today only the golangci-lint `version:` of the CI action (the
-  `github-actions` manager tracks the action, not that input).
-- Updates that need manual work (Go module majors = new module path, golangci-lint majors
-  = config migration) are disabled with a `description` saying why.
+  `customManagers` regex; today the `version:` of the golangci-lint action in CI and of
+  the goreleaser action in the release (the `github-actions` manager tracks the actions,
+  not that input).
+- Updates that need manual work (Go module majors = new module path, golangci-lint and
+  goreleaser majors = config migration) are disabled with a `description` saying why.
 - Text that only describes a pinning pattern must not match a regex manager.
 - **Auto-merge:** Renovate proposes a version only once it is 3 days old
   (`minimumReleaseAge`; security updates at once) and merges minor, patch and digest
