@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -49,6 +51,14 @@ func New(env []string, log zerolog.Logger) *Runner {
 // ends, the program's process group gets SIGTERM, the program SIGKILL after waitDelay,
 // and what is left of the group SIGKILL when it ended.
 func (r *Runner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return r.RunEnv(ctx, nil, name, args...)
+}
+
+// RunEnv is Run with env (KEY=value pairs) added to the Runner's environment for this
+// program only; they win over the Runner's entries.
+func (r *Runner) RunEnv(ctx context.Context, env []string, name string, args ...string) (
+	[]byte, error,
+) {
 	if name == "" {
 		return nil, ErrEmptyCommand
 	}
@@ -57,7 +67,7 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) ([]byte, 
 	// Running configured programs (restic, compose, systemctl, hooks) is the purpose here;
 	// they run directly, without a shell.
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // see above
-	cmd.Env = r.env
+	cmd.Env = slices.Concat(r.env, env)
 	// Its own process group, so that a cancel also reaches the processes it started (a
 	// hook script's children), not only the program itself.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -83,6 +93,33 @@ func (r *Runner) Run(ctx context.Context, name string, args ...string) ([]byte, 
 	r.log.Debug().Str("program", name).Str("output", tail(out, maxOutputLines)).
 		Str("stderr", tail(errOut, maxOutputLines)).Msg("command finished")
 	return out, nil
+}
+
+// Stdio are the standard streams of an attached program.
+type Stdio struct {
+	In       io.Reader
+	Out, Err io.Writer
+}
+
+// Attach runs name with args connected to stdio, for interactive use (restor restic …),
+// and returns its error; the exit code is available through errors.As with an
+// interface{ ExitCode() int }. It stays in the caller's process group, so a terminal's
+// Ctrl-C reaches it directly; a cancelled ctx sends SIGTERM, SIGKILL after waitDelay.
+func (r *Runner) Attach(ctx context.Context, stdio Stdio, name string, args ...string) error {
+	if name == "" {
+		return ErrEmptyCommand
+	}
+	r.log.Debug().Str("program", name).Strs("args", args).Msg("running attached command")
+	// The program is restic with the user's own arguments; no shell is involved.
+	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // see above
+	cmd.Env = r.env
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdio.In, stdio.Out, stdio.Err
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = waitDelay
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("command: %s: %w", name, err)
+	}
+	return nil
 }
 
 // signalGroup sends sig to the process group led by pid; a group that has already exited

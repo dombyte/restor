@@ -142,6 +142,43 @@ func TestRunner_Run(t *testing.T) {
 		"args passed, later env entries win: %q", out)
 }
 
+func TestRunner_RunEnv(t *testing.T) {
+	t.Parallel()
+	r := newRunner("echo", "RESTOR_TEST_VALUE=a")
+
+	out, err := r.RunEnv(context.Background(), []string{"RESTOR_TEST_VALUE=c"}, os.Args[0], "x")
+
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(string(out), "x c\n"), "extra env wins: %q", out)
+}
+
+func TestRunner_Attach(t *testing.T) {
+	t.Parallel()
+	var out, errOut strings.Builder
+	stdio := Stdio{In: strings.NewReader(""), Out: &out, Err: &errOut}
+
+	err := newRunner("echo", "RESTOR_TEST_VALUE=a").
+		Attach(context.Background(), stdio, os.Args[0], "x")
+
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(out.String(), "x a\n"), out.String())
+}
+
+func TestRunner_AttachFailure(t *testing.T) {
+	t.Parallel()
+	var out strings.Builder
+	stdio := Stdio{In: strings.NewReader(""), Out: &out, Err: &out}
+
+	err := newRunner("fail").Attach(context.Background(), stdio, os.Args[0])
+
+	var exit interface{ ExitCode() int }
+	require.ErrorAs(t, err, &exit)
+	assert.Equal(t, 3, exit.ExitCode())
+	assert.Contains(t, out.String(), "line two", "output goes to the caller's streams")
+	assert.ErrorIs(t, newRunner("echo").Attach(context.Background(), stdio, ""),
+		ErrEmptyCommand)
+}
+
 func TestRunner_RunFailure(t *testing.T) {
 	t.Parallel()
 	r := newRunner("fail")
