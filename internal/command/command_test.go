@@ -25,7 +25,27 @@ func TestMain(m *testing.M) {
 	if mode := os.Getenv(helperEnv); mode != "" {
 		os.Exit(helper(mode))
 	}
-	os.Exit(m.Run())
+	os.Exit(runTests(m))
+}
+
+// runTests runs the tests with GOCOVERDIR set for the helper processes: a coverage build
+// of the helper warns on stderr when it is unset, which would change the output the
+// tests check.
+func runTests(m *testing.M) int {
+	if os.Getenv("GOCOVERDIR") != "" {
+		return m.Run()
+	}
+	dir, err := os.MkdirTemp("", "restor-cover-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer os.RemoveAll(dir)
+	if err := os.Setenv("GOCOVERDIR", dir); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return m.Run()
 }
 
 func helper(mode string) int {
@@ -126,7 +146,8 @@ func helperGroup() int {
 }
 
 func newRunner(mode string, extra ...string) *Runner {
-	env := append([]string{helperEnv + "=" + mode}, extra...)
+	env := append([]string{helperEnv + "=" + mode, "GOCOVERDIR=" + os.Getenv("GOCOVERDIR")},
+		extra...)
 	return New(env, zerolog.Nop())
 }
 
