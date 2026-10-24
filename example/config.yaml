@@ -99,7 +99,8 @@ defaults:
   #   within, within_hourly, within_daily, within_weekly, within_monthly, within_yearly:
   #     restic durations such as "30d", "1y6m"
   #   tags: keep every snapshot with one of these tags (only next to another rule:
-  #     alone, restic would forget every other snapshot, also the newest)
+  #     alone, restic would forget every other snapshot, also the newest; and not a tag
+  #     from the job's tags, which every snapshot of the job has)
   keep:
     daily: 7
     weekly: 4

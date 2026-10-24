@@ -462,6 +462,16 @@ func TestLoad_SafetyChecks(t *testing.T) {
 			`jobs.a.sources: "~/data": ~ is not expanded`,
 		},
 		{
+			"keep tag on every snapshot", "jobs: {a: {sources: [/a], tags: [x], " +
+				"keep: {daily: 7, tags: [x]}}}",
+			`jobs.a.keep.tags: "x" is in tags: every snapshot of the job has it`,
+		},
+		{
+			"keep tag on every snapshot by default", "defaults: {tags: [x], keep: " +
+				"{daily: 7, tags: [x]}}\njobs: {a: {sources: [/a]}}",
+			`jobs.a.keep.tags: "x" is in tags`,
+		},
+		{
 			"home env file", "repository: {env_file: ~/restic.env}\njobs: {a: {sources: [/a]}}",
 			`repository.env_file: "~/restic.env": ~ is not expanded`,
 		},
@@ -478,4 +488,7 @@ func TestLoad_SafetyChecks(t *testing.T) {
 	_, err := load(t, "version: 2\njobs: {a: {sources: [/a], keep: {daily: 7, tags: [x]}}}",
 		nil)
 	require.NoError(t, err, "tags next to another rule are fine")
+	_, err = load(t, "version: 2\ndefaults: {tags: [x], keep: {daily: 7, tags: [x]}}\n"+
+		"jobs: {a: {sources: [/a], tags: [y]}}", nil)
+	require.NoError(t, err, "a job that replaces the default tags")
 }

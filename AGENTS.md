@@ -347,7 +347,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `backend_options` keys like `s3.connections` with non-empty values; limits ≥ 0; env file
   names and values without NUL bytes; no extra `tags` that are the name of a job (forget
   `--tag=<job>` would select those snapshots too); `keep.tags` only next to another rule
-  (alone, restic forgets every other snapshot, also the newest); no path starting with
+  (alone, restic forgets every other snapshot, also the newest) and not one of the job's
+  own `tags` (every snapshot has it, so forget would remove none); no path starting with
   `~` (YAML does not expand it). Startup warns about a missing repository
   (`repository.url`, `RESTIC_REPOSITORY`, `RESTIC_REPOSITORY_FILE`), an env file that
   group or others can access (mode & 077), a hook whose program is a relative path
