@@ -72,8 +72,9 @@ repository:
   max_unused: 5%
 
 # A command that runs once after a run in which a job, forget or prune failed. It gets
-# RESTOR_STATUS=failed and RESTOR_FAILED_JOBS (comma-separated job names) in its
-# environment; e.g. a notification script. Default: none.
+# RESTOR_HOOK=on_failure, RESTOR_STATUS=failed, RESTOR_FAILED_JOBS (comma-separated job
+# names) and RESTOR_ERROR (all failures, "; "-separated) in its environment; e.g. a
+# notification script. Default: none.
 # on_failure: /usr/local/bin/notify-backup-failed
 
 # ------------------------------------------------------------------------------

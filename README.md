@@ -238,7 +238,7 @@ reported with their replacement, so `restor validate` guides the rewrite:
 | `stop_timeout: 30` | `stop_timeout: 30s` (now optional, default `1m`; `start_timeout` `2m`) |
 | `retention_policy: --keep-daily 7` | `keep: {daily: 7}` |
 | `backup_options` | `exclude`, `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`, `exclude_larger_than`, `one_file_system`, `skip_if_unchanged`, `tags` |
-| `forget_options` | `keep` (e.g. `keep: {tags: [important]}`) |
+| `forget_options` | `keep` (e.g. `keep: {daily: 7, tags: [important]}`) |
 | `pre_backup_cmd`, `post_backup_cmd` | `pre`, `post` |
 
 Changed behaviour:
