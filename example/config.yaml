@@ -80,9 +80,10 @@ repository:
 #   RESTOR_JOBS, RESTOR_SUCCEEDED_JOBS, RESTOR_INCOMPLETE_JOBS, RESTOR_FAILED_JOBS;
 #   RESTOR_SNAPSHOT_IDS (job=ID, comma-separated) and, when anything failed,
 #   RESTOR_ERROR (all failures, "; "-separated).
-# E.g. one notification per run with every job's result. Default: none.
-# post: /usr/local/bin/notify-backup
-# on_failure: /usr/local/bin/notify-backup-failed
+# E.g. one notification per run with every job's result (example/hooks/: ntfy.sh,
+# notifyapp.sh, mail.sh, healthchecks.sh). Default: none.
+# post: /etc/restor/hooks/ntfy.sh
+# on_failure: /usr/local/bin/page-oncall
 
 # ------------------------------------------------------------------------------
 # Defaults: apply to every job that does not set the same key itself. A job's value
@@ -139,9 +140,11 @@ defaults:
   #   post:       after the services are started again, whenever pre succeeded (also
   #               after a failed backup, so it can undo pre); not after a cancel
   #   on_failure: after post, when the job failed
-  # pre: /usr/local/bin/pre-backup.sh
-  # post: /usr/local/bin/post-backup.sh
-  # on_failure: /usr/local/bin/notify-job-failed.sh
+  # example/hooks/ has scripts to start from: as pre and post hook here, ntfy.sh (or
+  # notifyapp.sh) reports the start and the result of every job.
+  # pre: /etc/restor/hooks/ntfy.sh
+  # post: /etc/restor/hooks/ntfy.sh
+  # on_failure: /usr/local/bin/cleanup-after-failure.sh
 
 # ------------------------------------------------------------------------------
 # Jobs. The name is case-insensitive and its lowercase form is the restic tag; it must not

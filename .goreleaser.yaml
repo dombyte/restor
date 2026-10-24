@@ -51,6 +51,7 @@ archives:
       - example/restor.env
       - example/restor.service
       - example/restor.timer
+      - example/hooks/*
 
 # .deb and .rpm for the linux builds (darwin is skipped), attached to the GitHub release.
 nfpms:
@@ -86,6 +87,8 @@ nfpms:
         dst: /usr/share/doc/restor/examples/config.yaml
       - src: example/restor.env
         dst: /usr/share/doc/restor/examples/restor.env
+      - src: example/hooks/*
+        dst: /usr/share/doc/restor/examples/hooks/
       - src: README.md
         dst: /usr/share/doc/restor/README.md
       - src: LICENSE

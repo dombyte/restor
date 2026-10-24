@@ -139,6 +139,7 @@ internal/command/          the only os/exec user: runs a program with a fixed en
 internal/util/             RequireAll/DependencyError, Clock; clocktest (fake clock)
 internal/<pkg>/mocks/      mockery output (never hand-edited)
 example/                   config.yaml (full reference, kept valid by a test), restor.env,
+                           hooks/ (hook scripts + hooks.conf, shipped as examples),
                            restor.service + restor.timer (systemd units)
 packaging/                 .deb/.rpm only: system + user units (/usr/bin/restor) and the
                            install/remove scripts (nfpm in .goreleaser.yaml)

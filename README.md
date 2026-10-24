@@ -216,6 +216,37 @@ The top-level hooks get a summary of the whole run: `RESTOR_HOOK`, `RESTOR_STATU
 A failing `post` or `on_failure` hook is logged and changes nothing. After a cancel
 (SIGTERM) the remaining hooks are skipped.
 
+`example/hooks/` (in the release archives, and in `/usr/share/doc/restor/examples/hooks/`
+of the packages) has scripts to copy and adapt; each one explains its use at the top:
+
+| Script | Hooks | Does |
+|---|---|---|
+| `ntfy.sh` | top-level `post`, or job `pre`/`post` | push notification through [ntfy](https://ntfy.sh): one per run with every job's result and the errors, or one per job (started, backed up, unchanged, incomplete, failed); priority by result |
+| `notifyapp.sh` | top-level `post`, or job `pre`/`post` | the same messages to the [Notify](https://getnotifyapp.com) iPhone app, one thread per host |
+| `mail.sh` | top-level `post`, or job `post` | a mail through the local `sendmail` with the results and every `RESTOR_*` variable |
+| `healthchecks.sh` | job `pre` + `post`, or top-level `post` | reports each job (or the whole run) to [Healthchecks](https://healthchecks.io): start, success, or failure with the error |
+
+The notification scripts report whatever hook they run as, so the hooks pick the events,
+and `NOTIFY_LEVEL` in `hooks.conf` drops the less important ones (`warning`: only runs
+with incomplete or failed backups). For one message per run, set only the top-level
+`post`:
+
+```yaml
+post: /etc/restor/hooks/ntfy.sh   # top level, next to jobs; not under defaults
+```
+
+A job's `post` already reports a failed job, and the top-level `post` a failed run; an
+`on_failure` with the same script would repeat them.
+
+```sh
+sudo install -d -m 0700 /etc/restor/hooks
+sudo install -m 0755 example/hooks/*.sh /etc/restor/hooks/
+sudo install -m 0600 example/hooks/hooks.conf /etc/restor/hooks.conf  # tokens, targets
+```
+
+Tokens go into `hooks.conf`, not into the hook command: restor logs a hook's arguments
+at debug level, and hooks do not see the env file.
+
 **Retention:** after all backups, every job with `keep` and a complete snapshot runs
 `restic forget --group-by=host --tag=<job>`, so each job's snapshots on this host are one
 group, also when its `sources` or `tags` change. With `repository.prune`, one `prune` and
