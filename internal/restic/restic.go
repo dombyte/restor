@@ -153,7 +153,7 @@ func (c *Client) Backup(ctx context.Context, tag string, sources, args []string)
 func backupResult(tag string, sum summary, found bool, err error) (string, error) {
 	switch {
 	case err != nil:
-		return sum.snapshotID(), &IncompleteError{Tag: tag, Err: err}
+		return sum.snapshotID(), &IncompleteError{Tag: tag, Err: readable(err)}
 	case found && !sum.DryRun && sum.SnapshotID == "":
 		// Only a skipped snapshot leaves the ID out of a real summary.
 		return "", &UnchangedError{Tag: tag}
@@ -219,8 +219,10 @@ func seconds(s float64) time.Duration {
 }
 
 // failed wraps the error of a restic run, naming the cause of the exit codes restic uses
-// for setup problems, which its JSON output would otherwise bury.
+// for setup problems, which its JSON output would otherwise bury, and with restic's JSON
+// messages replaced by their text.
 func failed(op string, err error) error {
+	err = readable(err)
 	var exit interface{ ExitCode() int }
 	if !errors.As(err, &exit) {
 		return fmt.Errorf("restic: %s: %w", op, err)

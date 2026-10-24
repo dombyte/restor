@@ -3,6 +3,7 @@ package restic
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -261,6 +262,54 @@ func TestClient_ExitCodeCauses(t *testing.T) {
 				require.ErrorIs(t, err, tt.want)
 			}
 			assert.True(t, strings.HasPrefix(err.Error(), tt.text), err.Error())
+		})
+	}
+}
+
+func TestClient_BackupErrorText(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		err    error
+		want   string
+		incomp bool
+	}{
+		{
+			name: "fatal",
+			err: fmt.Errorf("command: restic: %w: /a does not exist, skipping; %s",
+				exitError(1), `{"message_type":"exit_error","code":1,"message":"Fatal: `+
+					`all source directories/files do not exist"}`),
+			want: "restic: backup web: command: restic: exit status 1: /a does not exist, " +
+				"skipping; Fatal: all source directories/files do not exist",
+		},
+		{
+			name: "incomplete",
+			err:  fmt.Errorf("command: restic: %w: %s; %s", exitError(3), jsonError, jsonExit3),
+			want: "restic: backup web: snapshot incomplete, some source files could not be " +
+				"read: command: restic: exit status 3: open /a/secret: permission denied; " +
+				"Warning: at least one source file could not be read",
+			incomp: true,
+		},
+		{
+			name: "plain text stays",
+			err:  fmt.Errorf("command: restic: %w: {not json; Fatal: x", exitError(1)),
+			want: "restic: backup web: command: restic: exit status 1: {not json; Fatal: x",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, r := newClient(t)
+			r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--group-by=host,tags",
+				"--tag=web", "--", "/a").Return(nil, tt.err)
+
+			_, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
+
+			assert.Equal(t, tt.want, err.Error())
+			var exit exitError
+			require.ErrorAs(t, err, &exit, "the runner's error is kept")
+			var incomplete *IncompleteError
+			assert.Equal(t, tt.incomp, errors.As(err, &incomplete))
 		})
 	}
 }

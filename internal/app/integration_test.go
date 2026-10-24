@@ -112,6 +112,7 @@ func TestIntegration(t *testing.T) {
 	t.Run("skip if unchanged", testSkipIfUnchanged)
 	t.Run("forget", testForget)
 	t.Run("incomplete snapshot", testIncomplete)
+	t.Run("missing source", testMissingSource)
 	t.Run("exit codes", testExitCodes)
 	t.Run("restor run", testRestorRun)
 }
@@ -272,6 +273,20 @@ func testIncomplete(t *testing.T) {
 	var incomplete *restic.IncompleteError
 	require.ErrorAs(t, err, &incomplete, "exit code 3")
 	assert.Len(t, id, 8, "the snapshot was saved")
+	assert.Contains(t, err.Error(), "permission denied", "the text of restic's JSON error")
+	assert.NotContains(t, err.Error(), "message_type")
+}
+
+func testMissingSource(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+
+	_, err := r.client(t, restic.Settings{}).Backup(context.Background(), "web",
+		[]string{filepath.Join(r.dir, "missing")}, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Fatal: ", "the text of restic's JSON exit error")
+	assert.NotContains(t, err.Error(), "message_type")
 }
 
 func testExitCodes(t *testing.T) {

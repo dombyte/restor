@@ -444,7 +444,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `Unchanged() bool` interfaces, so it does not import `restic`.
 - Exit codes 10 (no repository), 11 (repository locked; hint: `repository.retry_lock`)
   and 12 (wrong password) are named in the error before the runner's error, which keeps
-  only restic's last stderr lines (JSON error messages in backup).
+  only restic's last stderr lines. backup writes its errors there as JSON messages; each
+  is replaced by its text (`message`, or `error.message` for an unreadable file), so logs
+  and `RESTOR_ERROR` read `Fatal: …`, not `{"message_type":"exit_error",…}`.
 - `restic [global] forget --group-by=host --tag=<job> [keep flags]`; keep flags
   `--keep-last=` … `--keep-yearly=`, `--keep-within…=` and `--keep-tag=`.
 - `restic [global] prune [--max-unused=]` and `restic [global] unlock`.
