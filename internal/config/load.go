@@ -45,7 +45,8 @@ func Load(path string, getenv func(string) string) (*Plan, error) {
 	expandNode(root, getenv)
 	var f File
 	if err := root.Decode(&f); err != nil {
-		return nil, fmt.Errorf("config: %w", errors.Join(append(keyErrs, decodeErrors(err)...)...))
+		return nil, fmt.Errorf("config: %w",
+			errors.Join(append(keyErrs, decodeErrors(err, root)...)...))
 	}
 	keyErrs = append(keyErrs, f.homePaths()...)
 	if err := f.resolvePaths(path); err != nil {
@@ -77,19 +78,44 @@ func readFile(path string) (*yaml.Node, error) {
 	return doc.Content[0], nil
 }
 
-// decodeErrors splits a YAML decoding error into one error per problem.
-func decodeErrors(err error) []error {
+// decodeErrors splits a YAML decoding error into one error per problem, each with the
+// path of the value below root it is about (the decoder reports only its position).
+func decodeErrors(err error, root *yaml.Node) []error {
 	var load *yaml.LoadErrors
 	if !errors.As(err, &load) {
 		return []error{err}
 	}
+	paths := map[[2]int]string{}
+	valuePaths(root, "", paths)
 	errs := make([]error, 0, len(load.Errors))
 	for _, e := range load.Errors {
+		path, ok := paths[[2]int{e.Mark.Line, e.Mark.Column}]
+		if !ok {
+			path = fmt.Sprintf("line %d", e.Mark.Line)
+		}
 		errs = append(errs, &FieldError{
-			Path: fmt.Sprintf("line %d", e.Mark.Line), Problem: e.Message,
+			Path: path, Problem: fmt.Sprintf("%s (line %d)", e.Message, e.Mark.Line),
 		})
 	}
 	return errs
+}
+
+// valuePaths records the path of every value below n by its line and column. List
+// entries get the path of their list.
+func valuePaths(n *yaml.Node, path string, paths map[[2]int]string) {
+	switch n.Kind {
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			child, value := keyPath(path, n.Content[i].Value), n.Content[i+1]
+			paths[[2]int{value.Line, value.Column}] = child
+			valuePaths(value, child, paths)
+		}
+	case yaml.SequenceNode:
+		for _, c := range n.Content {
+			paths[[2]int{c.Line, c.Column}] = path
+			valuePaths(c, path, paths)
+		}
+	}
 }
 
 // unknownKeys returns an error for every mapping key below n that matches no field of t,
@@ -104,7 +130,7 @@ func unknownKeys(n *yaml.Node, t reflect.Type, path string) []error {
 	}
 	var errs []error
 	for i := 0; i+1 < len(n.Content); i += 2 {
-		key, child := n.Content[i], joinPath(path, n.Content[i].Value)
+		key, child := n.Content[i], keyPath(path, n.Content[i].Value)
 		if skip, merged := special(key.Value, path); skip {
 			if merged {
 				errs = append(errs, mergedKeys(n.Content[i+1], t, path)...)
@@ -219,6 +245,15 @@ func joinPath(path, key string) string {
 	return path + "." + key
 }
 
+// keyPath returns the path of key below path. Job names are lowercase, as in every
+// message after lowerJobNames.
+func keyPath(path, key string) string {
+	if path == "jobs" {
+		key = strings.ToLower(key)
+	}
+	return joinPath(path, key)
+}
+
 // expandNode replaces ${VAR} references in the scalar values below n (not in keys). A
 // plain scalar is re-typed after the expansion, so "${LIMIT}" can fill a number.
 func expandNode(n *yaml.Node, getenv func(string) string) {
@@ -264,9 +299,10 @@ func (f *File) homePaths() []error {
 		"defaults.exclude_file": f.Defaults.ExcludeFile,
 	}
 	for name, j := range f.Jobs {
-		paths["jobs."+name+".compose_file"] = []string{j.ComposeFile}
-		paths["jobs."+name+".sources"] = j.Sources
-		paths["jobs."+name+".exclude_file"] = j.ExcludeFile
+		job := keyPath("jobs", name)
+		paths[job+".compose_file"] = []string{j.ComposeFile}
+		paths[job+".sources"] = j.Sources
+		paths[job+".exclude_file"] = j.ExcludeFile
 	}
 	var errs []error
 	for _, field := range sortedKeys(paths) {

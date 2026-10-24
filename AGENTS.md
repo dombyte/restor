@@ -308,7 +308,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   (`config.unknownKeys` walks the YAML nodes against the struct tags); the keys of version
   1 (`projects`, `mode`, `global`, `service_manager`, `retention_policy`, …) name their
   replacement. Types are strict too: durations are strings with a unit (`30s`; a bare
-  number is an error), lists must be lists.
+  number is an error), lists must be lists; a type error names the field (looked up by
+  the position of its value) and the line. Every path names jobs in lowercase.
 - YAML anchors work: aliases are followed and merge keys (`<<`, one mapping or a list)
   are checked against the type they are merged into; top-level keys starting with `x-`
   are ignored (a place for anchors, as in Compose files).

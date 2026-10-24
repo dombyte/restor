@@ -181,7 +181,7 @@ func TestLoad_UnknownJobKeys(t *testing.T) {
 defaults:
   pre_backup_cmd: x
 jobs:
-  web:
+  Web:
     sources: [/a]
     stop_service: true
     service_manager: noop
@@ -208,15 +208,18 @@ concurrency: two
 defaults:
   stop_timeout: 30
 jobs:
-  web:
+  Web:
     sources: /a
+  db: {sources: [/b], tags: [x, 1], start_timeout: 5, keep: {daily: x}}
 `, nil)
 
 	require.ErrorIs(t, err, ErrInvalid)
 	for _, want := range []string{
-		"line 2: cannot construct !!str `two` into int",
-		`line 4: "30" is not a duration such as "30s" or "5m"`,
-		"line 7: cannot construct !!str `/a` into []string",
+		"concurrency: cannot construct !!str `two` into int (line 2)",
+		`defaults.stop_timeout: "30" is not a duration such as "30s" or "5m" (line 4)`,
+		"jobs.web.sources: cannot construct !!str `/a` into []string (line 7)",
+		`jobs.db.start_timeout: "5" is not a duration such as "30s" or "5m" (line 8)`,
+		"jobs.db.keep.daily: cannot construct !!str `x` into int (line 8)",
 	} {
 		assert.Contains(t, err.Error(), want)
 	}
@@ -455,7 +458,7 @@ func TestLoad_SafetyChecks(t *testing.T) {
 			"defaults.keep.tags: needs another rule",
 		},
 		{
-			"home source", "jobs: {a: {sources: [~/data]}}",
+			"home source", "jobs: {A: {sources: [~/data]}}",
 			`jobs.a.sources: "~/data": ~ is not expanded`,
 		},
 		{
