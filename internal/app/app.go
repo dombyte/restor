@@ -258,7 +258,8 @@ func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
 		jobs = append(jobs, backup.Job{Settings: jobSettings(j), Services: services})
 	}
 	return backup.NewManager(backup.Settings{
-		Concurrency: plan.Concurrency, Prune: plan.Repository.Prune, OnFailure: plan.OnFailure,
+		Concurrency: plan.Concurrency, Prune: plan.Repository.Prune,
+		Post: plan.Post, OnFailure: plan.OnFailure,
 	}, jobs, backup.Deps{
 		Restic: d.restic, Locker: locker, Hooks: d.runner, Log: component(d.log, "backup"),
 	})
@@ -368,8 +369,8 @@ func warnConfig(log zerolog.Logger, plan *config.Plan, resticEnv []string) {
 // ./backup.sh: it resolves against the working directory, which is / (system) or the home
 // directory (user) under systemd, not against the config directory.
 func warnRelativeHooks(log zerolog.Logger, plan *config.Plan) {
-	// The setting as a config path, so the run-level hook needs no job.
-	hooks := [][2]string{{"on_failure", plan.OnFailure}}
+	// The setting as a config path, so the run-level hooks need no job.
+	hooks := [][2]string{{"post", plan.Post}, {"on_failure", plan.OnFailure}}
 	for _, j := range plan.Jobs {
 		path := "jobs." + j.Name + "."
 		hooks = append(hooks, [2]string{path + "pre", j.Pre},

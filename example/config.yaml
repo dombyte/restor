@@ -71,10 +71,17 @@ repository:
   # a size such as "2G", or "unlimited" (fastest prune).
   max_unused: 5%
 
-# A command that runs once after a run in which a job, forget or prune failed. It gets
-# RESTOR_HOOK=on_failure, RESTOR_STATUS=failed, RESTOR_FAILED_JOBS (comma-separated job
-# names) and RESTOR_ERROR (all failures, "; "-separated) in its environment; e.g. a
-# notification script. Default: none.
+# Run-level hooks: commands that run once after the run (after forget and prune).
+#   post:       after every run
+#   on_failure: after post, when a job, forget, prune or unlock failed
+# Both get a summary of the run in their environment:
+#   RESTOR_HOOK (post or on_failure); RESTOR_STATUS: failed when anything failed,
+#   incomplete when a snapshot is incomplete, else success; the comma-separated job names
+#   RESTOR_JOBS, RESTOR_SUCCEEDED_JOBS, RESTOR_INCOMPLETE_JOBS, RESTOR_FAILED_JOBS;
+#   RESTOR_SNAPSHOT_IDS (job=ID, comma-separated) and, when anything failed,
+#   RESTOR_ERROR (all failures, "; "-separated).
+# E.g. one notification per run with every job's result. Default: none.
+# post: /usr/local/bin/notify-backup
 # on_failure: /usr/local/bin/notify-backup-failed
 
 # ------------------------------------------------------------------------------

@@ -39,6 +39,7 @@ repository:
   retry_lock: 10m
   prune: true
   max_unused: 5%
+post: /bin/notify summary
 on_failure: /bin/notify run
 defaults:
   stop_timeout: 30s
@@ -90,6 +91,7 @@ func TestLoad(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, plan.Concurrency)
+	assert.Equal(t, "/bin/notify summary", plan.Post)
 	assert.Equal(t, "/bin/notify run", plan.OnFailure)
 	assert.Equal(t, Repository{
 		URL: "/srv/repo", EnvFile: filepath.Join(dir, "restic.env"),

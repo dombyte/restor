@@ -94,8 +94,8 @@ journal: `journalctl -u restor` (or `journalctl --user -u restor`).
 
 `restor run` exits 0 when every job was backed up and 1 when the config is invalid, a job
 failed or the run was cancelled. A failed forget or prune is logged and runs the
-`on_failure` hook, a failed `post` or `on_failure` hook is only logged; neither changes
-the exit code. Before anything is stopped, it checks
+top-level `on_failure` hook; a failed `post` or `on_failure` hook is only logged. Neither
+changes the exit code. Before anything is stopped, it checks
 that `restic` is installed and supported (see below). `restor restic` exits with restic's
 exit code.
 
@@ -203,7 +203,15 @@ absolute path for anything more (a relative path resolves against the working di
 | `pre` | before the services are stopped; if it fails, the job fails and nothing else runs | `RESTOR_JOB`, `RESTOR_HOOK=pre` |
 | `post` | after the services are started again, whenever `pre` succeeded | also `RESTOR_STATUS` (`success`, `incomplete`, `failed`), `RESTOR_SNAPSHOT_ID`, `RESTOR_ERROR` |
 | job `on_failure` | after `post`, when the job failed | as `post` |
-| top-level `on_failure` | once after the run, when a job, forget or prune failed | `RESTOR_HOOK=on_failure`, `RESTOR_STATUS=failed`, `RESTOR_FAILED_JOBS`, `RESTOR_ERROR` |
+| top-level `post` | once after every run, after forget and prune | the run summary below |
+| top-level `on_failure` | after the top-level `post`, when a job, forget or prune failed | the run summary below |
+
+The top-level hooks get a summary of the whole run: `RESTOR_HOOK`, `RESTOR_STATUS`
+(`failed` when anything failed, `incomplete` when a snapshot is incomplete, else
+`success`), the comma-separated job names in `RESTOR_JOBS`, `RESTOR_SUCCEEDED_JOBS`,
+`RESTOR_INCOMPLETE_JOBS` and `RESTOR_FAILED_JOBS`, the snapshots in `RESTOR_SNAPSHOT_IDS`
+(`db=4f2a…,web=9c1e…`) and, when anything failed, every failure in `RESTOR_ERROR`
+(`; `-separated). A top-level `post` is the place for one notification per run.
 
 A failing `post` or `on_failure` hook is logged and changes nothing. After a cancel
 (SIGTERM) the remaining hooks are skipped.

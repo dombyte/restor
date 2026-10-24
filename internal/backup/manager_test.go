@@ -260,8 +260,9 @@ func TestManager_RunFailureHooks(t *testing.T) {
 		"RESTOR_SNAPSHOT_ID=", "RESTOR_ERROR=backup: a: " + assert.AnError.Error(),
 	}, jobEnv)
 	assert.Equal(t, []string{
-		"RESTOR_HOOK=on_failure", "RESTOR_STATUS=failed", "RESTOR_FAILED_JOBS=a",
-		"RESTOR_ERROR=backup: a: " + assert.AnError.Error(),
+		"RESTOR_HOOK=on_failure", "RESTOR_STATUS=failed", "RESTOR_JOBS=a,b",
+		"RESTOR_SUCCEEDED_JOBS=b", "RESTOR_INCOMPLETE_JOBS=", "RESTOR_FAILED_JOBS=a",
+		"RESTOR_SNAPSHOT_IDS=b=abc", "RESTOR_ERROR=backup: a: " + assert.AnError.Error(),
 	}, runEnv)
 }
 
@@ -274,8 +275,9 @@ func TestManager_RunFailureHookAfterPruneFailure(t *testing.T) {
 	f.restic.EXPECT().Prune(mock.Anything).Return(assert.AnError).Once()
 	f.restic.EXPECT().Unlock(mock.Anything).Return(nil).Once()
 	f.hooks.EXPECT().RunEnv(mock.Anything, []string{
-		"RESTOR_HOOK=on_failure", "RESTOR_STATUS=failed", "RESTOR_FAILED_JOBS=",
-		"RESTOR_ERROR=" + assert.AnError.Error(),
+		"RESTOR_HOOK=on_failure", "RESTOR_STATUS=failed", "RESTOR_JOBS=a",
+		"RESTOR_SUCCEEDED_JOBS=a", "RESTOR_INCOMPLETE_JOBS=", "RESTOR_FAILED_JOBS=",
+		"RESTOR_SNAPSHOT_IDS=a=abc", "RESTOR_ERROR=" + assert.AnError.Error(),
 	}, "/bin/run-failed").Return(nil, nil).Once()
 	m := f.manager(t, Settings{Prune: true, OnFailure: "/bin/run-failed"},
 		fileJob(f, t, "a", "--keep-last 1"))
@@ -295,10 +297,75 @@ func TestManager_RunFailureHookSkippedAfterCancel(t *testing.T) {
 		})
 	a := fileJob(f, t, "a", "")
 	a.Settings.OnFailure = "/bin/job-failed"
-	m := f.manager(t, Settings{OnFailure: "/bin/run-failed"}, a)
+	m := f.manager(t, Settings{Post: "/bin/run-post", OnFailure: "/bin/run-failed"}, a)
 
 	require.ErrorIs(t, m.Run(ctx), ErrJobsFailed)
 	// The hooks mock fails the test on any call.
+}
+
+func TestManager_RunPostHook(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		errB error
+		want []string
+	}{
+		{name: "success", want: []string{
+			"RESTOR_HOOK=post", "RESTOR_STATUS=success", "RESTOR_JOBS=a,b",
+			"RESTOR_SUCCEEDED_JOBS=a,b", "RESTOR_INCOMPLETE_JOBS=", "RESTOR_FAILED_JOBS=",
+			"RESTOR_SNAPSHOT_IDS=a=abc,b=abc",
+		}},
+		{name: "incomplete", errB: incompleteError{}, want: []string{
+			"RESTOR_HOOK=post", "RESTOR_STATUS=incomplete", "RESTOR_JOBS=a,b",
+			"RESTOR_SUCCEEDED_JOBS=a", "RESTOR_INCOMPLETE_JOBS=b", "RESTOR_FAILED_JOBS=",
+			"RESTOR_SNAPSHOT_IDS=a=abc,b=abc",
+		}},
+		{name: "unchanged has no snapshot", errB: unchangedError{}, want: []string{
+			"RESTOR_HOOK=post", "RESTOR_STATUS=success", "RESTOR_JOBS=a,b",
+			"RESTOR_SUCCEEDED_JOBS=a,b", "RESTOR_INCOMPLETE_JOBS=", "RESTOR_FAILED_JOBS=",
+			"RESTOR_SNAPSHOT_IDS=a=abc",
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			f.expectLock("a")
+			f.expectLock("b")
+			f.expectBackup("a", nil)
+			f.expectBackup("b", tt.errB)
+			f.hooks.EXPECT().RunEnv(mock.Anything, tt.want, "/bin/run-post", "x").
+				Return(nil, assert.AnError).Once() // only logged
+			m := f.manager(t, Settings{Post: "/bin/run-post x", OnFailure: "/bin/run-failed"},
+				fileJob(f, t, "a", ""), fileJob(f, t, "b", ""))
+
+			require.NoError(t, m.Run(context.Background()))
+			// on_failure does not run: the hooks mock fails the test on any other call.
+		})
+	}
+}
+
+func TestManager_RunPostHookBeforeOnFailure(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expectLock("a")
+	f.expectBackup("a", assert.AnError)
+	f.hooks.EXPECT().RunEnv(mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, env []string, name string, _ ...string) (
+			[]byte, error,
+		) {
+			f.rec.add(name + " " + env[0] + " " + env[1])
+			return nil, nil
+		}).Twice()
+	m := f.manager(t, Settings{Post: "/bin/run-post", OnFailure: "/bin/run-failed"},
+		fileJob(f, t, "a", ""))
+
+	require.ErrorIs(t, m.Run(context.Background()), ErrJobsFailed)
+	assert.Equal(t, []string{
+		"lock a", "backup a", "release a",
+		"/bin/run-post RESTOR_HOOK=post RESTOR_STATUS=failed",
+		"/bin/run-failed RESTOR_HOOK=on_failure RESTOR_STATUS=failed",
+	}, f.rec.list(), "post runs first, as in a job")
 }
 
 // after returns j with after set.

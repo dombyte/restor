@@ -18,6 +18,8 @@ type Plan struct {
 	Concurrency int
 	// Repository holds the repository settings.
 	Repository Repository
+	// Post is the hook that runs once after every run.
+	Post string
 	// OnFailure is the hook that runs once after a failed run.
 	OnFailure string
 	// Jobs are sorted by name.
@@ -125,6 +127,7 @@ func (f *File) plan() (*Plan, []error) {
 			LimitUpload: r.LimitUpload, LimitDownload: r.LimitDownload,
 			RetryLock: time.Duration(r.RetryLock), Prune: r.Prune, MaxUnused: r.MaxUnused,
 		},
+		Post:      f.Post,
 		OnFailure: f.OnFailure,
 		Jobs:      jobs,
 	}, nil

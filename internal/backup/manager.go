@@ -1,8 +1,9 @@
 // Package backup orchestrates one backup run: per job lock, pre hook, stop services,
 // restic backup, start services, post and on_failure hooks; the jobs run in the order
-// and with the concurrency the schedule allows. Then forget per job and one
-// repository-wide prune and unlock. It talks to restic, the service managers, the locker
-// and the hook runner only through the interfaces declared here.
+// and with the concurrency the schedule allows. Then forget per job, one
+// repository-wide prune and unlock, and the run-level post and on_failure hooks. It
+// talks to restic, the service managers, the locker and the hook runner only through
+// the interfaces declared here.
 package backup
 
 import (
@@ -65,6 +66,8 @@ type Settings struct {
 	Concurrency int
 	// Prune runs prune and unlock after the run when every job has a complete snapshot.
 	Prune bool
+	// Post is the hook that runs once after every run, with a summary of it.
+	Post string
 	// OnFailure is the hook that runs once after a run in which something failed.
 	OnFailure string
 }
@@ -112,27 +115,24 @@ func NewManager(s Settings, jobs []Job, d Deps) (*Manager, error) {
 // Run backs up every job. Then it runs forget for the jobs with a retention policy and a
 // complete snapshot, and with Prune, prune and unlock when every snapshot is complete. A
 // cancelled run does no maintenance. Job failures are logged here and summarized in the
-// returned ErrJobsFailed; forget, prune and unlock failures are only logged. When
-// anything failed, the OnFailure hook runs.
+// returned ErrJobsFailed; forget, prune and unlock failures are only logged. Then the
+// Post hook runs, and when anything failed, the OnFailure hook.
 func (m *Manager) Run(ctx context.Context) error {
 	m.d.Log.Info().Int("concurrency", m.s.Concurrency).Int("jobs", len(m.jobs)).
 		Stringer("shutdown_timeout", m.ShutdownTimeout()).Msg("starting backup run")
 
 	results := m.runJobs(ctx)
-	var failures []string
+	var maintenance []string
 	if ctx.Err() == nil {
-		failures = m.maintain(ctx, results)
+		maintenance = m.maintain(ctx, results)
 	}
-	var failed []string
-	for i, r := range results {
-		if r.outcome == outcomeFailed {
-			failed = append(failed, m.jobs[i].Settings.Name)
-			failures = append(failures, r.err.Error())
-		}
+	s := m.summarize(results, maintenance)
+	m.runHook(ctx, hookPost, m.s.Post, s)
+	if len(s.failures) > 0 {
+		m.runHook(ctx, hookOnFailure, m.s.OnFailure, s)
 	}
-	m.runFailureHook(ctx, failed, failures)
-	if len(failed) > 0 {
-		return fmt.Errorf("%w: %d of %d", ErrJobsFailed, len(failed), len(m.jobs))
+	if len(s.failed) > 0 {
+		return fmt.Errorf("%w: %d of %d", ErrJobsFailed, len(s.failed), len(m.jobs))
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("backup: %w", err)
@@ -255,22 +255,17 @@ func (m *Manager) prune(ctx context.Context) []string {
 	return failures
 }
 
-// runFailureHook runs the OnFailure hook when anything failed, with the failed jobs in
-// RESTOR_FAILED_JOBS and the failures in RESTOR_ERROR; its own failure is only logged.
-func (m *Manager) runFailureHook(ctx context.Context, failedJobs, failures []string) {
-	if len(failures) == 0 || strings.TrimSpace(m.s.OnFailure) == "" {
+// runHook runs a run-level hook with the summary of the run in its environment; its own
+// failure is only logged. After a cancel it is skipped, like every hook.
+func (m *Manager) runHook(ctx context.Context, kind, command string, s summary) {
+	if strings.TrimSpace(command) == "" {
 		return
 	}
 	if ctx.Err() != nil {
-		m.d.Log.Warn().Msg("on_failure hook skipped because the run was cancelled")
+		m.d.Log.Warn().Str("hook", kind).Msg("hook skipped because the run was cancelled")
 		return
 	}
-	env := []string{
-		"RESTOR_HOOK=" + hookOnFailure, "RESTOR_STATUS=" + statusFailed,
-		"RESTOR_FAILED_JOBS=" + strings.Join(failedJobs, ","),
-		"RESTOR_ERROR=" + strings.Join(failures, "; "),
-	}
-	if err := m.hook(ctx, m.s.OnFailure, env); err != nil {
-		m.d.Log.Error().Err(err).Msg("on_failure hook failed")
+	if err := m.hook(ctx, command, s.env(kind)); err != nil {
+		m.d.Log.Error().Err(err).Str("hook", kind).Msg("hook failed")
 	}
 }

@@ -211,7 +211,7 @@ func TestWarnConfig(t *testing.T) {
 func TestWarnRelativeHooks(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
-	plan := &config.Plan{OnFailure: "notify/x", Jobs: []config.Job{
+	plan := &config.Plan{Post: "hooks/summary", OnFailure: "notify/x", Jobs: []config.Job{
 		{Name: "rel", Pre: "./hooks/pre.sh --flag", Post: "bin/post"},
 		{Name: "ok", Pre: "/usr/local/bin/pre.sh ./arg", Post: "pg_dump", OnFailure: "/x"},
 	}}
@@ -219,6 +219,7 @@ func TestWarnRelativeHooks(t *testing.T) {
 	warnRelativeHooks(zerolog.New(&buf), plan)
 
 	out := buf.String()
+	assert.Contains(t, out, `"field":"post","hook":"hooks/summary"`)
 	assert.Contains(t, out, `"field":"on_failure","hook":"notify/x"`)
 	assert.Contains(t, out, `"field":"jobs.rel.pre","hook":"./hooks/pre.sh"`)
 	assert.Contains(t, out, `"field":"jobs.rel.post","hook":"bin/post"`)

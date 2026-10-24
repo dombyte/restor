@@ -46,6 +46,8 @@ type File struct {
 	Concurrency *int `yaml:"concurrency"`
 	// Repository is the restic repository all jobs back up to.
 	Repository RepositoryConfig `yaml:"repository"`
+	// Post runs once after every run, with a summary of it.
+	Post string `yaml:"post"`
 	// OnFailure runs once after a run in which a job or the maintenance failed.
 	OnFailure string `yaml:"on_failure"`
 	// Defaults apply to every job that does not set the field itself.

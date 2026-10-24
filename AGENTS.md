@@ -28,7 +28,7 @@ restor orchestrates **restic** backups of several **jobs** on one host.
   jobs that share a compose file or systemd unit never run together.
 - **After all jobs:** `restic forget --group-by=host --tag=<job> <keep>` per job, then one
   repository-wide `restic prune` and `restic unlock` (only with `repository.prune`); the
-  run-level on_failure hook when anything failed.
+  run-level post hook, then the run-level on_failure hook when anything failed.
 - **Runtime:** a single CLI binary that runs **on the host** as a oneshot systemd service
   (`restor run`), triggered by a systemd timer (`example/restor.service`,
   `example/restor.timer`). It shells out to `restic`, `docker compose`, `podman compose`
@@ -241,8 +241,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 4. `Manager.Run`: run the jobs as the schedule allows; when the run was not cancelled:
    forget each job that has a complete snapshot and a `keep`, then, with
    `repository.prune` and only when every job has a complete snapshot, one prune + unlock
-   (only if at least one job forgot). Then the run-level on_failure hook when a job,
-   forget, prune or unlock failed.
+   (only if at least one job forgot). Then the run-level post hook, and the run-level
+   on_failure hook when a job, forget, prune or unlock failed.
 5. Exit code: 0 when every job backed up; 1 when config failed, restic is missing or too
    old, any job failed or the run was cancelled. Forget, prune, unlock and hook failures
    are logged but do **not** change the exit code; after a failed or incomplete job only
@@ -303,7 +303,7 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 ### Configuration
 - One YAML file (`.yaml`/`.yml`) with `version: 2`; other extensions are an error.
   Template with every option: `example/config.yaml`. Top level: `version`,
-  `concurrency`, `repository`, `on_failure`, `defaults`, `jobs`.
+  `concurrency`, `repository`, `post`, `on_failure`, `defaults`, `jobs`.
 - Decoding is strict: a key that matches no field is an error with its path and line
   (`config.unknownKeys` walks the YAML nodes against the struct tags); the keys of version
   1 (`projects`, `mode`, `global`, `service_manager`, `retention_policy`, …) name their
@@ -385,15 +385,18 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - Run with the process environment, the run context and these variables: `pre` gets
   `RESTOR_JOB`, `RESTOR_HOOK=pre`; `post` and the job's `on_failure` also
   `RESTOR_STATUS` (`success`, `incomplete`, `failed`), `RESTOR_SNAPSHOT_ID` (empty without
-  a snapshot) and, after a failure, `RESTOR_ERROR`; the run-level `on_failure` gets
-  `RESTOR_HOOK=on_failure`, `RESTOR_STATUS=failed`, `RESTOR_FAILED_JOBS` (comma-separated)
-  and `RESTOR_ERROR` (all failures, `; `-separated).
+  a snapshot) and, after a failure, `RESTOR_ERROR`. The run-level `post` and `on_failure`
+  get the run summary (`backup.summary`): `RESTOR_HOOK`, `RESTOR_STATUS` (`failed` when a
+  job or the maintenance failed, else `incomplete` when a snapshot is, else `success`),
+  the comma-separated `RESTOR_JOBS`, `RESTOR_SUCCEEDED_JOBS`, `RESTOR_INCOMPLETE_JOBS`,
+  `RESTOR_FAILED_JOBS`, `RESTOR_SNAPSHOT_IDS` (`job=ID`) and, when anything failed,
+  `RESTOR_ERROR` (maintenance failures, then job failures, `; `-separated).
 - The post hook runs after the services are started again whenever the pre hook succeeded
   (or there is none), also when the backup or the restart failed, so it can undo the pre
   hook. The job's on_failure hook runs after it when the job failed (also after a failed
-  lock or pre hook). The run-level on_failure runs once after maintenance when a job,
-  forget, prune or unlock failed. All are skipped after a cancel (a warning); their own
-  failures are logged only.
+  lock or pre hook). The run-level post runs once after maintenance, then the run-level
+  on_failure when a job, forget, prune or unlock failed. All are skipped after a cancel
+  (a warning); their own failures are logged only.
 
 ### Service managers
 - Compose: `<docker|podman> compose -f <file> …`; services from `config --services` when
