@@ -27,26 +27,30 @@ func TestRun_Version(t *testing.T) {
 
 func TestRun_Errors(t *testing.T) {
 	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
 	tests := []struct {
 		name string
 		args []string
 		want string
 	}{
-		{name: "missing config flag", want: `required flag "config" not set`},
-		{name: "unknown flag", args: []string{"--nope"}, want: "unknown flag"},
+		{name: "no command", want: `no command given: use "restor run"`},
+		{name: "version 1 call", args: []string{"--config", "x"}, want: "no command given"},
+		{name: "unknown flag", args: []string{"run", "--nope"}, want: "unknown flag"},
+		{name: "unknown command", args: []string{"backup"}, want: "unknown command"},
+		{name: "missing config file", args: []string{"run", "-c", missing}, want: "startup failed"},
+		{name: "validate", args: []string{"validate", "-c", missing}, want: "startup failed"},
+		{name: "restic", args: []string{"restic", "-c", missing}, want: "startup failed"},
 		{
-			name: "unexpected argument", args: []string{"--config", "x", "extra"},
-			want: "unknown command",
-		},
-		{
-			name: "missing config file",
-			args: []string{"--config", filepath.Join(t.TempDir(), "missing.yaml")},
-			want: "startup failed",
+			name: "default config", args: []string{"validate"},
+			want: "/etc/restor/config.yaml",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+			if tt.name == "default config" && fileExists(defaultConfig) {
+				t.Skip("a real configuration is installed")
+			}
 			var stdout, stderr bytes.Buffer
 			assert.Equal(t, 1, run(tt.args, &stdout, &stderr))
 			assert.Contains(t, stderr.String(), tt.want)
@@ -54,32 +58,89 @@ func TestRun_Errors(t *testing.T) {
 	}
 }
 
-func TestRun_EmptyConfig(t *testing.T) {
-	t.Parallel()
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("global: {restic_repo: /repo}\n"), 0o600))
-	var stdout, stderr bytes.Buffer
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
 
-	assert.Equal(t, 0, run([]string{"--config", path, "--debug"}, &stdout, &stderr))
-	assert.Contains(t, stderr.String(), "no projects configured")
+func writeConfig(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	return path
 }
 
 func TestRun_InvalidConfigLogsEachProblem(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("mode: fast\nprojects:\n  a: {}\n"), 0o600))
+	path := writeConfig(t, "version: 2\nconcurrency: -1\njobs:\n  a: {type: systemd}\n")
 	var stdout, stderr bytes.Buffer
 
-	assert.Equal(t, 1, run([]string{"--config", path}, &stdout, &stderr))
+	assert.Equal(t, 1, run([]string{"run", "--config", path}, &stdout, &stderr))
 	out := stderr.String()
 	assert.NotContains(t, out, `\n`, "no escaped line breaks")
 	assert.Equal(t, 3, strings.Count(out, "startup failed"), out)
 	for _, want := range []string{
-		"mode: must be", "projects.a.service_manager: required",
-		"projects.a.sources: required",
+		"concurrency: must be", "jobs.a.units: required", "jobs.a.sources: required",
 	} {
 		assert.Contains(t, out, want)
 	}
+}
+
+func TestRun_UnknownJob(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, "version: 2\njobs: {a: {sources: [/a]}}\n")
+	var stdout, stderr bytes.Buffer
+
+	assert.Equal(t, 1, run([]string{"run", "-c", path, "a", "b"}, &stdout, &stderr))
+	assert.Contains(t, stderr.String(), "unknown job: b")
+}
+
+func TestRun_Validate(t *testing.T) {
+	t.Parallel()
+	path := writeConfig(t, `version: 2
+repository: {url: /repo, prune: true}
+defaults:
+  keep: {daily: 7, weekly: 4}
+jobs:
+  web: {type: docker-compose, compose_file: /c.yml, sources: [/w], keep: {last: 2}}
+  db: {type: docker-compose, compose_file: /c.yml, sources: [/d], before: [web]}
+  etc: {sources: [/etc]}
+  tmp: {sources: [/tmp/x], keep: {}}
+`)
+	var stdout, stderr bytes.Buffer
+
+	assert.Equal(t, 0, run([]string{"validate", "-c", path}, &stdout, &stderr), stderr.String())
+	out := stdout.String()
+	assert.Contains(t, out, path+" is valid")
+	assert.Contains(t, out, "prune:        true")
+	assert.Regexp(t, `(?s)JOB.*\n`+
+		`db +docker-compose +- +true +A +/d\n`+
+		`etc +files +- +false +A +/etc\n`+
+		`tmp +files +- +false +- +/tmp/x\n`+
+		`web +docker-compose +db +true +B +/w\n`, out)
+	assert.Regexp(t, `(?s)\nKEEP\n`+
+		`  A +daily=7 weekly=4 +\(db, etc\)\n`+
+		`  - +never forgotten +\(tmp\)\n`+
+		`  B +last=2 +\(web\)\n$`, out)
+	assert.NotContains(t, stderr.String(), "job configured", "validate logs warnings only")
+}
+
+// TestRun_Restic is not parallel: it sets PATH.
+func TestRun_Restic(t *testing.T) {
+	dir := t.TempDir()
+	// A fake restic on PATH that prints its arguments and the repository.
+	script := "#!/bin/sh\necho \"$@\" \"$RESTIC_REPOSITORY\"\nexit 3\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "restic"), []byte(script), 0o700))
+	t.Setenv("PATH", dir)
+	path := writeConfig(t, "version: 2\nrepository: {url: /repo, limit_upload: 5}\n"+
+		"jobs: {a: {sources: [/a]}}\n")
+	var stdout, stderr bytes.Buffer
+
+	code := run([]string{"restic", "-c", path, "snapshots", "--tag", "a"}, &stdout, &stderr)
+
+	assert.Equal(t, 3, code, "restic's exit code")
+	assert.Equal(t, "--limit-upload=5 snapshots --tag a /repo\n", stdout.String())
+	assert.Empty(t, stderr.String())
 }
 
 func TestJoined(t *testing.T) {
@@ -94,7 +155,7 @@ func TestJoined(t *testing.T) {
 func TestNewLogger_NoColorWithoutTerminal(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
-	log := newLogger(&buf, false)
+	log := newLogger(&buf, zerolog.InfoLevel)
 	log.Info().Str("k", "v").Msg("hello")
 	assert.NotContains(t, buf.String(), "\x1b[")
 	assert.Contains(t, buf.String(), "hello k=v")

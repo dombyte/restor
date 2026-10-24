@@ -23,8 +23,23 @@ all: build
 
 .PHONY: run
 run: build
-	./$(BINARY_NAME) --config config.yaml
+	./$(BINARY_NAME) run --config config.yaml
 
 .PHONY: check
 check:
 	./scripts/pre-commit.sh
+
+# Integration tests against the restic on PATH (not part of check: they need restic).
+.PHONY: integration
+integration:
+	go test -tags integration -race -count=1 -run TestIntegration ./internal/app
+
+# The same against the oldest restic restor supports (minSupported in
+# internal/restic/version.go), downloaded once into the user's cache directory.
+RESTIC_OLDEST := $(shell sed -n 's/^[[:space:]]*minSupported = "\(.*\)"/\1/p' internal/restic/version.go)
+RESTIC_CACHE := $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/restor/restic/$(RESTIC_OLDEST)
+
+.PHONY: integration-oldest
+integration-oldest:
+	./scripts/install-restic.sh $(RESTIC_OLDEST) $(RESTIC_CACHE)
+	PATH="$(RESTIC_CACHE):$$PATH" $(MAKE) integration

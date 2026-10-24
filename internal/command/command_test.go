@@ -25,7 +25,27 @@ func TestMain(m *testing.M) {
 	if mode := os.Getenv(helperEnv); mode != "" {
 		os.Exit(helper(mode))
 	}
-	os.Exit(m.Run())
+	os.Exit(runTests(m))
+}
+
+// runTests runs the tests with GOCOVERDIR set for the helper processes: a coverage build
+// of the helper warns on stderr when it is unset, which would change the output the
+// tests check.
+func runTests(m *testing.M) int {
+	if os.Getenv("GOCOVERDIR") != "" {
+		return m.Run()
+	}
+	dir, err := os.MkdirTemp("", "restor-cover-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer os.RemoveAll(dir)
+	if err := os.Setenv("GOCOVERDIR", dir); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return m.Run()
 }
 
 func helper(mode string) int {
@@ -126,7 +146,8 @@ func helperGroup() int {
 }
 
 func newRunner(mode string, extra ...string) *Runner {
-	env := append([]string{helperEnv + "=" + mode}, extra...)
+	env := append([]string{helperEnv + "=" + mode, "GOCOVERDIR=" + os.Getenv("GOCOVERDIR")},
+		extra...)
 	return New(env, zerolog.Nop())
 }
 
@@ -140,6 +161,43 @@ func TestRunner_Run(t *testing.T) {
 	// A coverage build of the helper may append a GOCOVERDIR warning.
 	assert.True(t, strings.HasPrefix(string(out), "x y b\n"),
 		"args passed, later env entries win: %q", out)
+}
+
+func TestRunner_RunEnv(t *testing.T) {
+	t.Parallel()
+	r := newRunner("echo", "RESTOR_TEST_VALUE=a")
+
+	out, err := r.RunEnv(context.Background(), []string{"RESTOR_TEST_VALUE=c"}, os.Args[0], "x")
+
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(string(out), "x c\n"), "extra env wins: %q", out)
+}
+
+func TestRunner_Attach(t *testing.T) {
+	t.Parallel()
+	var out, errOut strings.Builder
+	stdio := Stdio{In: strings.NewReader(""), Out: &out, Err: &errOut}
+
+	err := newRunner("echo", "RESTOR_TEST_VALUE=a").
+		Attach(context.Background(), stdio, os.Args[0], "x")
+
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(out.String(), "x a\n"), out.String())
+}
+
+func TestRunner_AttachFailure(t *testing.T) {
+	t.Parallel()
+	var out strings.Builder
+	stdio := Stdio{In: strings.NewReader(""), Out: &out, Err: &out}
+
+	err := newRunner("fail").Attach(context.Background(), stdio, os.Args[0])
+
+	var exit interface{ ExitCode() int }
+	require.ErrorAs(t, err, &exit)
+	assert.Equal(t, 3, exit.ExitCode())
+	assert.Contains(t, out.String(), "line two", "output goes to the caller's streams")
+	assert.ErrorIs(t, newRunner("echo").Attach(context.Background(), stdio, ""),
+		ErrEmptyCommand)
 }
 
 func TestRunner_RunFailure(t *testing.T) {

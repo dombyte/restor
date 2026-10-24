@@ -1,6 +1,7 @@
 /restor
 /config.yaml
 env.yaml
+/*.env
 coverage.out
 coverage.html
 

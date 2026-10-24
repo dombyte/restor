@@ -1,24 +1,27 @@
-// Package config loads the restor configuration: one file (YAML, JSON or TOML, chosen by
-// extension), an optional env file and inline environment variables. Keys keep their
-// case (environment variable names are case-sensitive); project names are
-// case-insensitive. Load applies the defaults, expands ${VAR} references from the process
-// environment and validates everything once; the result is read-only.
+// Package config loads the restor configuration: one YAML file (format version 2) and
+// the repository's env file. Load decodes the file strictly (an unknown key is an error,
+// with a hint for the keys of version 1), expands ${VAR} references from the process
+// environment, resolves relative paths against the file's directory, applies the
+// defaults and validates everything once. The result is a read-only Plan.
 package config
 
-import "time"
+import (
+	"fmt"
+	"time"
 
-// Execution modes.
-const (
-	ModeSequential = "sequential"
-	ModeParallel   = "parallel"
+	"go.yaml.in/yaml/v4"
 )
 
-// Service manager types.
+// Version is the configuration format this package reads.
+const Version = 2
+
+// Job types.
 const (
-	ManagerDockerCompose = "docker-compose"
-	ManagerPodmanCompose = "podman-compose"
-	ManagerSystemd       = "systemd"
-	ManagerNoop          = "noop"
+	// TypeFiles backs up files only; it is the type of a job without a type key.
+	TypeFiles         = ""
+	TypeDockerCompose = "docker-compose"
+	TypePodmanCompose = "podman-compose"
+	TypeSystemd       = "systemd"
 )
 
 // systemd scopes.
@@ -27,76 +30,106 @@ const (
 	ScopeUser   = "user"
 )
 
-// Args is a list of command-line arguments for restic. A single string in the file is one
-// argument; unlike the other lists it is not split on commas, which options such as
-// "--group-by=host,tags" contain.
-type Args []string
+// Defaults of settings that are not written.
+const (
+	DefaultConcurrency  = 1
+	DefaultStopTimeout  = time.Minute
+	DefaultStartTimeout = 2 * time.Minute
+)
 
-// Config is the configuration file.
-type Config struct {
-	// Mode is ModeSequential or ModeParallel.
-	Mode string `mapstructure:"mode"`
-	// EnvFile is an optional .env, .yaml/.yml or .json file with environment variables.
-	EnvFile string `mapstructure:"env_file"`
-	// Environments are inline variables; after Load they also hold the env file's
-	// variables (inline wins).
-	Environments map[string]string `mapstructure:"environments"`
-	// Global holds the repository-wide settings.
-	Global GlobalConfig `mapstructure:"global"`
-	// Projects maps the project name (also the restic tag) to its settings.
-	Projects map[string]ProjectConfig `mapstructure:"projects"`
-	// UnknownKeys are the keys of the file that match no setting (typos), e.g.
-	// "projects[web].stop_service"; they are ignored.
-	UnknownKeys []string `mapstructure:"-"`
+// File is the configuration file as written.
+type File struct {
+	// Version must be 2.
+	Version int `yaml:"version"`
+	// Concurrency is how many jobs run at once; 1 (default) runs them one after another,
+	// 0 runs all at once.
+	Concurrency *int `yaml:"concurrency"`
+	// Repository is the restic repository all jobs back up to.
+	Repository RepositoryConfig `yaml:"repository"`
+	// Post runs once after every run, with a summary of it.
+	Post string `yaml:"post"`
+	// OnFailure runs once after a run in which a job or the maintenance failed.
+	OnFailure string `yaml:"on_failure"`
+	// Defaults apply to every job that does not set the field itself.
+	Defaults Defaults `yaml:"defaults"`
+	// Jobs maps the job name (also the restic tag) to its settings.
+	Jobs map[string]JobConfig `yaml:"jobs"`
 }
 
-// GlobalConfig holds the settings shared by all projects.
-type GlobalConfig struct {
-	// ResticRepo is the repository all projects back up to.
-	ResticRepo string `mapstructure:"restic_repo"`
-	// AutoPrune runs forget per project and one prune after all backups.
-	AutoPrune bool `mapstructure:"auto_prune"`
-	// PruneOptions are global restic options for prune and unlock.
-	PruneOptions Args `mapstructure:"prune_options"`
-	// PreBackupCmd is the default pre-backup hook of every project.
-	PreBackupCmd string `mapstructure:"pre_backup_cmd"`
-	// PostBackupCmd is the default post-backup hook of every project.
-	PostBackupCmd string `mapstructure:"post_backup_cmd"`
+// RepositoryConfig is the repository section.
+type RepositoryConfig struct {
+	URL            string            `yaml:"url"`
+	EnvFile        string            `yaml:"env_file"`
+	BackendOptions map[string]string `yaml:"backend_options"`
+	LimitUpload    int               `yaml:"limit_upload"`   // KiB/s
+	LimitDownload  int               `yaml:"limit_download"` // KiB/s
+	RetryLock      Duration          `yaml:"retry_lock"`
+	Prune          bool              `yaml:"prune"`
+	MaxUnused      string            `yaml:"max_unused"`
 }
 
-// ProjectConfig holds the settings of one project as written in the file.
-type ProjectConfig struct {
-	ServiceManager  string   `mapstructure:"service_manager"`
-	ComposeFile     string   `mapstructure:"compose_file"`
-	SystemdUnits    []string `mapstructure:"systemd_units"`
-	SystemdScope    string   `mapstructure:"systemd_scope"`
-	Services        []string `mapstructure:"services"`
-	Sources         []string `mapstructure:"sources"`
-	StopTimeout     int      `mapstructure:"stop_timeout"`  // seconds
-	StartTimeout    int      `mapstructure:"start_timeout"` // seconds
-	RetentionPolicy string   `mapstructure:"retention_policy"`
-	StopServices    *bool    `mapstructure:"stop_services"` // nil = true
-	BackupOptions   Args     `mapstructure:"backup_options"`
-	ForgetOptions   Args     `mapstructure:"forget_options"`
-	PreBackupCmd    string   `mapstructure:"pre_backup_cmd"`  // overrides the global hook
-	PostBackupCmd   string   `mapstructure:"post_backup_cmd"` // overrides the global hook
+// Defaults are the job settings that the defaults section can set. Pointers and nil
+// lists mean "not set": a job's own value replaces the default, also for lists.
+type Defaults struct {
+	Stop              *bool     `yaml:"stop"`
+	StopTimeout       *Duration `yaml:"stop_timeout"`
+	StartTimeout      *Duration `yaml:"start_timeout"`
+	BackupTimeout     *Duration `yaml:"backup_timeout"`
+	Keep              *Keep     `yaml:"keep"`
+	Exclude           []string  `yaml:"exclude"`
+	IExclude          []string  `yaml:"iexclude"`
+	ExcludeFile       []string  `yaml:"exclude_file"`
+	ExcludeIfPresent  []string  `yaml:"exclude_if_present"`
+	ExcludeCaches     *bool     `yaml:"exclude_caches"`
+	ExcludeLargerThan *string   `yaml:"exclude_larger_than"`
+	OneFileSystem     *bool     `yaml:"one_file_system"`
+	SkipIfUnchanged   *bool     `yaml:"skip_if_unchanged"`
+	Tags              []string  `yaml:"tags"`
+	Pre               *string   `yaml:"pre"`
+	Post              *string   `yaml:"post"`
+	OnFailure         *string   `yaml:"on_failure"`
 }
 
-// Project is a project with defaults and global hooks applied.
-type Project struct {
-	Name            string
-	ServiceManager  string
-	ComposeFile     string
-	SystemdUnits    []string
-	SystemdScope    string
-	Services        []string
-	Sources         []string
-	StopTimeout     time.Duration
-	StartTimeout    time.Duration
-	RetentionPolicy string
-	StopServices    bool
-	BackupOptions   []string
-	ForgetOptions   []string
-	PreBackupCmd    string
-	PostBackupCmd   string
+// JobConfig is one job as written: the fields of Defaults plus the job's own.
+type JobConfig struct {
+	Defaults    `yaml:",inline"`
+	Type        string   `yaml:"type"`
+	ComposeFile string   `yaml:"compose_file"`
+	Units       []string `yaml:"units"`
+	Scope       string   `yaml:"scope"`
+	Services    []string `yaml:"services"`
+	Sources     []string `yaml:"sources"`
+	Before      []string `yaml:"before"`
+	After       []string `yaml:"after"`
+}
+
+// Keep is a retention policy; the zero value keeps every snapshot (no forget).
+type Keep struct {
+	Last          int      `yaml:"last"`
+	Hourly        int      `yaml:"hourly"`
+	Daily         int      `yaml:"daily"`
+	Weekly        int      `yaml:"weekly"`
+	Monthly       int      `yaml:"monthly"`
+	Yearly        int      `yaml:"yearly"`
+	Within        string   `yaml:"within"`
+	WithinHourly  string   `yaml:"within_hourly"`
+	WithinDaily   string   `yaml:"within_daily"`
+	WithinWeekly  string   `yaml:"within_weekly"`
+	WithinMonthly string   `yaml:"within_monthly"`
+	WithinYearly  string   `yaml:"within_yearly"`
+	Tags          []string `yaml:"tags"`
+}
+
+// Duration is a time.Duration written as a string such as "30s" or "5m".
+type Duration time.Duration
+
+// UnmarshalYAML parses a Go duration; a number without unit is an error, so that "30"
+// cannot be mistaken for seconds or nanoseconds.
+func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
+	v, err := time.ParseDuration(n.Value)
+	if err != nil {
+		return fmt.Errorf(`%q is not a duration such as "30s" or "5m"`, n.Value)
+	}
+	*d = Duration(v)
+	return nil
 }

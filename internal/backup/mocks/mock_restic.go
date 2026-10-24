@@ -47,8 +47,8 @@ func (_m *MockRestic) EXPECT() *MockRestic_Expecter {
 }
 
 // Backup provides a mock function for the type MockRestic
-func (_mock *MockRestic) Backup(ctx context.Context, tag string, sources []string, opts []string) (string, error) {
-	ret := _mock.Called(ctx, tag, sources, opts)
+func (_mock *MockRestic) Backup(ctx context.Context, tag string, sources []string, args []string) (string, error) {
+	ret := _mock.Called(ctx, tag, sources, args)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Backup")
@@ -57,15 +57,15 @@ func (_mock *MockRestic) Backup(ctx context.Context, tag string, sources []strin
 	var r0 string
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []string, []string) (string, error)); ok {
-		return returnFunc(ctx, tag, sources, opts)
+		return returnFunc(ctx, tag, sources, args)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []string, []string) string); ok {
-		r0 = returnFunc(ctx, tag, sources, opts)
+		r0 = returnFunc(ctx, tag, sources, args)
 	} else {
 		r0 = ret.Get(0).(string)
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string, []string, []string) error); ok {
-		r1 = returnFunc(ctx, tag, sources, opts)
+		r1 = returnFunc(ctx, tag, sources, args)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -81,12 +81,12 @@ type MockRestic_Backup_Call struct {
 //   - ctx context.Context
 //   - tag string
 //   - sources []string
-//   - opts []string
-func (_e *MockRestic_Expecter) Backup(ctx any, tag any, sources any, opts any) *MockRestic_Backup_Call {
-	return &MockRestic_Backup_Call{Call: _e.mock.On("Backup", ctx, tag, sources, opts)}
+//   - args []string
+func (_e *MockRestic_Expecter) Backup(ctx any, tag any, sources any, args any) *MockRestic_Backup_Call {
+	return &MockRestic_Backup_Call{Call: _e.mock.On("Backup", ctx, tag, sources, args)}
 }
 
-func (_c *MockRestic_Backup_Call) Run(run func(ctx context.Context, tag string, sources []string, opts []string)) *MockRestic_Backup_Call {
+func (_c *MockRestic_Backup_Call) Run(run func(ctx context.Context, tag string, sources []string, args []string)) *MockRestic_Backup_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -119,22 +119,22 @@ func (_c *MockRestic_Backup_Call) Return(s string, err error) *MockRestic_Backup
 	return _c
 }
 
-func (_c *MockRestic_Backup_Call) RunAndReturn(run func(ctx context.Context, tag string, sources []string, opts []string) (string, error)) *MockRestic_Backup_Call {
+func (_c *MockRestic_Backup_Call) RunAndReturn(run func(ctx context.Context, tag string, sources []string, args []string) (string, error)) *MockRestic_Backup_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Forget provides a mock function for the type MockRestic
-func (_mock *MockRestic) Forget(ctx context.Context, tag string, policy string, opts []string) error {
-	ret := _mock.Called(ctx, tag, policy, opts)
+func (_mock *MockRestic) Forget(ctx context.Context, tag string, args []string) error {
+	ret := _mock.Called(ctx, tag, args)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Forget")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, []string) error); ok {
-		r0 = returnFunc(ctx, tag, policy, opts)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []string) error); ok {
+		r0 = returnFunc(ctx, tag, args)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -149,13 +149,12 @@ type MockRestic_Forget_Call struct {
 // Forget is a helper method to define mock.On call
 //   - ctx context.Context
 //   - tag string
-//   - policy string
-//   - opts []string
-func (_e *MockRestic_Expecter) Forget(ctx any, tag any, policy any, opts any) *MockRestic_Forget_Call {
-	return &MockRestic_Forget_Call{Call: _e.mock.On("Forget", ctx, tag, policy, opts)}
+//   - args []string
+func (_e *MockRestic_Expecter) Forget(ctx any, tag any, args any) *MockRestic_Forget_Call {
+	return &MockRestic_Forget_Call{Call: _e.mock.On("Forget", ctx, tag, args)}
 }
 
-func (_c *MockRestic_Forget_Call) Run(run func(ctx context.Context, tag string, policy string, opts []string)) *MockRestic_Forget_Call {
+func (_c *MockRestic_Forget_Call) Run(run func(ctx context.Context, tag string, args []string)) *MockRestic_Forget_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -165,19 +164,14 @@ func (_c *MockRestic_Forget_Call) Run(run func(ctx context.Context, tag string, 
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
-		var arg2 string
+		var arg2 []string
 		if args[2] != nil {
-			arg2 = args[2].(string)
-		}
-		var arg3 []string
-		if args[3] != nil {
-			arg3 = args[3].([]string)
+			arg2 = args[2].([]string)
 		}
 		run(
 			arg0,
 			arg1,
 			arg2,
-			arg3,
 		)
 	})
 	return _c
@@ -188,22 +182,22 @@ func (_c *MockRestic_Forget_Call) Return(err error) *MockRestic_Forget_Call {
 	return _c
 }
 
-func (_c *MockRestic_Forget_Call) RunAndReturn(run func(ctx context.Context, tag string, policy string, opts []string) error) *MockRestic_Forget_Call {
+func (_c *MockRestic_Forget_Call) RunAndReturn(run func(ctx context.Context, tag string, args []string) error) *MockRestic_Forget_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Prune provides a mock function for the type MockRestic
-func (_mock *MockRestic) Prune(ctx context.Context, opts []string) error {
-	ret := _mock.Called(ctx, opts)
+func (_mock *MockRestic) Prune(ctx context.Context) error {
+	ret := _mock.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Prune")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, []string) error); ok {
-		r0 = returnFunc(ctx, opts)
+	if returnFunc, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = returnFunc(ctx)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -217,24 +211,18 @@ type MockRestic_Prune_Call struct {
 
 // Prune is a helper method to define mock.On call
 //   - ctx context.Context
-//   - opts []string
-func (_e *MockRestic_Expecter) Prune(ctx any, opts any) *MockRestic_Prune_Call {
-	return &MockRestic_Prune_Call{Call: _e.mock.On("Prune", ctx, opts)}
+func (_e *MockRestic_Expecter) Prune(ctx any) *MockRestic_Prune_Call {
+	return &MockRestic_Prune_Call{Call: _e.mock.On("Prune", ctx)}
 }
 
-func (_c *MockRestic_Prune_Call) Run(run func(ctx context.Context, opts []string)) *MockRestic_Prune_Call {
+func (_c *MockRestic_Prune_Call) Run(run func(ctx context.Context)) *MockRestic_Prune_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
 			arg0 = args[0].(context.Context)
 		}
-		var arg1 []string
-		if args[1] != nil {
-			arg1 = args[1].([]string)
-		}
 		run(
 			arg0,
-			arg1,
 		)
 	})
 	return _c
@@ -245,22 +233,22 @@ func (_c *MockRestic_Prune_Call) Return(err error) *MockRestic_Prune_Call {
 	return _c
 }
 
-func (_c *MockRestic_Prune_Call) RunAndReturn(run func(ctx context.Context, opts []string) error) *MockRestic_Prune_Call {
+func (_c *MockRestic_Prune_Call) RunAndReturn(run func(ctx context.Context) error) *MockRestic_Prune_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Unlock provides a mock function for the type MockRestic
-func (_mock *MockRestic) Unlock(ctx context.Context, opts []string) error {
-	ret := _mock.Called(ctx, opts)
+func (_mock *MockRestic) Unlock(ctx context.Context) error {
+	ret := _mock.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Unlock")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, []string) error); ok {
-		r0 = returnFunc(ctx, opts)
+	if returnFunc, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = returnFunc(ctx)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -274,24 +262,18 @@ type MockRestic_Unlock_Call struct {
 
 // Unlock is a helper method to define mock.On call
 //   - ctx context.Context
-//   - opts []string
-func (_e *MockRestic_Expecter) Unlock(ctx any, opts any) *MockRestic_Unlock_Call {
-	return &MockRestic_Unlock_Call{Call: _e.mock.On("Unlock", ctx, opts)}
+func (_e *MockRestic_Expecter) Unlock(ctx any) *MockRestic_Unlock_Call {
+	return &MockRestic_Unlock_Call{Call: _e.mock.On("Unlock", ctx)}
 }
 
-func (_c *MockRestic_Unlock_Call) Run(run func(ctx context.Context, opts []string)) *MockRestic_Unlock_Call {
+func (_c *MockRestic_Unlock_Call) Run(run func(ctx context.Context)) *MockRestic_Unlock_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
 			arg0 = args[0].(context.Context)
 		}
-		var arg1 []string
-		if args[1] != nil {
-			arg1 = args[1].([]string)
-		}
 		run(
 			arg0,
-			arg1,
 		)
 	})
 	return _c
@@ -302,7 +284,7 @@ func (_c *MockRestic_Unlock_Call) Return(err error) *MockRestic_Unlock_Call {
 	return _c
 }
 
-func (_c *MockRestic_Unlock_Call) RunAndReturn(run func(ctx context.Context, opts []string) error) *MockRestic_Unlock_Call {
+func (_c *MockRestic_Unlock_Call) RunAndReturn(run func(ctx context.Context) error) *MockRestic_Unlock_Call {
 	_c.Call.Return(run)
 	return _c
 }

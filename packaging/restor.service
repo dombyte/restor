@@ -4,8 +4,10 @@
 Description=Restic Backup Orchestrator
 
 [Service]
+# No [Install] section: the timer starts this unit. Enabling the service itself would
+# run a backup, which stops services, at every boot.
 Type=oneshot
-ExecStart=/usr/bin/restor --config /etc/restor/config.yaml
+ExecStart=/usr/bin/restor run --config /etc/restor/config.yaml
 # On stop, restor restarts the services it stopped and exits within its shutdown timeout
 # (logged as shutdown_timeout: the largest start_timeout + 4 minutes); give it longer than
 # that before systemd kills it. 900 s covers a start_timeout up to 11 minutes.
@@ -17,6 +19,3 @@ IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 StandardOutput=journal
 StandardError=journal
-
-[Install]
-WantedBy=multi-user.target

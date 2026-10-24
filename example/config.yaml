@@ -1,523 +1,215 @@
-# Restor - Restic Backup Orchestrator - Configuration Example
-# ====================================================
+# restor - restic backup orchestrator - configuration reference (format version 2)
+# ==============================================================================
 #
-# This file demonstrates all available configuration options for restor.
+# Every option is shown here, with its default. Copy the file and keep what you need:
+#   cp example/config.yaml /etc/restor/config.yaml
+#   restor validate --config /etc/restor/config.yaml
 #
-# Config Format Support: YAML (.yaml, .yml), JSON (.json), TOML (.toml)
-#
-# Usage:
-#   cp example/config.yaml config.yaml
-#   ./restor --config config.yaml
-#
-# For systemd installation, place config at /etc/restor/config.yaml
-#
-# ====================================================
-# Execution Modes
-# ====================================================
-#   - "parallel": All projects backup simultaneously using goroutines
-#     * Faster for independent projects
-#     * Higher resource usage (memory, I/O, network)
-#     * Use when projects don't share dependencies
-#     * Projects sharing a compose file or systemd unit lock each other out (warned at
-#       startup): all but one fail
-#   - "sequential": Projects backup one after another, sorted by project name
-#     * Lower resource usage
-#     * Slower overall but more controlled
-#     * Use when projects share resources or have dependencies
-#
-# ====================================================
-# Environment Variables
-# ====================================================
-# Environment variables can be specified in three ways:
-#   1. Inline in this file (environments section)
-#   2. Loaded from external file (env_file)
-#   3. Referenced from system environment (${VAR_NAME} syntax)
-#
-# Priority: Inline > External File > System Environment
-#
-# Supported external file formats: .env, .yaml, .yml, .json
-#
-# Variables are passed to BOTH restic and docker compose commands.
-#
-# ====================================================
-# Restic Authentication
-# ====================================================
-# Choose ONE method for restic repository password:
-#   Method 1: RESTIC_PASSWORD - Direct password in config/env (less secure)
-#   Method 2: RESTIC_PASSWORD_FILE - Path to file containing password (recommended)
-#   Method 3: RESTIC_PASSWORD_COMMAND - Command that outputs password
-#
-# ====================================================
-# Locking Mechanism
-# ====================================================
-# restor uses file-based locking to prevent concurrent backups of the same
-# compose file. Each user has their own lock directory: /run/restor for root,
-# $XDG_RUNTIME_DIR/restor for other users ($TMPDIR/restor-<uid> without it).
-# A lock is released by the kernel when its run ends, also when it crashed.
+# Rules that apply to the whole file:
+#   - YAML only (.yaml or .yml). An unknown key is an error, so a typo never goes unnoticed.
+#   - Durations are strings with a unit: "30s", "5m", "4h".
+#   - $VAR, ${VAR} and ${VAR:-default} in values are replaced from restor's own process
+#     environment when the file is loaded; write $$ for a literal $.
+#   - Relative paths (env_file, compose_file, sources, exclude_file) are resolved against
+#     the directory of this file; "~" is not expanded (use $HOME). Hooks are commands and
+#     are not resolved: use absolute paths (under systemd the working directory is /).
+#   - YAML anchors and merge keys work: put shared blocks under a top-level key starting
+#     with "x-" and merge them into jobs with "<<: *name" (see the mail job).
 
-# ============================================
-# Global Settings
-# ============================================
+# Format version of this file. Required.
+version: 2
 
-# Execution mode: "parallel" or "sequential"
-# Default: "sequential" if not specified
-mode: sequential
+# Shared settings for jobs, merged with "<<: *quick-units". Keys starting with "x-" are
+# ignored by restor; they only hold anchors.
+x-quick-units: &quick-units
+  type: systemd
+  stop_timeout: 30s
+  start_timeout: 1m
 
-# Optional: Load environment variables from external file
-# Recommended for production to keep credentials separate from config
-# Supports: .env, .yaml, .yml, .json formats
-# Example: env_file: /etc/restor/env.yaml
-# Keep it private (chmod 600); restor warns at startup when others can access it.
-env_file: ""
+# How many jobs run at the same time. 1 (default) runs one job after another, 0 runs all
+# at once. Jobs that share a compose file or a systemd unit never run at the same time,
+# and before/after (see the jobs) always holds, whatever the concurrency.
+concurrency: 1
 
-# Inline environment variables (override external file values)
-# These are passed to both restic and docker compose commands
-# Use ${VAR_NAME} syntax to reference system environment variables; $$ is a literal $
-# Values from env_file are expanded too: a secret containing "$" must write it as "$$"
-# ("pa$word" would become "pa"), or come from a file such as RESTIC_PASSWORD_FILE
-environments:
-  # ========================================
-  # Restic Authentication (choose ONE method)
-  # ========================================
+# ------------------------------------------------------------------------------
+# Repository: where all jobs back up to, and the settings of every restic call.
+# ------------------------------------------------------------------------------
+repository:
+  # The restic repository (passed as RESTIC_REPOSITORY, so it never shows up in logs).
+  # Leave it empty to use RESTIC_REPOSITORY or RESTIC_REPOSITORY_FILE from env_file.
+  #   local: /srv/restic-repo        sftp: sftp:user@host:/srv/repo
+  #   s3:    s3:https://s3.amazonaws.com/bucket        b2: b2:bucket:/path
+  #   rest:  rest:https://user:pass@host:8000/repo     (prefer the env file for passwords)
+  url: s3:https://s3.amazonaws.com/your-backups
 
-  # Method 1: Direct password (not recommended for production)
-  # RESTIC_PASSWORD: "my-secret-password"
+  # Variables for restic only (not for hooks or service managers): the password and the
+  # backend credentials. One KEY=value per line, values are taken literally (a "$" in a
+  # password stays a "$"). Keep it private: chmod 600 (restor warns otherwise).
+  # restic's own variables work here too: RESTIC_CACHE_DIR, RESTIC_COMPRESSION,
+  # RESTIC_PACK_SIZE, RESTIC_READ_CONCURRENCY, ... (see example/restor.env).
+  env_file: restor.env
 
-  # Method 2: Password file path (RECOMMENDED for production)
-  RESTIC_PASSWORD_FILE: "/etc/restor/restic-password"
+  # Backend options, passed to every restic call as --option=key=value.
+  backend_options:
+    s3.connections: "10"
 
-  # Method 3: Password from system environment variable
-  # RESTIC_PASSWORD: "${RESTIC_PASSWORD}"
+  # Bandwidth limits in KiB/s for every restic call; 0 (default) is unlimited.
+  limit_upload: 0
+  limit_download: 0
 
-  # ========================================
-  # S3-Compatible Storage (AWS, MinIO, DigitalOcean, etc.)
-  # ========================================
-  AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
-  AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
-  AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-eu-central-1}"
+  # Wait up to this long for a repository that another host or process has locked,
+  # instead of failing at once. Default: do not wait.
+  retry_lock: 10m
 
+  # Run "restic prune" (and "unlock") once after all jobs. It only runs when every job of
+  # the run has a complete snapshot, so a broken run never removes data.
+  # Forgetting old snapshots does not depend on this: every job with "keep" is forgotten
+  # after its own complete backup.
+  prune: true
 
-  # ========================================
-  # Backblaze B2
-  # ========================================
-  # B2_ACCOUNT_ID: "${B2_ACCOUNT_ID}"
-  # B2_ACCOUNT_KEY: "${B2_ACCOUNT_KEY}"
+  # How much unused space prune may leave in the repository: "5%" (restic's default),
+  # a size such as "2G", or "unlimited" (fastest prune).
+  max_unused: 5%
 
-  # ========================================
-  # SFTP/SSH
-  # ========================================
-  # SFTP_USERNAME: "${SFTP_USERNAME}"
-  # SFTP_PASSWORD: "${SFTP_PASSWORD}"
-  # SFTP_HOST: "backup-server.example.com"
-  # SFTP_PORT: "22"
+# Run-level hooks: commands that run once after the run (after forget and prune).
+#   post:       after every run
+#   on_failure: after post, when a job, forget, prune or unlock failed
+# Both get a summary of the run in their environment:
+#   RESTOR_HOOK (post or on_failure); RESTOR_STATUS: failed when anything failed,
+#   incomplete when a snapshot is incomplete, else success; the comma-separated job names
+#   RESTOR_JOBS, RESTOR_SUCCEEDED_JOBS, RESTOR_INCOMPLETE_JOBS, RESTOR_FAILED_JOBS;
+#   RESTOR_SNAPSHOT_IDS (job=ID, comma-separated) and, when anything failed,
+#   RESTOR_ERROR (all failures, "; "-separated).
+# E.g. one notification per run with every job's result (example/hooks/: ntfy.sh,
+# notifyapp.sh, mail.sh, healthchecks.sh). Default: none.
+# post: /etc/restor/hooks/ntfy.sh
+# on_failure: /usr/local/bin/page-oncall
 
-  # ========================================
-  # Restic Performance Options
-  # ========================================
-  # TMPDIR: "/tmp/restic-cache"
-  # GOMAXPROCS: "2"
+# ------------------------------------------------------------------------------
+# Defaults: apply to every job that does not set the same key itself. A job's value
+# replaces the default; lists are replaced as a whole, not merged.
+# ------------------------------------------------------------------------------
+defaults:
+  # Stop the job's services during its backup (only for jobs with a type). Default: true.
+  stop: true
 
-  # ========================================
-  # HTTP Proxy Settings
-  # ========================================
-  # HTTP_PROXY: "http://proxy.example.com:8080"
-  # HTTPS_PROXY: "http://proxy.example.com:8080"
-  # NO_PROXY: "localhost,127.0.0.1"
+  # How long to wait for the services to stop / start again. Defaults: 1m and 2m.
+  stop_timeout: 1m
+  start_timeout: 2m
 
-# ============================================
-# Global Configuration
-# ============================================
-# Global settings apply to all projects and repository-wide operations
+  # Cancel restic when a backup takes longer; the services are started again and the job
+  # fails. Protects against a backup that hangs while the services are down.
+  # Default: no limit.
+  backup_timeout: 6h
 
-global:
-  # REQUIRED: Restic repository location
-  # This is the only required global setting - all projects use this repo
-  #
-  # Supported backends (examples):
-  #   Local:     /srv/restic-repo
-  #   S3:        s3:s3.amazonaws.com/bucket-name
-  #   S3 Custom:  s3:https://s3.your-provider.com/bucket
-  #   B2:        b2:bucket-name
-  #   SFTP:      sftp:user@host:/path/to/repo
-  #   Rest:      rest:http://server:8000/repo
-  #   Azure:     azure:container-name:/path
-  #   Google:    gs:bucket-name:/path
-  #   Swift:     swift:container-name:/path
-  restic_repo: s3:https://s3.amazonaws.com/your-backups
+  # Retention: which snapshots "restic forget" keeps, per job and per host. A job without
+  # keep is never forgotten. All keys are optional:
+  #   last, hourly, daily, weekly, monthly, yearly: numbers of snapshots
+  #   within, within_hourly, within_daily, within_weekly, within_monthly, within_yearly:
+  #     restic durations such as "30d", "1y6m"
+  #   tags: keep every snapshot with one of these tags (only next to another rule:
+  #     alone, restic would forget every other snapshot, also the newest; and not a tag
+  #     from the job's tags, which every snapshot of the job has)
+  keep:
+    daily: 7
+    weekly: 4
+    monthly: 6
 
-  # GLOBAL: Enable/disable automatic pruning
-  # When true: Each project with retention_policy runs 'forget', then ONE 'prune' runs for entire repo
-  # This is efficient as prune only needs to run once after all forget operations
-  # When a project fails or its snapshot is incomplete (unreadable files, restic exit code
-  # 3), only the projects with a complete snapshot run 'forget'; prune is skipped until a
-  # run where every project has a complete snapshot
-  # When false: You must manually run prune, or use restic's auto-prune features
-  auto_prune: true
+  # What restic leaves out (each maps to the restic option of the same name):
+  exclude: ["*.tmp", "*.swp"]      # --exclude, patterns
+  iexclude: []                     # --iexclude, case-insensitive patterns
+  exclude_file: []                 # --exclude-file, files with one pattern per line
+  exclude_if_present: [.nobackup]  # --exclude-if-present, skip directories with this file
+  exclude_caches: true             # --exclude-caches, skip directories with CACHEDIR.TAG
+  exclude_larger_than: 2G          # --exclude-larger-than, a size such as 500M or 2G
+  one_file_system: false           # --one-file-system, do not cross mount points
 
-  # GLOBAL: Restic options for the repository-wide prune (and unlock) command
-  # These options are ONLY used for the global prune operation (not for individual backups)
-  # Useful for performance tuning and repository maintenance
-  # Every list item is passed as ONE argument: write "--option=key=value" (or two items
-  # "-o" and "key=value"), never "-o key=value" in one item.
-  prune_options:
-    # Cache directory for restic (improves performance)
-    - "--cache-dir=/tmp/restic-cache"
+  # Do not create a snapshot when nothing changed. Default: false.
+  skip_if_unchanged: false
 
-    # Backend options, e.g. parallel S3 connections
-    - "--option=s3.connections=10"
+  # Extra snapshot tags; the job name is always a tag. A tag must not be the name of a
+  # job (forgetting that job would also select these snapshots).
+  tags: []
 
-    # Bandwidth limits in KiB/s
-    # - "--limit-upload=51200"
-    # - "--limit-download=51200"
+  # Hooks: commands split on spaces and run without a shell (no quotes, pipes or
+  # redirects; use a script for more). They get these variables in their environment:
+  #   RESTOR_JOB, RESTOR_HOOK (pre, post, on_failure), and for post and on_failure also
+  #   RESTOR_STATUS (success, incomplete, failed), RESTOR_SNAPSHOT_ID, RESTOR_ERROR.
+  #   pre:        before the services are stopped; if it fails the job fails and its
+  #               services are not touched
+  #   post:       after the services are started again, whenever pre succeeded (also
+  #               after a failed backup, so it can undo pre); not after a cancel
+  #   on_failure: after post, when the job failed
+  # example/hooks/ has scripts to start from: as pre and post hook here, ntfy.sh (or
+  # notifyapp.sh) reports the start and the result of every job.
+  # pre: /etc/restor/hooks/ntfy.sh
+  # post: /etc/restor/hooks/ntfy.sh
+  # on_failure: /usr/local/bin/cleanup-after-failure.sh
 
-    # Wait for a repository lock held by another host instead of failing (restic >= 0.16);
-    # also useful in forget_options when several hosts share the repository
-    # - "--retry-lock=10m"
-
-  # Optional: default pre/post-backup hooks for EVERY project
-  # A project's own pre_backup_cmd/post_backup_cmd replaces them for that project.
-  # They run once per project, around its backup:
-  #   pre_backup_cmd fails (non-zero exit) -> the project fails, its services are not touched
-  #   post_backup_cmd runs whenever pre_backup_cmd succeeded, also when the backup failed
-  #     (so it can undo the pre hook); not after a cancel (SIGTERM)
-  #   post_backup_cmd fails -> logged, does not change the project's result
-  # Commands are split on spaces and run without a shell (no quotes, pipes or redirects);
-  # use a script for anything more, with its absolute path (a relative path resolves
-  # against the working directory, "/" under systemd, not this file's directory).
-  # pre_backup_cmd: "/usr/local/bin/global-pre-backup-hook.sh"
-  # post_backup_cmd: "/usr/local/bin/global-post-backup-hook.sh"
-
-# ============================================
-# Project Definitions
-# ============================================
-# Each project represents a service project to backup.
-# The key (project name) is used as the restic tag for easy identification.
-#
-# REQUIRED fields for each project:
-#   - service_manager: Type of service manager ("docker-compose", "podman-compose", "systemd", or "noop")
-#   - For docker-compose/podman-compose: compose_file (path to the compose file)
-#   - For systemd: systemd_units (list of systemd unit names)
-#   - For noop: No additional service configuration needed (file-only backups)
-#   - sources: List of directories/files to backup with restic
-#   Relative env_file, compose_file and sources paths are resolved against the directory
-#   of this file.
-#   - stop_timeout: Timeout in seconds for stopping services (> 0 when services are stopped)
-#   - start_timeout: Timeout in seconds for starting services (> 0 when services are stopped)
-#     Both cover the stop/start command and the wait until the services are down/up.
-#
-# Project names are case-insensitive; the lowercase name is the restic tag. A name must not
+# ------------------------------------------------------------------------------
+# Jobs. The name is case-insensitive and its lowercase form is the restic tag; it must not
 # start with "-" or contain "," or whitespace.
 #
-# OPTIONAL fields for each project:
-#   - retention_policy: Retention policy for snapshots (forget runs only with auto_prune;
-#     projects without one are never forgotten)
-#   - stop_services: true/false - Enable/disable service stop/start (default: true)
-#     * When false: Services continue running during backup (read-only mode)
-#     * Useful for databases, high-availability services, or when using filesystem snapshots
-#   - services: List of specific services to stop/start (default: all from service manager;
-#     only the ones running at backup time are stopped and started again;
-#     every name must be a service of the compose file / one of systemd_units)
-#   - systemd_scope: For systemd only - "system" (default) or "user" for user-level services
-#   - backup_options: Additional restic options for backup command only
-#   - forget_options: Additional restic options for forget command only
-#   - pre_backup_cmd: Project-specific pre-backup hook (overrides global)
-#   - post_backup_cmd: Project-specific post-backup hook (overrides global)
+#   type:      docker-compose, podman-compose or systemd; leave it out for files only
+#   sources:   paths to back up (required)
+#   before / after: names of jobs that must run after / before this one. A job waits
+#              until those have finished, whether they succeeded or not.
+#   plus every key of the defaults section.
 #
-# Retention Policy Format:
-#   --keep-last N        Keep last N snapshots
-#   --keep-hourly N      Keep last N hourly snapshots
-#   --keep-daily N       Keep last N daily snapshots
-#   --keep-weekly N      Keep last N weekly snapshots
-#   --keep-monthly N     Keep last N monthly snapshots
-#   --keep-yearly N      Keep last N yearly snapshots
-#   --keep-within D      Keep snapshots within duration D (e.g., 30d, 2y)
-#   Examples:
-#     --keep-last 10
-#     --keep-daily 30 --keep-weekly 12 --keep-monthly 6
-#     --keep-within 30d
-#
-projects:
-  # ========================================
-  # Example 1: Full-stack web application (Docker Compose)
-  # ========================================
-  # This example shows a typical web app with database, cache, and file storage
-  # Backs up both the application data and Docker volumes
-  web-app:
-    # REQUIRED: Service manager type
-    service_manager: docker-compose
-    
-    # REQUIRED: Absolute path to docker-compose.yml file
-    compose_file: /srv/docker/web-app/docker-compose.yml
+# docker-compose / podman-compose:
+#   compose_file: the compose file (required)
+#   services:     services to stop; default: every service of the compose file
+# systemd:
+#   units:        units to stop (required)
+#   services:     a subset of units to stop; default: all units
+#   scope:        system (default) or user
+# Only the services that are running when the backup starts are stopped and started again.
+# ------------------------------------------------------------------------------
+jobs:
+  # The database first: web waits for it (db names web in before).
+  db:
+    type: docker-compose
+    compose_file: /srv/app/compose.yml
+    services: [db]
+    sources: [/srv/app/db]
+    before: [web]
 
-    # REQUIRED: Timeout for stopping containers (seconds)
-    # Increase for containers that take longer to shut down gracefully
-    stop_timeout: 30
+  # Same compose file, other services: runs after db, so the two never collide.
+  web:
+    type: docker-compose
+    compose_file: /srv/app/compose.yml
+    services: [web, worker]
+    sources: [/srv/app/uploads, /srv/app/config]
+    exclude: ["*.tmp", "cache/"]
+    keep: {daily: 30, weekly: 12}
+    tags: [prod]
+    # pre: /usr/local/bin/app-maintenance-on
+    # post: /usr/local/bin/app-maintenance-off
 
-    # REQUIRED: Timeout for starting containers (seconds)
-    # Increase for containers with long startup times or health checks
-    start_timeout: 60
+  # Podman Compose, backed up while it keeps running.
+  wiki:
+    type: podman-compose
+    compose_file: /srv/wiki/compose.yml
+    stop: false
+    sources: [/srv/wiki/data]
 
-    # OPTIONAL: Specific services to stop/start
-    # If not specified, ALL services from compose file will be stopped
-    services:
-      - web
-      - api
-      - db
-      - redis
+  # systemd units of the system (scope: system is the default), with shared settings
+  # merged from the x-quick-units anchor below.
+  mail:
+    <<: *quick-units
+    units: [postfix.service, dovecot.service]
+    sources: [/var/mail, /etc/postfix, /etc/dovecot]
+    after: [db]
 
-    # REQUIRED: Directories and files to backup with restic
-    # Include both application data and Docker volume data
-    sources:
-      # Application code and configurations
-      - /srv/docker/web-app
+  # systemd user units of the user running restor.
+  syncthing:
+    type: systemd
+    units: [syncthing.service]
+    scope: user
+    sources: [/home/backup/Sync]
 
-      # Docker volumes (automatically created by Docker)
-      - /var/lib/docker/volumes/webapp_db/_data
-      - /var/lib/docker/volumes/webapp_redis/_data
-      - /var/lib/docker/volumes/webapp_media/_data
-      - /var/lib/docker/volumes/webapp_static/_data
-
-    # REQUIRED: Retention policy for this project
-    # Keeps 30 daily snapshots, 12 weekly, and 6 monthly
-    retention_policy: --keep-daily 30 --keep-weekly 12 --keep-monthly 6
-
-    # OPTIONAL: Exclude patterns for backup
-    # Files matching these patterns will NOT be backed up
-    backup_options:
-      - "--exclude=*.tmp"
-      - "--exclude=*.log"
-      - "--exclude=*.cache"
-      - "--exclude=__pycache__/"
-      - "--exclude=.env"
-      - "--exclude=*.sqlite-journal"
-
-    # OPTIONAL: Additional options for forget command
-    # These are added to the forget command for this project
-    # forget_options:
-    #   - "--keep-tag=important"
-
-    # OPTIONAL: Project-specific pre/post backup commands
-    # These override the global commands for this project only
-    pre_backup_cmd: "/usr/local/bin/webapp-pre-backup.sh"
-    post_backup_cmd: "/usr/local/bin/webapp-post-backup.sh"
-
-  # ========================================
-  # Example 2: Database-only backup (read-only, stop/start disabled)
-  # ========================================
-  # This example shows a database that should NOT have its containers stopped
-  # Useful for databases with replication or high-availability setups
-  # where stopping containers would cause issues
-  postgres-ha:
-    service_manager: docker-compose
-    compose_file: /srv/docker/postgres-ha/docker-compose.yml
-
-    stop_timeout: 10
-    start_timeout: 10
-
-    # Disable service stop/start for read-only backup
-    # The backup will run while services are running
-    # Note: This may result in inconsistent backups for databases
-    # Consider using database-native backup tools instead, or use filesystem snapshots
-    stop_services: false
-
-    sources:
-      - /var/lib/docker/volumes/postgres_ha_data/_data
-      - /var/lib/docker/volumes/postgres_ha_wal/_data
-
-    # More aggressive retention for database backups
-    retention_policy: --keep-daily 90 --keep-weekly 52 --keep-monthly 12
-
-    # No per-project commands - uses global commands
-
-  # ========================================
-  # Example 3: Minimal configuration
-  # ========================================
-  # Shows the minimum required configuration for a simple project
-  simple-service:
-    service_manager: docker-compose
-    compose_file: /srv/docker/simple-app/docker-compose.yml
-    stop_timeout: 10
-    start_timeout: 10
-    sources:
-      - /srv/docker/simple-app/data
-    retention_policy: --keep-daily 7
-
-  # ========================================
-  # Example 4: Development environment
-  # ========================================
-  # Shows a project with custom retention and backup options
-  dev-environment:
-    service_manager: docker-compose
-    compose_file: /home/dev/projects/myapp/docker-compose.yml
-    stop_timeout: 5
-    start_timeout: 5
-    sources:
-      - /home/dev/projects/myapp
-      - /var/lib/docker/volumes/dev_db/_data
-
-    # Less retention for development (saves space)
-    retention_policy: --keep-last 5
-
-    # Exclude common development files
-    backup_options:
-      - "--exclude=node_modules/"
-      - "--exclude=.git/"
-      - "--exclude=*.log"
-      - "--exclude=dist/"
-
-  # ========================================
-  # Example 5: Multi-service with specific service selection
-  # ========================================
-  # Only backup specific services from a larger compose file
-  monitoring-stack:
-    service_manager: docker-compose
-    compose_file: /srv/docker/monitoring/docker-compose.yml
-    stop_timeout: 15
-    start_timeout: 30
-
-    # Only stop these specific services (not all in compose file)
-    services:
-      - prometheus
-      - alertmanager
-
-    sources:
-      - /var/lib/docker/volumes/monitoring_prometheus/_data
-      - /var/lib/docker/volumes/monitoring_alertmanager/_data
-      - /srv/docker/monitoring/config
-
-    retention_policy: --keep-daily 30 --keep-weekly 12
-
-    # Performance options for time-series data
-    backup_options:
-      - "--exclude=*.tmp"
-      - "--limit-upload=20480"  # Throttle uploads of large files (KiB/s)
-
-  # ========================================
-  # Example 6: Podman Compose application
-  # ========================================
-  # Same as Docker Compose but uses Podman instead
-  podman-app:
-    service_manager: podman-compose
-    compose_file: /srv/podman/myapp/docker-compose.yml
-    stop_timeout: 20
-    start_timeout: 40
-
-    sources:
-      - /srv/podman/myapp
-      - /var/lib/containers/storage/volumes/myapp_data/_data
-
-    retention_policy: --keep-daily 14 --keep-weekly 8
-
-  # ========================================
-  # Example 7: Systemd services (system-level)
-  # ========================================
-  # Back up systemd services running at system level
-  systemd-services:
-    service_manager: systemd
-    
-    # REQUIRED: List of systemd unit names to manage
-    systemd_units:
-      - nginx.service
-      - mysql.service
-      - redis.service
-    
-    # OPTIONAL: Scope - "system" (default) or "user" for user-level services
-    systemd_scope: system
-    
-    stop_timeout: 15
-    start_timeout: 30
-
-    # Back up configuration files and data directories
-    sources:
-      - /etc/nginx
-      - /etc/mysql
-      - /var/lib/mysql
-      - /var/lib/redis
-      - /var/log/nginx
-
-    retention_policy: --keep-daily 7 --keep-weekly 4
-
-  # ========================================
-  # Example 8: Systemd user services
-  # ========================================
-  # Back up systemd services running at user level
-  user-services:
-    service_manager: systemd
-    
-    systemd_units:
-      - myapp.service
-      - mydb.service
-    
-    # User-level services
-    systemd_scope: user
-    
-    stop_timeout: 10
-    start_timeout: 20
-
-    sources:
-      - /home/myuser/.config/myapp
-      - /home/myuser/.local/share/myapp
-
-    retention_policy: --keep-last 5
-
-  # ========================================
-  # Example 9: Read-only backup (stop/start disabled)
-  # ========================================
-  # Demonstrate how to disable service stop/start for read-only backups
-  # Useful for databases, high-availability services, or when using filesystem snapshots
-  read-only-docker:
-    service_manager: docker-compose
-    compose_file: /srv/docker/ha-database/docker-compose.yml
-    
-    # Disable service stop/start - services keep running during backup
-    stop_services: false
-    
-    stop_timeout: 10
-    start_timeout: 10
-
-    sources:
-      - /var/lib/docker/volumes/db_data/_data
-      - /srv/docker/ha-database/config
-
-    retention_policy: --keep-daily 7
-
-  # Read-only backup for systemd services
-  read-only-systemd:
-    service_manager: systemd
-    systemd_units:
-      - postgres.service
-      - redis.service
-    
-    # Disable service stop/start - services keep running during backup
-    stop_services: false
-    
-    stop_timeout: 10
-    start_timeout: 10
-
-    sources:
-      - /var/lib/postgresql
-      - /var/lib/redis
-      - /etc/postgresql
-
-    retention_policy: --keep-daily 7
-
-  # ========================================
-  # Example 10: File-only backup (noop service manager)
-  # ========================================
-  # For backups that only backup files/directories without any services to manage
-  # Useful for static file backups, configuration files, or any backup that doesn't
-  # require stopping/starting services
-  file-backup:
-    service_manager: noop
-    
-    stop_timeout: 10
-    start_timeout: 10
-
-    # Just backup these directories - no services involved
-    sources:
-      - /etc/nginx
-      - /etc/apache2
-      - /home/ubuntu/important-files
-      - /var/log/custom-logs
-
-    retention_policy: --keep-daily 14 --keep-weekly 8
+  # Files only: no services are stopped.
+  etc:
+    sources: [/etc]
+    one_file_system: true
+    keep: {within: 90d, monthly: 12}

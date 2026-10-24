@@ -1,14 +1,16 @@
-// Package backup orchestrates one backup run: per project lock, pre-backup hook, stop
-// services, restic backup, start services, post-backup hook; then forget per project and
-// one repository-wide prune and unlock. It talks to restic, the service managers, the
-// locker and the hook runner only through the interfaces declared here.
+// Package backup orchestrates one backup run: per job lock, pre hook, stop services,
+// restic backup, start services, post and on_failure hooks; the jobs run in the order
+// and with the concurrency the schedule allows. Then forget per job, one
+// repository-wide prune and unlock, and the run-level post and on_failure hooks. It
+// talks to restic, the service managers, the locker and the hook runner only through
+// the interfaces declared here.
 package backup
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -23,24 +25,24 @@ const shutdownGrace = time.Minute
 var (
 	// ErrMissingDependency is returned by NewManager for a missing dependency.
 	ErrMissingDependency = errors.New("backup: missing dependency")
-	// ErrProjectsFailed is returned by Run when at least one project failed.
-	ErrProjectsFailed = errors.New("backup: projects failed")
+	// ErrJobsFailed is returned by Run when at least one job failed.
+	ErrJobsFailed = errors.New("backup: jobs failed")
 )
 
 // Restic runs restic commands against the repository.
 type Restic interface {
-	Backup(ctx context.Context, tag string, sources, opts []string) (string, error)
-	Forget(ctx context.Context, tag, policy string, opts []string) error
-	Prune(ctx context.Context, opts []string) error
-	Unlock(ctx context.Context, opts []string) error
+	Backup(ctx context.Context, tag string, sources, args []string) (string, error)
+	Forget(ctx context.Context, tag string, args []string) error
+	Prune(ctx context.Context) error
+	Unlock(ctx context.Context) error
 }
 
-// Services stops and starts the services of one project. LockKeys name what it manages
-// (a compose file, each systemd unit); a project runs only while it holds all of them.
-// Running returns the services
-// among requested (all when empty) that run now: only those are stopped and started
-// again. Stop and Start report false when the services did not reach the expected state
-// within the timeout.
+// Services stops and starts the services of one job. LockKeys name what it manages
+// (a compose file, each systemd unit); a job runs only while it holds all of them, and
+// jobs that share a key never run at the same time. Running returns the services among
+// requested (all when empty) that run now: only those are stopped and started again.
+// Stop and Start report false when the services did not reach the expected state within
+// the timeout.
 type Services interface {
 	LockKeys() []string
 	Running(ctx context.Context, requested []string) ([]string, error)
@@ -53,24 +55,26 @@ type Locker interface {
 	Lock(key string) (release func() error, err error)
 }
 
-// Runner executes the hook commands.
+// Runner executes the hook commands with extra environment variables.
 type Runner interface {
-	Run(ctx context.Context, name string, args ...string) ([]byte, error)
+	RunEnv(ctx context.Context, env []string, name string, args ...string) ([]byte, error)
 }
 
 // Settings configure a Manager.
 type Settings struct {
-	// Parallel runs all projects at once instead of one after another.
-	Parallel bool
-	// AutoPrune runs forget per project with a retention policy, then prune and unlock.
-	AutoPrune bool
-	// PruneOptions are global restic options for prune and unlock.
-	PruneOptions []string
+	// Concurrency is how many jobs run at once; 0 is unlimited.
+	Concurrency int
+	// Prune runs prune and unlock after the run when every job has a complete snapshot.
+	Prune bool
+	// Post is the hook that runs once after every run, with a summary of it.
+	Post string
+	// OnFailure is the hook that runs once after a run in which something failed.
+	OnFailure string
 }
 
-// Project is one project and its service manager.
-type Project struct {
-	Settings ProjectSettings
+// Job is one job and its service manager.
+type Job struct {
+	Settings JobSettings
 	Services Services
 }
 
@@ -82,45 +86,53 @@ type Deps struct {
 	Log    zerolog.Logger
 }
 
-// Manager runs the backup of all projects.
+// Manager runs the backup of all jobs.
 type Manager struct {
-	s        Settings
-	projects []Project
-	d        Deps
+	s    Settings
+	jobs []Job
+	d    Deps
 }
 
-// NewManager returns a Manager for projects, run in the given order in sequential mode.
-func NewManager(s Settings, projects []Project, d Deps) (*Manager, error) {
+// NewManager returns a Manager for jobs; among the jobs that may start, the earlier one
+// in jobs starts first.
+func NewManager(s Settings, jobs []Job, d Deps) (*Manager, error) {
 	reqs := []util.Requirement{
 		{Name: "Restic", OK: d.Restic != nil},
 		{Name: "Locker", OK: d.Locker != nil},
 		{Name: "Hooks", OK: d.Hooks != nil},
 	}
-	for _, p := range projects {
+	for _, j := range jobs {
 		reqs = append(reqs, util.Requirement{
-			Name: "Projects[" + p.Settings.Name + "].Services", OK: p.Services != nil,
+			Name: "Jobs[" + j.Settings.Name + "].Services", OK: j.Services != nil,
 		})
 	}
 	if err := util.RequireAll(ErrMissingDependency, reqs...); err != nil {
 		return nil, err
 	}
-	return &Manager{s: s, projects: projects, d: d}, nil
+	return &Manager{s: s, jobs: jobs, d: d}, nil
 }
 
-// Run backs up every project. With AutoPrune it then runs forget for the projects with a
-// complete snapshot, and prune and unlock only when every snapshot is complete. A
-// cancelled run does no maintenance. Project failures are logged here and summarized in
-// the returned ErrProjectsFailed; forget, prune and unlock failures are only logged.
+// Run backs up every job. Then it runs forget for the jobs with a retention policy and a
+// complete snapshot, and with Prune, prune and unlock when every snapshot is complete. A
+// cancelled run does no maintenance. Job failures are logged here and summarized in the
+// returned ErrJobsFailed; forget, prune and unlock failures are only logged. Then the
+// Post hook runs, and when anything failed, the OnFailure hook.
 func (m *Manager) Run(ctx context.Context) error {
-	m.d.Log.Info().Bool("parallel", m.s.Parallel).Int("projects", len(m.projects)).
+	m.d.Log.Info().Int("concurrency", m.s.Concurrency).Int("jobs", len(m.jobs)).
 		Stringer("shutdown_timeout", m.ShutdownTimeout()).Msg("starting backup run")
 
-	outcomes := m.runProjects(ctx)
+	results := m.runJobs(ctx)
+	var maintenance []string
 	if ctx.Err() == nil {
-		m.maintain(ctx, outcomes)
+		maintenance = m.maintain(ctx, results)
 	}
-	if failed := m.count(outcomes, outcomeFailed); failed > 0 {
-		return fmt.Errorf("%w: %d of %d", ErrProjectsFailed, failed, len(m.projects))
+	s := m.summarize(results, maintenance)
+	m.runHook(ctx, hookPost, m.s.Post, s)
+	if len(s.failures) > 0 {
+		m.runHook(ctx, hookOnFailure, m.s.OnFailure, s)
+	}
+	if len(s.failed) > 0 {
+		return fmt.Errorf("%w: %d of %d", ErrJobsFailed, len(s.failed), len(m.jobs))
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("backup: %w", err)
@@ -129,132 +141,131 @@ func (m *Manager) Run(ctx context.Context) error {
 }
 
 // ShutdownTimeout returns how long the run may take after its context was cancelled: the
-// running commands end, then each running project restarts the services it stopped. Only
-// the projects running at the cancel restart (sequential mode starts no further one), and
-// in parallel mode they restart at the same time, so the largest start timeout counts,
-// not the sum.
+// running commands end, then each running job restarts the services it stopped. Only the
+// jobs running at the cancel restart (no further job starts), and they restart at the
+// same time, so the largest start timeout counts, not the sum.
 func (m *Manager) ShutdownTimeout() time.Duration {
 	var restart time.Duration
-	for _, p := range m.projects {
-		if p.Settings.StopServices {
-			restart = max(restart, p.Settings.StartTimeout+restartGrace)
+	for _, j := range m.jobs {
+		if j.Settings.StopServices {
+			restart = max(restart, j.Settings.StartTimeout+restartGrace)
 		}
 	}
 	return shutdownGrace + restart
 }
 
-// outcome is how the backup of one project ended.
-type outcome int
-
-const (
-	// The zero value: not started because the run was cancelled.
-	_ outcome = iota
-	// outcomeFailed: no snapshot, the project failed.
-	outcomeFailed
-	// outcomeIncomplete: backed up, but the snapshot misses files or was not reported.
-	outcomeIncomplete
-	// outcomeComplete: backed up with a complete snapshot.
-	outcomeComplete
-)
-
-// runProjects runs the projects in the configured mode and returns the outcome of each,
-// by index.
-func (m *Manager) runProjects(ctx context.Context) []outcome {
-	outcomes := make([]outcome, len(m.projects)) // each run writes only its own index
-	run := func(i int) {
-		p := m.projects[i]
-		complete, err := m.runProject(ctx, p)
-		switch {
-		case err != nil:
-			outcomes[i] = outcomeFailed
-			m.d.Log.Error().Err(err).Str("project", p.Settings.Name).Msg("project backup failed")
-		case complete:
-			outcomes[i] = outcomeComplete
-		default:
-			outcomes[i] = outcomeIncomplete
-		}
+// Order returns the job names in the order they start with concurrency 1.
+func (m *Manager) Order() []string {
+	s := newSchedule(m.jobs, 1)
+	var names []string
+	for next := s.next(); len(next) > 0; next = s.next() {
+		names = append(names, m.jobs[next[0]].Settings.Name)
+		s.finish(next[0])
 	}
-	if m.s.Parallel {
-		var wg sync.WaitGroup
-		for i := range m.projects {
-			wg.Go(func() { run(i) })
-		}
-		wg.Wait()
-	} else {
-		for i := range m.projects {
-			if ctx.Err() != nil {
-				break
+	return names
+}
+
+// runJobs runs the jobs as the schedule allows and returns the result of each, by index.
+// It starts one goroutine per job and waits for all of them before it returns.
+func (m *Manager) runJobs(ctx context.Context) []result {
+	results := make([]result, len(m.jobs)) // each goroutine writes only its own index
+	s := newSchedule(m.jobs, m.s.Concurrency)
+	done := make(chan int)
+	for {
+		if ctx.Err() == nil {
+			for _, i := range s.next() {
+				go func() {
+					results[i] = m.runJob(ctx, m.jobs[i])
+					done <- i
+				}()
 			}
-			run(i)
+		}
+		if s.running == 0 {
+			return results
+		}
+		s.finish(<-done)
+	}
+}
+
+// maintain runs forget for the jobs with a retention policy and a complete snapshot,
+// then one prune and unlock when every job has one. They run after all backups because
+// they need exclusive repository locks. A failed or incomplete backup keeps its job's
+// history and skips prune, so a broken run never removes data. It returns what failed.
+func (m *Manager) maintain(ctx context.Context, results []result) []string {
+	forgot, failures := m.forgetAll(ctx, results)
+	if !m.s.Prune || !forgot {
+		return failures
+	}
+	for _, r := range results {
+		if r.outcome != outcomeComplete {
+			m.d.Log.Warn().Msg("prune skipped because a job failed or is incomplete")
+			return failures
 		}
 	}
-	return outcomes
+	return append(failures, m.prune(ctx)...)
 }
 
-// count returns how many of outcomes are want.
-func (m *Manager) count(outcomes []outcome, want outcome) int {
-	n := 0
-	for _, o := range outcomes {
-		if o == want {
-			n++
-		}
-	}
-	return n
-}
-
-// maintain runs forget for the projects with a retention policy and a complete snapshot,
-// then one prune and unlock when every project has one. They run after all backups
-// because they need exclusive repository locks. A failed or incomplete backup keeps its
-// project's history and skips prune, so a broken run never removes data.
-func (m *Manager) maintain(ctx context.Context, outcomes []outcome) {
-	if !m.s.AutoPrune || !m.forgetAll(ctx, outcomes) {
-		return
-	}
-	if m.count(outcomes, outcomeComplete) < len(m.projects) {
-		m.d.Log.Warn().Msg("prune skipped because a project failed or is incomplete")
-		return
-	}
-	m.prune(ctx)
-}
-
-// forgetAll runs forget for the projects with a retention policy and a complete snapshot
-// and reports whether there was one.
-func (m *Manager) forgetAll(ctx context.Context, outcomes []outcome) bool {
+// forgetAll runs forget for the jobs with a retention policy and a complete snapshot. It
+// reports whether there was one, and what failed.
+func (m *Manager) forgetAll(ctx context.Context, results []result) (bool, []string) {
 	forgot := false
-	for i, p := range m.projects {
-		if p.Settings.RetentionPolicy == "" {
+	var failures []string
+	for i, j := range m.jobs {
+		if len(j.Settings.ForgetArgs) == 0 {
 			continue
 		}
-		switch outcomes[i] {
+		switch results[i].outcome {
 		case outcomeComplete:
 			forgot = true
-			m.forget(ctx, p.Settings)
+			if err := m.forget(ctx, j.Settings); err != nil {
+				failures = append(failures, err.Error())
+			}
 		case outcomeIncomplete:
-			m.d.Log.Warn().Str("project", p.Settings.Name).
+			m.d.Log.Warn().Str("job", j.Settings.Name).
 				Msg("forget skipped because the snapshot is incomplete")
 		}
 	}
-	return forgot
+	return forgot, failures
 }
 
-// forget applies the retention policy of one project; a failure is only logged.
-func (m *Manager) forget(ctx context.Context, s ProjectSettings) {
-	log := m.d.Log.With().Str("project", s.Name).Logger()
-	if err := m.d.Restic.Forget(ctx, s.Name, s.RetentionPolicy, s.ForgetOptions); err != nil {
+// forget applies the retention policy of one job; a failure is logged and returned.
+func (m *Manager) forget(ctx context.Context, s JobSettings) error {
+	log := m.d.Log.With().Str("job", s.Name).Logger()
+	if err := m.d.Restic.Forget(ctx, s.Name, s.ForgetArgs); err != nil {
 		log.Error().Err(err).Msg("forget failed")
-		return
+		return err
 	}
-	log.Info().Str("retention_policy", s.RetentionPolicy).Msg("forget completed")
+	log.Info().Strs("keep", s.ForgetArgs).Msg("forget completed")
+	return nil
 }
 
-// prune runs prune and unlock for the whole repository; failures are only logged.
-func (m *Manager) prune(ctx context.Context) {
-	if err := m.d.Restic.Prune(ctx, m.s.PruneOptions); err != nil {
+// prune runs prune and unlock for the whole repository; failures are logged and returned.
+func (m *Manager) prune(ctx context.Context) []string {
+	var failures []string
+	if err := m.d.Restic.Prune(ctx); err != nil {
 		m.d.Log.Error().Err(err).Msg("prune failed")
+		failures = append(failures, err.Error())
 	} else {
 		m.d.Log.Info().Msg("prune completed")
 	}
-	if err := m.d.Restic.Unlock(ctx, m.s.PruneOptions); err != nil {
+	if err := m.d.Restic.Unlock(ctx); err != nil {
 		m.d.Log.Error().Err(err).Msg("unlock failed")
+		failures = append(failures, err.Error())
+	}
+	return failures
+}
+
+// runHook runs a run-level hook with the summary of the run in its environment; its own
+// failure is only logged. After a cancel it is skipped, like every hook.
+func (m *Manager) runHook(ctx context.Context, kind, command string, s summary) {
+	if strings.TrimSpace(command) == "" {
+		return
+	}
+	if ctx.Err() != nil {
+		m.d.Log.Warn().Str("hook", kind).Msg("hook skipped because the run was cancelled")
+		return
+	}
+	if err := m.hook(ctx, command, s.env(kind)); err != nil {
+		m.d.Log.Error().Err(err).Str("hook", kind).Msg("hook failed")
 	}
 }
