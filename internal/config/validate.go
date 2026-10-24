@@ -181,6 +181,17 @@ func (v *validator) job(f *File, name string, j JobConfig) {
 	if j.Type != TypeFiles && pick(j.Stop, f.Defaults.Stop, true) {
 		v.timeouts(f.Defaults, j)
 	}
+	v.keepTags(f.Defaults, j)
+}
+
+// keepTags checks that the job's snapshots do not all carry a tag that keep.tags keeps:
+// forget would then keep every snapshot of the job.
+func (v *validator) keepTags(d Defaults, j JobConfig) {
+	tags := list(j.Tags, d.Tags)
+	for _, t := range pick(j.Keep, d.Keep, Keep{}).Tags {
+		v.check(!slices.Contains(tags, t), "keep.tags", fmt.Sprintf("%q is in tags: every "+
+			"snapshot of the job has it, so forget would never remove one", t))
+	}
 }
 
 // references checks that before/after name other jobs.

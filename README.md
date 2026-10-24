@@ -168,7 +168,7 @@ not start with `-` or contain `,` or whitespace.
 | `stop` | stop the services during the backup (default `true`) |
 | `stop_timeout`, `start_timeout` | wait for the services to stop / start (default `1m` / `2m`) |
 | `backup_timeout` | cancel a backup that takes longer; the services start again, the job fails |
-| `keep` | retention: `last`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`, `within…`, and `tags` next to another rule |
+| `keep` | retention: `last`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`, `within…`, and `tags` next to another rule (not one of the job's own `tags`) |
 | `exclude`, `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`, `exclude_larger_than`, `one_file_system` | what restic leaves out (the restic options of the same name) |
 | `skip_if_unchanged` | create no snapshot when nothing changed |
 | `tags` | extra snapshot tags (not the name of a job) |
