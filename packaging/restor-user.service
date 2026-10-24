@@ -3,6 +3,8 @@
 Description=Restic Backup Orchestrator
 
 [Service]
+# No [Install] section: the timer starts this unit. Enabling the service itself would
+# run a backup, which stops services, at every login.
 Type=oneshot
 ExecStart=/usr/bin/restor run --config %h/.config/restor/config.yaml
 # On stop, restor restarts the services it stopped and exits within its shutdown timeout
@@ -16,6 +18,3 @@ IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 StandardOutput=journal
 StandardError=journal
-
-[Install]
-WantedBy=default.target
