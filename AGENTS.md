@@ -465,7 +465,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   goreleaser Pro. Packages install to `/usr/bin` (so `packaging/` has its own unit; the
   `example/` unit targets manual installs in `/usr/local/bin`), never write into
   `/etc/restor` beyond creating it 0700, do not enable the timer (a run would fail before
-  the config is written), and only *recommend* `restic` (often installed upstream).
+  the config is written), ship the service units without `[Install]` (an enabled service
+  would back up, and stop services, at every boot) and only *recommend* `restic` (often
+  installed upstream).
 - **Oneshot + systemd timer instead of a daemon:** scheduling, logging (journal), failure
   state and catch-up of missed runs come from systemd; restor stays a plain CLI. A failed
   run exits 1 and the next timer run is the retry; there is no container runtime restart
