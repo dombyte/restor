@@ -194,6 +194,14 @@ starting; use `Type=notify`, or check the unit in a `post` hook, when its start 
 confirmed. A lock per compose file and per unit keeps two restor runs from working on the
 same services; the second one fails.
 
+**Dependencies between units:** restor stops and waits for the listed `units` only, and
+it does not read systemd dependencies. A Podman quadlet pod runs every container in a unit
+of its own: list the pod's unit and all of its containers' units, or the backup may start
+while a container is still shutting down. A unit with `Wants=`, `Requires=` or `BindsTo=`
+on another job's unit starts that unit again when it is started, which can cancel the
+other job's stop while both run at once (systemctl reports "Job for … canceled"). Give
+such a job `after` the other one, or set `concurrency: 1`.
+
 **Hooks** are commands split on spaces and run without a shell; use a script with its
 absolute path for anything more (a relative path resolves against the working directory,
 `/` under systemd, and restor warns about it).
