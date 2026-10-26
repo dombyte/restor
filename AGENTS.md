@@ -229,8 +229,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 
 ### Run
 1. `cmd/main`: cobra parses the command and flags (`--config` defaults to
-   `/etc/restor/config.yaml`); logger = console writer on stderr, `--debug` = debug level
-   (`validate` and `restic` log warnings only); `signal.NotifyContext` for SIGINT/SIGTERM;
+   `app.DefaultConfig`, see CLI); logger = console writer on stderr, `--debug` = debug
+   level (`validate`, `snapshots` and `restic` log warnings only); `signal.NotifyContext` for SIGINT/SIGTERM;
    build info is logged. `restor` without a command is an error, so the call of version
    1 (`restor --config x`) cannot pass as a backup.
 2. `app.New`: `config.Load` (file, expansion, paths, env file, defaults, validation),
@@ -367,11 +367,19 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   sources, and below them each distinct retention policy once with its label (A, B, … in
   order of first use; `-` = never forgotten) and its jobs; never the repository URL (it
   may hold credentials).
+- `restor snapshots [job...]`: `restic <repository global flags> snapshots --tag=<job>…`
+  for all or the named jobs (`Plan.Select`, so unknown names are an error), attached to
+  the terminal like `restor restic`; other snapshot options go through `restor restic`.
 - `restor restic <args>`: `restic <repository global flags> <args>` with the restic
   environment, attached to the terminal (`command.Runner.Attach`); restor's flags must
   come before the first restic argument (`SetInterspersed(false)`).
-- `restor` without a command is an error; `--config`/`-c` defaults to
-  `/etc/restor/config.yaml`.
+- `restor` without a command is an error.
+- `--config`/`-c` defaults to `app.DefaultConfig`: `/etc/restor/config.yaml` for root,
+  `restor/config.yaml` in `$XDG_CONFIG_HOME` (when absolute), else in `~/.config` for
+  other users, like `lock.DefaultDir`; without an absolute home the command fails. A fixed
+  rule, not a search path: a fallback could forget snapshots in another repository than
+  intended. When a non-root user's default file is missing or unreadable, a warning
+  explains the rule (pass `--config`, or run as root for the system file).
 
 ### Schedule
 - `backup.schedule` starts a pending job when every job in its `After` that is part of

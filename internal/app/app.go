@@ -144,6 +144,19 @@ func (a *App) Restic(ctx context.Context, stdio Stdio, args []string) error {
 	return a.resticRunner.Attach(ctx, stdio, "restic", slices.Concat(global, args)...)
 }
 
+// Snapshots lists the snapshots of the selected jobs (all jobs when none were named),
+// connected to stdio: `restor snapshots web` is `restor restic snapshots --tag=web` with
+// the job name checked against the configuration.
+func (a *App) Snapshots(ctx context.Context, stdio Stdio) error {
+	tags := make([]string, 0, len(a.plan.Jobs))
+	for _, j := range a.plan.Jobs {
+		tags = append(tags, j.Name)
+	}
+	args := slices.Concat(resticSettings(a.plan.Repository).GlobalArgs, []string{"snapshots"},
+		restic.SnapshotsFlags{Tags: tags}.Args())
+	return a.resticRunner.Attach(ctx, stdio, "restic", args...)
+}
+
 // Describe writes the validated plan to w: the jobs in the order they start with
 // concurrency 1, with their type, what they wait for and what they back up, then each
 // distinct retention policy once, labelled in the table. The repository URL is left out,
@@ -233,6 +246,29 @@ type managerDeps struct {
 	clock   util.Clock
 	lockDir string
 	log     zerolog.Logger
+}
+
+// SystemConfig is the configuration file of root, a system installation.
+const SystemConfig = "/etc/restor/config.yaml"
+
+// DefaultConfig returns the configuration file of the user uid: SystemConfig for root,
+// otherwise restor/config.yaml in $XDG_CONFIG_HOME or ~/.config. It is a fixed rule, not a
+// search path: falling back to another file could forget snapshots in another repository
+// than intended. Empty when the user has no absolute config or home directory.
+func DefaultConfig(uid int, getenv func(string) string) string {
+	if uid == 0 {
+		return SystemConfig
+	}
+	// The XDG spec ignores relative paths; so does restor, for HOME too.
+	dir := getenv("XDG_CONFIG_HOME")
+	if !filepath.IsAbs(dir) {
+		home := getenv("HOME")
+		if !filepath.IsAbs(home) {
+			return ""
+		}
+		dir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(dir, "restor", "config.yaml")
 }
 
 // lockDir picks the lock directory of the user running restor.

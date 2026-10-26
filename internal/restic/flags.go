@@ -115,6 +115,17 @@ func (f PruneFlags) Args() []string {
 	return []string{"--max-unused=" + f.MaxUnused}
 }
 
+// SnapshotsFlags are the options of snapshots.
+type SnapshotsFlags struct {
+	// Tags select the snapshots that have any of them; empty selects all.
+	Tags []string
+}
+
+// Args returns the restic snapshots flags of f.
+func (f SnapshotsFlags) Args() []string {
+	return appendEach(nil, "--tag", f.Tags)
+}
+
 func appendEach(args []string, flag string, values []string) []string {
 	for _, v := range values {
 		args = append(args, flag+"="+v)

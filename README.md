@@ -65,13 +65,14 @@ sudo systemctl enable --now restor.timer
 
 ### As a normal user
 
-The package also installs user units that read `~/.config/restor/config.yaml`:
+The package also installs user units that read `~/.config/restor/config.yaml`, the file
+every command reads for a user other than root:
 
 ```bash
 mkdir -p ~/.config/restor
 cp /usr/share/doc/restor/examples/config.yaml ~/.config/restor/
 install -m 0600 /usr/share/doc/restor/examples/restor.env ~/.config/restor/
-restor validate --config ~/.config/restor/config.yaml
+restor validate
 systemctl --user enable --now restor.timer
 sudo loginctl enable-linger "$USER"   # keep the timer running while logged out
 ```
@@ -83,21 +84,26 @@ restor run                      # back up every job, then forget and prune
 restor run web db               # only these jobs (their order among each other is kept)
 restor validate                 # check the config, print the jobs in start order and
                                 # each retention policy once, with the jobs using it
+restor snapshots                # list the snapshots of every job
+restor snapshots web            # of this job only (restic snapshots --tag=web)
 restor restic snapshots         # run restic with the configured repository and env file
 restor restic restore latest --tag web --target /tmp/restore
 restor version
 ```
 
-Every command reads `/etc/restor/config.yaml` unless `--config <file>` (`-c`) says
-otherwise; `--debug` logs every command line. Logs go to stderr, under systemd to the
+Every command reads `/etc/restor/config.yaml` when run as root and
+`~/.config/restor/config.yaml` (`$XDG_CONFIG_HOME/restor/config.yaml` if set) as any other
+user, unless `--config <file>` (`-c`) says otherwise. There is no fallback from one to the
+other: a normal user who wants the system configuration runs restor with `sudo`.
+`--debug` logs every command line. Logs go to stderr, under systemd to the
 journal: `journalctl -u restor` (or `journalctl --user -u restor`).
 
 `restor run` exits 0 when every job was backed up and 1 when the config is invalid, a job
 failed or the run was cancelled. A failed forget or prune is logged and runs the
 top-level `on_failure` hook; a failed `post` or `on_failure` hook is only logged. Neither
 changes the exit code. Before anything is stopped, it checks
-that `restic` is installed and supported (see below). `restor restic` exits with restic's
-exit code.
+that `restic` is installed and supported (see below). `restor snapshots` and
+`restor restic` exit with restic's exit code.
 
 On SIGINT/SIGTERM restor stops the running backups, restarts the services it stopped,
 starts no further job and exits within its shutdown timeout (the largest `start_timeout`

@@ -1,7 +1,8 @@
 // Package main is the restor CLI. `restor run` runs one backup cycle and exits 0 when
 // every job was backed up, 1 otherwise; `restor validate` checks the configuration,
-// `restor restic …` runs restic against the configured repository and `restor version`
-// (or --version) prints the build information.
+// `restor snapshots` lists the snapshots of the jobs, `restor restic …` runs restic
+// against the configured repository and `restor version` (or --version) prints the build
+// information.
 package main
 
 import (
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
 	"syscall"
@@ -41,6 +43,10 @@ var (
 	// errShutdownDeadline is returned when the run outlives its shutdown timeout after a
 	// signal.
 	errShutdownDeadline = errors.New("shutdown deadline exceeded")
+	// errNoConfig is returned when a user other than root has no home directory to find
+	// the default configuration file in.
+	errNoConfig = errors.New("no default configuration file: HOME is not set, " +
+		"pass --config <file>")
 )
 
 func main() {
@@ -52,7 +58,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	root := newRootCommand(stdout, stderr)
+	root := newRootCommand(app.DefaultConfig(os.Getuid(), os.Getenv), stdout, stderr)
 	root.SetArgs(args)
 	if err := root.ExecuteContext(ctx); err != nil {
 		var exit interface{ ExitCode() int }
@@ -72,17 +78,16 @@ func buildInfo() string {
 		GoVersion)
 }
 
-// defaultConfig is the configuration file of a system installation.
-const defaultConfig = "/etc/restor/config.yaml"
-
 // flags are the options every command shares.
 type flags struct {
 	config string
 	debug  bool
+	// defaultConfig is the configuration file used without --config.
+	defaultConfig string
 }
 
-func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
-	f := &flags{}
+func newRootCommand(defaultConfig string, stdout, stderr io.Writer) *cobra.Command {
+	f := &flags{defaultConfig: defaultConfig}
 	root := &cobra.Command{
 		Use:   "restor",
 		Short: "Restic backup orchestrator",
@@ -103,7 +108,8 @@ its sources, starts the services again and applies the retention policies.`,
 		"configuration file")
 	root.PersistentFlags().BoolVar(&f.debug, "debug", false, "enable debug logging")
 	root.AddCommand(newRunCommand(f, stderr), newValidateCommand(f, stdout, stderr),
-		newResticCommand(f, stdout, stderr), &cobra.Command{
+		newSnapshotsCommand(f, stdout, stderr), newResticCommand(f, stdout, stderr),
+		&cobra.Command{
 			Use:   "version",
 			Short: "Print the build information",
 			Args:  cobra.NoArgs,
@@ -119,7 +125,7 @@ func newRunCommand(f *flags, stderr io.Writer) *cobra.Command {
 		Long: `Run one backup cycle: back up every job (or only the named ones, in the order
 their before/after allows), then forget and prune. Exits 1 when a job failed.`,
 		RunE: func(cmd *cobra.Command, jobs []string) error {
-			return runBackup(cmd.Context(), app.Options{ConfigPath: f.config, Jobs: jobs},
+			return runBackup(cmd.Context(), f, jobs,
 				newLogger(stderr, level(f.debug, zerolog.InfoLevel)))
 		},
 	}
@@ -132,12 +138,30 @@ func newValidateCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			log := newLogger(stderr, level(f.debug, zerolog.WarnLevel))
-			a, err := newApp(app.Options{ConfigPath: f.config}, log)
+			a, err := newApp(f, nil, log)
 			if err != nil {
 				return err
 			}
 			_, _ = fmt.Fprintf(stdout, "%s is valid\n\n", f.config)
 			return a.Describe(stdout)
+		},
+	}
+}
+
+func newSnapshotsCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
+	return &cobra.Command{
+		Use:   "snapshots [job...]",
+		Short: "List the snapshots of all jobs, or of the named ones",
+		Long: `List the snapshots of all jobs, or of the named ones: restic snapshots with
+the job names as tags. Use "restor restic snapshots" for other options.`,
+		RunE: func(cmd *cobra.Command, jobs []string) error {
+			log := newLogger(stderr, level(f.debug, zerolog.WarnLevel))
+			a, err := newApp(f, jobs, log)
+			if err != nil {
+				return err
+			}
+			stdio := app.Stdio{In: os.Stdin, Out: stdout, Err: stderr}
+			return a.Snapshots(cmd.Context(), stdio)
 		},
 	}
 }
@@ -150,7 +174,7 @@ func newResticCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
   restor restic restore latest --tag web --target /tmp/restore`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log := newLogger(stderr, level(f.debug, zerolog.WarnLevel))
-			a, err := newApp(app.Options{ConfigPath: f.config}, log)
+			a, err := newApp(f, nil, log)
 			if err != nil {
 				return err
 			}
@@ -188,25 +212,45 @@ func isTerminal(w io.Writer) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
-// newApp wires the application for o with the process environment. Errors are logged
-// here, one line per problem: an invalid config lists all of its problems at once.
-func newApp(o app.Options, log zerolog.Logger) (*app.App, error) {
-	o.Getenv, o.Environ, o.Log = os.Getenv, os.Environ(), log
-	a, err := app.New(o)
+// newApp wires the application for the jobs (all when empty) with the process
+// environment. Errors are logged here, one line per problem: an invalid config lists all
+// of its problems at once.
+func newApp(f *flags, jobs []string, log zerolog.Logger) (*app.App, error) {
+	if f.config == "" {
+		return nil, errNoConfig
+	}
+	a, err := app.New(app.Options{
+		ConfigPath: f.config, Jobs: jobs, Getenv: os.Getenv, Environ: os.Environ(), Log: log,
+	})
 	if err != nil {
 		for _, problem := range joined(err) {
 			log.Error().Err(problem).Msg("startup failed")
+		}
+		if needsConfigHint(err, f) {
+			log.Warn().Str("config", f.config).Msg("users other than root read this file " +
+				"by default; pass --config <file>, or run restor as root to use " +
+				app.SystemConfig)
 		}
 		return nil, errReported
 	}
 	return a, nil
 }
 
-// runBackup wires the application and runs one backup cycle. Errors are logged here.
-func runBackup(ctx context.Context, o app.Options, log zerolog.Logger) error {
+// needsConfigHint reports whether err says that the default configuration file of a user
+// other than root cannot be read: they may have meant the system one.
+func needsConfigHint(err error, f *flags) bool {
+	var pathErr *fs.PathError
+	return f.config == f.defaultConfig && f.config != app.SystemConfig &&
+		errors.As(err, &pathErr) && pathErr.Path == f.config &&
+		(errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission))
+}
+
+// runBackup wires the application and runs one backup cycle of the jobs (all when
+// empty). Errors are logged here.
+func runBackup(ctx context.Context, f *flags, jobs []string, log zerolog.Logger) error {
 	log.Info().Str("version", Version).Str("commit", Commit).Str("build_date", BuildDate).
-		Str("go_version", GoVersion).Str("config", o.ConfigPath).Msg("starting restor")
-	a, err := newApp(o, log)
+		Str("go_version", GoVersion).Str("config", f.config).Msg("starting restor")
+	a, err := newApp(f, jobs, log)
 	if err != nil {
 		return err
 	}
