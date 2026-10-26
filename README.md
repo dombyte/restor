@@ -83,6 +83,8 @@ restor run                      # back up every job, then forget and prune
 restor run web db               # only these jobs (their order among each other is kept)
 restor validate                 # check the config, print the jobs in start order and
                                 # each retention policy once, with the jobs using it
+restor snapshots                # list the snapshots of every job
+restor snapshots web            # of this job only (restic snapshots --tag=web)
 restor restic snapshots         # run restic with the configured repository and env file
 restor restic restore latest --tag web --target /tmp/restore
 restor version
@@ -96,8 +98,8 @@ journal: `journalctl -u restor` (or `journalctl --user -u restor`).
 failed or the run was cancelled. A failed forget or prune is logged and runs the
 top-level `on_failure` hook; a failed `post` or `on_failure` hook is only logged. Neither
 changes the exit code. Before anything is stopped, it checks
-that `restic` is installed and supported (see below). `restor restic` exits with restic's
-exit code.
+that `restic` is installed and supported (see below). `restor snapshots` and
+`restor restic` exit with restic's exit code.
 
 On SIGINT/SIGTERM restor stops the running backups, restarts the services it stopped,
 starts no further job and exits within its shutdown timeout (the largest `start_timeout`

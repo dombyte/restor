@@ -1,7 +1,8 @@
 // Package main is the restor CLI. `restor run` runs one backup cycle and exits 0 when
 // every job was backed up, 1 otherwise; `restor validate` checks the configuration,
-// `restor restic …` runs restic against the configured repository and `restor version`
-// (or --version) prints the build information.
+// `restor snapshots` lists the snapshots of the jobs, `restor restic …` runs restic
+// against the configured repository and `restor version` (or --version) prints the build
+// information.
 package main
 
 import (
@@ -103,7 +104,8 @@ its sources, starts the services again and applies the retention policies.`,
 		"configuration file")
 	root.PersistentFlags().BoolVar(&f.debug, "debug", false, "enable debug logging")
 	root.AddCommand(newRunCommand(f, stderr), newValidateCommand(f, stdout, stderr),
-		newResticCommand(f, stdout, stderr), &cobra.Command{
+		newSnapshotsCommand(f, stdout, stderr), newResticCommand(f, stdout, stderr),
+		&cobra.Command{
 			Use:   "version",
 			Short: "Print the build information",
 			Args:  cobra.NoArgs,
@@ -138,6 +140,24 @@ func newValidateCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
 			}
 			_, _ = fmt.Fprintf(stdout, "%s is valid\n\n", f.config)
 			return a.Describe(stdout)
+		},
+	}
+}
+
+func newSnapshotsCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
+	return &cobra.Command{
+		Use:   "snapshots [job...]",
+		Short: "List the snapshots of all jobs, or of the named ones",
+		Long: `List the snapshots of all jobs, or of the named ones: restic snapshots with
+the job names as tags. Use "restor restic snapshots" for other options.`,
+		RunE: func(cmd *cobra.Command, jobs []string) error {
+			log := newLogger(stderr, level(f.debug, zerolog.WarnLevel))
+			a, err := newApp(app.Options{ConfigPath: f.config, Jobs: jobs}, log)
+			if err != nil {
+				return err
+			}
+			stdio := app.Stdio{In: os.Stdin, Out: stdout, Err: stderr}
+			return a.Snapshots(cmd.Context(), stdio)
 		},
 	}
 }

@@ -393,4 +393,12 @@ jobs:
 	})
 
 	assert.True(t, skipped, "a later run skips both jobs as unchanged")
+
+	o.Jobs = []string{"b"}
+	a, err := New(o)
+	require.NoError(t, err)
+	var out bytes.Buffer
+	require.NoError(t, a.Snapshots(context.Background(), Stdio{Out: &out, Err: &out}))
+	assert.Contains(t, out.String(), r.snapshots(t, "b")[0].ShortID, "restor snapshots b")
+	assert.NotContains(t, out.String(), first[0].ShortID, "not the snapshots of a")
 }

@@ -40,6 +40,7 @@ func TestRun_Errors(t *testing.T) {
 		{name: "missing config file", args: []string{"run", "-c", missing}, want: "startup failed"},
 		{name: "validate", args: []string{"validate", "-c", missing}, want: "startup failed"},
 		{name: "restic", args: []string{"restic", "-c", missing}, want: "startup failed"},
+		{name: "snapshots", args: []string{"snapshots", "-c", missing}, want: "startup failed"},
 		{
 			name: "default config", args: []string{"validate"},
 			want: "/etc/restor/config.yaml",
@@ -141,6 +142,38 @@ func TestRun_Restic(t *testing.T) {
 	assert.Equal(t, 3, code, "restic's exit code")
 	assert.Equal(t, "--limit-upload=5 snapshots --tag a /repo\n", stdout.String())
 	assert.Empty(t, stderr.String())
+}
+
+// TestRun_Snapshots is not parallel: it sets PATH.
+func TestRun_Snapshots(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\necho \"$@\" \"$RESTIC_REPOSITORY\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "restic"), []byte(script), 0o700))
+	t.Setenv("PATH", dir)
+	path := writeConfig(t, "version: 2\nrepository: {url: /repo, limit_upload: 5}\n"+
+		"jobs: {a: {sources: [/a]}, b: {sources: [/b]}, c: {sources: [/c]}}\n")
+	tests := []struct {
+		name string
+		jobs []string
+		want string
+	}{
+		{name: "all jobs", want: "--tag=a --tag=b --tag=c"},
+		{name: "named jobs", jobs: []string{"C", "a"}, want: "--tag=a --tag=c"},
+	}
+	for _, tt := range tests {
+		var stdout, stderr bytes.Buffer
+		args := append([]string{"snapshots", "-c", path}, tt.jobs...)
+
+		assert.Equal(t, 0, run(args, &stdout, &stderr), tt.name)
+		assert.Equal(t, "--limit-upload=5 snapshots "+tt.want+" /repo\n", stdout.String(),
+			tt.name)
+		assert.Empty(t, stderr.String(), tt.name)
+	}
+
+	var stdout, stderr bytes.Buffer
+	assert.Equal(t, 1, run([]string{"snapshots", "-c", path, "x"}, &stdout, &stderr))
+	assert.Contains(t, stderr.String(), "unknown job: x")
+	assert.Empty(t, stdout.String(), "restic does not run")
 }
 
 func TestJoined(t *testing.T) {

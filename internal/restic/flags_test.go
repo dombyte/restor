@@ -57,3 +57,10 @@ func TestPruneFlags_Args(t *testing.T) {
 	assert.Equal(t, []string{"--max-unused=5%"}, PruneFlags{MaxUnused: "5%"}.Args())
 	assert.Empty(t, PruneFlags{}.Args())
 }
+
+func TestSnapshotsFlags_Args(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, []string{"--tag=db", "--tag=web"},
+		SnapshotsFlags{Tags: []string{"db", "web"}}.Args())
+	assert.Empty(t, SnapshotsFlags{}.Args())
+}

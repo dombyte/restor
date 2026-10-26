@@ -144,6 +144,19 @@ func (a *App) Restic(ctx context.Context, stdio Stdio, args []string) error {
 	return a.resticRunner.Attach(ctx, stdio, "restic", slices.Concat(global, args)...)
 }
 
+// Snapshots lists the snapshots of the selected jobs (all jobs when none were named),
+// connected to stdio: `restor snapshots web` is `restor restic snapshots --tag=web` with
+// the job name checked against the configuration.
+func (a *App) Snapshots(ctx context.Context, stdio Stdio) error {
+	tags := make([]string, 0, len(a.plan.Jobs))
+	for _, j := range a.plan.Jobs {
+		tags = append(tags, j.Name)
+	}
+	args := slices.Concat(resticSettings(a.plan.Repository).GlobalArgs, []string{"snapshots"},
+		restic.SnapshotsFlags{Tags: tags}.Args())
+	return a.resticRunner.Attach(ctx, stdio, "restic", args...)
+}
+
 // Describe writes the validated plan to w: the jobs in the order they start with
 // concurrency 1, with their type, what they wait for and what they back up, then each
 // distinct retention policy once, labelled in the table. The repository URL is left out,
