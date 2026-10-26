@@ -248,6 +248,29 @@ type managerDeps struct {
 	log     zerolog.Logger
 }
 
+// SystemConfig is the configuration file of root, a system installation.
+const SystemConfig = "/etc/restor/config.yaml"
+
+// DefaultConfig returns the configuration file of the user uid: SystemConfig for root,
+// otherwise restor/config.yaml in $XDG_CONFIG_HOME or ~/.config. It is a fixed rule, not a
+// search path: falling back to another file could forget snapshots in another repository
+// than intended. Empty when the user has no absolute config or home directory.
+func DefaultConfig(uid int, getenv func(string) string) string {
+	if uid == 0 {
+		return SystemConfig
+	}
+	// The XDG spec ignores relative paths; so does restor, for HOME too.
+	dir := getenv("XDG_CONFIG_HOME")
+	if !filepath.IsAbs(dir) {
+		home := getenv("HOME")
+		if !filepath.IsAbs(home) {
+			return ""
+		}
+		dir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(dir, "restor", "config.yaml")
+}
+
 // lockDir picks the lock directory of the user running restor.
 func lockDir(getenv func(string) string) string {
 	return lock.DefaultDir(lock.User{

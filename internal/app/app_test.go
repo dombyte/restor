@@ -79,6 +79,40 @@ func TestLockDir_UsesRuntimeDir(t *testing.T) {
 	assert.Equal(t, "/run/user/1000/restor", lockDir(getenv))
 }
 
+func TestDefaultConfig(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		uid  int
+		env  map[string]string
+		want string
+	}{
+		{name: "root", uid: 0, env: map[string]string{"HOME": "/root"}, want: SystemConfig},
+		{
+			name: "xdg", uid: 1000,
+			env:  map[string]string{"XDG_CONFIG_HOME": "/cfg", "HOME": "/home/u"},
+			want: "/cfg/restor/config.yaml",
+		},
+		{
+			name: "home", uid: 1000, env: map[string]string{"HOME": "/home/u"},
+			want: "/home/u/.config/restor/config.yaml",
+		},
+		{
+			name: "relative xdg ignored", uid: 1000,
+			env:  map[string]string{"XDG_CONFIG_HOME": "cfg", "HOME": "/home/u"},
+			want: "/home/u/.config/restor/config.yaml",
+		},
+		{name: "no home", uid: 1000, env: map[string]string{"HOME": "home"}, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			getenv := func(k string) string { return tt.env[k] }
+			assert.Equal(t, tt.want, DefaultConfig(tt.uid, getenv))
+		})
+	}
+}
+
 func TestCreateServiceManager(t *testing.T) {
 	t.Parallel()
 	d := servicemanager.Deps{

@@ -65,13 +65,14 @@ sudo systemctl enable --now restor.timer
 
 ### As a normal user
 
-The package also installs user units that read `~/.config/restor/config.yaml`:
+The package also installs user units that read `~/.config/restor/config.yaml`, the file
+every command reads for a user other than root:
 
 ```bash
 mkdir -p ~/.config/restor
 cp /usr/share/doc/restor/examples/config.yaml ~/.config/restor/
 install -m 0600 /usr/share/doc/restor/examples/restor.env ~/.config/restor/
-restor validate --config ~/.config/restor/config.yaml
+restor validate
 systemctl --user enable --now restor.timer
 sudo loginctl enable-linger "$USER"   # keep the timer running while logged out
 ```
@@ -90,8 +91,11 @@ restor restic restore latest --tag web --target /tmp/restore
 restor version
 ```
 
-Every command reads `/etc/restor/config.yaml` unless `--config <file>` (`-c`) says
-otherwise; `--debug` logs every command line. Logs go to stderr, under systemd to the
+Every command reads `/etc/restor/config.yaml` when run as root and
+`~/.config/restor/config.yaml` (`$XDG_CONFIG_HOME/restor/config.yaml` if set) as any other
+user, unless `--config <file>` (`-c`) says otherwise. There is no fallback from one to the
+other: a normal user who wants the system configuration runs restor with `sudo`.
+`--debug` logs every command line. Logs go to stderr, under systemd to the
 journal: `journalctl -u restor` (or `journalctl --user -u restor`).
 
 `restor run` exits 0 when every job was backed up and 1 when the config is invalid, a job

@@ -14,6 +14,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dombyte/restor/internal/app"
 )
 
 func TestRun_Version(t *testing.T) {
@@ -41,27 +43,15 @@ func TestRun_Errors(t *testing.T) {
 		{name: "validate", args: []string{"validate", "-c", missing}, want: "startup failed"},
 		{name: "restic", args: []string{"restic", "-c", missing}, want: "startup failed"},
 		{name: "snapshots", args: []string{"snapshots", "-c", missing}, want: "startup failed"},
-		{
-			name: "default config", args: []string{"validate"},
-			want: "/etc/restor/config.yaml",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if tt.name == "default config" && fileExists(defaultConfig) {
-				t.Skip("a real configuration is installed")
-			}
 			var stdout, stderr bytes.Buffer
 			assert.Equal(t, 1, run(tt.args, &stdout, &stderr))
 			assert.Contains(t, stderr.String(), tt.want)
 		})
 	}
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 func writeConfig(t *testing.T, content string) string {
@@ -174,6 +164,45 @@ func TestRun_Snapshots(t *testing.T) {
 	assert.Equal(t, 1, run([]string{"snapshots", "-c", path, "x"}, &stdout, &stderr))
 	assert.Contains(t, stderr.String(), "unknown job: x")
 	assert.Empty(t, stdout.String(), "restic does not run")
+}
+
+// TestRun_UserDefaultConfig is not parallel: it sets XDG_CONFIG_HOME.
+func TestRun_UserDefaultConfig(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root reads " + app.SystemConfig)
+	}
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path := filepath.Join(dir, "restor", "config.yaml")
+	var stdout, stderr bytes.Buffer
+
+	assert.Equal(t, 1, run([]string{"validate"}, &stdout, &stderr))
+	assert.Contains(t, stderr.String(), path)
+	assert.Contains(t, stderr.String(), "users other than root read this file by default")
+
+	stderr.Reset()
+	other := filepath.Join(dir, "other.yaml")
+	assert.Equal(t, 1, run([]string{"validate", "-c", other}, &stdout, &stderr))
+	assert.NotContains(t, stderr.String(), "by default", "no hint for --config")
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte("version: 2\njobs: {a: {sources: [/a]}}\n"),
+		0o600))
+	assert.Equal(t, 0, run([]string{"validate"}, &stdout, &stderr))
+	assert.Contains(t, stdout.String(), path+" is valid")
+}
+
+// TestRun_NoHome is not parallel: it sets HOME.
+func TestRun_NoHome(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root reads " + app.SystemConfig)
+	}
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	var stdout, stderr bytes.Buffer
+
+	assert.Equal(t, 1, run([]string{"validate"}, &stdout, &stderr))
+	assert.Contains(t, stderr.String(), "no default configuration file")
 }
 
 func TestJoined(t *testing.T) {
