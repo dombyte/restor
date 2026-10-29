@@ -179,7 +179,7 @@ not start with `-` or contain `,` or whitespace.
 | `before`, `after` | jobs that run after / before this one |
 | `stop` | stop the services during the backup (default `true`) |
 | `start_all` | after the backup, also start the services that were not running (default `false`) |
-| `stop_timeout`, `start_timeout` | wait for the services to stop / start (default `1m` / `2m`) |
+| `stop_timeout`, `start_timeout` | wait for the services to stop / start (default `1m` / `2m`); compose gets the stop timeout in whole seconds, rounded up |
 | `backup_timeout` | cancel a backup that takes longer; the services start again, the job fails |
 | `keep` | retention: `last`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`, `within…`, and `tags` next to another rule (not one of the job's own `tags`) |
 | `exclude`, `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`, `exclude_larger_than`, `one_file_system` | what restic leaves out (the restic options of the same name) |
