@@ -1,7 +1,8 @@
 // Package main is the restor CLI. `restor run` runs one backup cycle and exits 0 when
 // every job was backed up, 1 otherwise; `restor validate` checks the configuration,
-// `restor snapshots` lists the snapshots of the jobs, `restor restic …` runs restic
-// against the configured repository and `restor version` (or --version) prints the build
+// `restor snapshots` lists the snapshots of the jobs, `restor restore` restores a snapshot
+// (a dry run unless --apply is given), `restor restic …` runs restic against the
+// configured repository and `restor version` (or --version) prints the build
 // information.
 package main
 
@@ -47,6 +48,8 @@ var (
 	// the default configuration file in.
 	errNoConfig = errors.New("no default configuration file: HOME is not set, " +
 		"pass --config <file>")
+	// errAllWithJobs is returned by `restor snapshots --all` with job names.
+	errAllWithJobs = errors.New("--all lists every snapshot: name no jobs with it")
 )
 
 func main() {
@@ -108,7 +111,8 @@ its sources, starts the services again and applies the retention policies.`,
 		"configuration file")
 	root.PersistentFlags().BoolVar(&f.debug, "debug", false, "enable debug logging")
 	root.AddCommand(newRunCommand(f, stderr), newValidateCommand(f, stdout, stderr),
-		newSnapshotsCommand(f, stdout, stderr), newResticCommand(f, stdout, stderr),
+		newSnapshotsCommand(f, stdout, stderr), newRestoreCommand(f, stdout, stderr),
+		newResticCommand(f, stdout, stderr),
 		&cobra.Command{
 			Use:   "version",
 			Short: "Print the build information",
@@ -149,21 +153,87 @@ func newValidateCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
 }
 
 func newSnapshotsCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
-	return &cobra.Command{
+	var all bool
+	cmd := &cobra.Command{
 		Use:   "snapshots [job...]",
 		Short: "List the snapshots of all jobs, or of the named ones",
 		Long: `List the snapshots of all jobs, or of the named ones: restic snapshots with
-the job names as tags. Use "restor restic snapshots" for other options.`,
+the job names as tags. --all, or a configuration without jobs, lists every snapshot of
+the repository, also those of renamed or removed jobs. Use "restor restic snapshots" for
+other options.`,
 		RunE: func(cmd *cobra.Command, jobs []string) error {
+			if all && len(jobs) > 0 {
+				return errAllWithJobs
+			}
 			log := newLogger(stderr, level(f.debug, zerolog.WarnLevel))
 			a, err := newApp(f, jobs, log)
 			if err != nil {
 				return err
 			}
 			stdio := app.Stdio{In: os.Stdin, Out: stdout, Err: stderr}
-			return a.Snapshots(cmd.Context(), stdio)
+			return a.Snapshots(cmd.Context(), stdio, all)
 		},
 	}
+	cmd.Flags().BoolVar(&all, "all", false, "list every snapshot, not only those of the jobs")
+	return cmd
+}
+
+func newRestoreCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
+	var o app.RestoreOptions
+	cmd := &cobra.Command{
+		Use:   "restore <snapshot-ID> (--target <dir> | --in-place) [--apply]",
+		Short: "Restore a snapshot (a dry run unless --apply is given)",
+		Long: `Restore the files of one snapshot, found with "restor snapshots" (the short ID
+works). Without --apply it is a dry run that lists what would be restored. --target
+restores the snapshot's absolute paths below a directory (--target /srv/db gives
+/srv/db/<original path>); --in-place restores to the original paths, the same as
+--target /. Only files are restored:
+stop the services that use them, and restor.timer, before an in-place restore.`,
+		Example: `  restor restore 1a2b3c4d --target /tmp/restore
+  restor restore 1a2b3c4d --in-place --include /srv/app/db --apply`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			o.Snapshot = args[0]
+			log := newLogger(stderr, level(f.debug, zerolog.InfoLevel))
+			a, err := newApp(f, nil, log)
+			if err != nil {
+				return err
+			}
+			stdio := app.Stdio{In: os.Stdin, Out: stdout, Err: stderr}
+			if err := a.Restore(cmd.Context(), stdio, o); err != nil {
+				log.Error().Err(err).Msg("restore failed")
+				return reported(err)
+			}
+			return nil
+		},
+	}
+	restoreFlags(cmd, &o)
+	return cmd
+}
+
+func restoreFlags(cmd *cobra.Command, o *app.RestoreOptions) {
+	fl := cmd.Flags()
+	fl.StringVar(&o.Target, "target", "", "restore below this directory")
+	fl.BoolVar(&o.InPlace, "in-place", false,
+		"restore to the original paths (the same as --target /)")
+	fl.BoolVar(&o.Apply, "apply", false, "write the files (default: dry run)")
+	fl.StringArrayVar(&o.Include, "include", nil, "restore only files matching a pattern")
+	fl.StringArrayVar(&o.IInclude, "iinclude", nil, "like --include, ignoring case")
+	fl.StringArrayVar(&o.Exclude, "exclude", nil, "skip files matching a pattern")
+	fl.StringArrayVar(&o.IExclude, "iexclude", nil, "like --exclude, ignoring case")
+	fl.StringVar(&o.Overwrite, "overwrite", "",
+		"overwrite existing files: always (restic's default), if-changed, if-newer or never")
+	fl.BoolVar(&o.Verify, "verify", false, "read the restored files back")
+}
+
+// reported returns err when it carries an exit code (main exits with it), else
+// errReported: the caller logged err already.
+func reported(err error) error {
+	var exit interface{ ExitCode() int }
+	if errors.As(err, &exit) && exit.ExitCode() > 0 {
+		return err
+	}
+	return errReported
 }
 
 func newResticCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {

@@ -1,10 +1,12 @@
 package restic
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRepository_Args(t *testing.T) {
@@ -63,4 +65,52 @@ func TestSnapshotsFlags_Args(t *testing.T) {
 	assert.Equal(t, []string{"--tag=db", "--tag=web"},
 		SnapshotsFlags{Tags: []string{"db", "web"}}.Args())
 	assert.Empty(t, SnapshotsFlags{}.Args())
+}
+
+func TestRestoreFlags_Args(t *testing.T) {
+	t.Parallel()
+	f := RestoreFlags{
+		Snapshot: "1a2b3c4d", Target: "/tmp/r", DryRun: true, Include: []string{"/srv/a"},
+		IInclude: []string{"*.DB"}, Exclude: []string{"-weird"}, IExclude: []string{"*.LOG"},
+		Overwrite: "if-newer", Verify: true,
+	}
+	assert.Equal(t, []string{
+		"--target=/tmp/r", "--dry-run", "--verbose=2", "--include=/srv/a", "--iinclude=*.DB",
+		"--exclude=-weird", "--iexclude=*.LOG", "--overwrite=if-newer", "--verify", "--",
+		"1a2b3c4d",
+	}, f.Args())
+	assert.Equal(t, []string{"--target=/", "--", "1a2b3c4d"},
+		RestoreFlags{Snapshot: "1a2b3c4d", Target: "/"}.Args())
+}
+
+func TestRestoreFlags_Validate(t *testing.T) {
+	t.Parallel()
+	valid := RestoreFlags{Snapshot: "1a2b3c4d", Target: "/"}
+	tests := []struct {
+		name   string
+		change func(*RestoreFlags)
+		want   string
+	}{
+		{"latest", func(f *RestoreFlags) { f.Snapshot = "latest" }, `"latest" is not a snapshot`},
+		{"short", func(f *RestoreFlags) { f.Snapshot = "1a2b3c" }, "not a snapshot ID"},
+		{"upper case", func(f *RestoreFlags) { f.Snapshot = "1A2B3C4D" }, "not a snapshot ID"},
+		{"flag", func(f *RestoreFlags) { f.Snapshot = "--help" }, "not a snapshot ID"},
+		{"target", func(f *RestoreFlags) { f.Target = "" }, "no target directory"},
+		{"overwrite", func(f *RestoreFlags) { f.Overwrite = "yes" }, `overwrite "yes"`},
+		{"pattern", func(f *RestoreFlags) { f.Exclude = []string{""} }, "empty include"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := valid
+			tt.change(&f)
+			err := f.Validate()
+			require.ErrorIs(t, err, ErrRestore)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+	require.NoError(t, valid.Validate())
+	full := valid
+	full.Snapshot, full.Overwrite = strings.Repeat("ab", 32), "never"
+	require.NoError(t, full.Validate(), "a full ID")
 }

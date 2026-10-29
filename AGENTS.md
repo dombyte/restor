@@ -121,11 +121,13 @@ make build                                                # ./restor with versio
 ## 3. Project Structure
 
 ```
-cmd/main.go                main package: cobra commands (run, validate, restic, version),
-                           logger, signal context, shutdown deadline, exit code, build info
+cmd/main.go                main package: cobra commands (run, validate, snapshots, restore,
+                           restic, version), logger, signal context, shutdown deadline,
+                           exit code, build info
 internal/app/              composition root: config Plan → Settings, CreateServiceManager,
                            restic flags, wiring, restic version check, startup warnings,
-                           Describe (validate) and the restic passthrough
+                           Describe (validate), snapshots, restore and the restic
+                           passthrough
 internal/config/           YAML file (version 2) decoded strictly, ${VAR} expansion, paths,
                            repository env file, defaults → validated read-only Plan
 internal/backup/           orchestration: Manager (schedule, per-job run, hooks,
@@ -239,7 +241,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 2. `app.New`: `config.Load` (file, expansion, paths, env file, defaults, validation),
    `Plan.Select` for the named jobs, and wiring. Any error ends the run (exit 1); an
    invalid config is logged one line per problem.
-3. `App.Run`: `restic version` must succeed and be at least the oldest supported release
+3. `App.Run`: a config without jobs fails here (`app.ErrNoJobs`; it is valid for the
+   commands that only need the repository); `restic version` must succeed and be at least the oldest supported release
    (`restic.Supported`), before any service is stopped; a release newer than the newest
    tested one is logged as a warning and runs.
 4. `Manager.Run`: run the jobs as the schedule allows; when the run was not cancelled:
@@ -247,8 +250,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
    `repository.prune` and only when every job has a complete snapshot, one prune + unlock
    (only if at least one job forgot). Then the run-level post hook, and the run-level
    on_failure hook when a job, forget, prune or unlock failed.
-5. Exit code: 0 when every job backed up; 1 when config failed, restic is missing or too
-   old, any job failed or the run was cancelled. Forget, prune, unlock and hook failures
+5. Exit code: 0 when every job backed up; 1 when config failed, there are no jobs,
+   restic is missing or too old, any job failed or the run was cancelled. Forget, prune, unlock and hook failures
    are logged but do **not** change the exit code; after a failed or incomplete job only
    its forget, prune and unlock are skipped (warnings), and a cancelled run does no
    maintenance. `restor restic` exits with restic's exit code.
@@ -341,8 +344,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   **never expanded**. Service managers and hooks get only the process env (hooks plus
   their `RESTOR_*` variables).
 - Validation (all problems at once, with field paths): `version` is 2; `concurrency` ≥ 0;
-  at least one job; job names and tags are not empty, do not start with `-` and contain
-  no `,` or whitespace (they are restic tags, and restic splits `--tag` on commas);
+  `jobs` may be empty; job names and tags are not empty, do not start with `-` and
+  contain no `,` or whitespace (they are restic tags, and restic splits `--tag` on commas);
   `type` is `docker-compose`, `podman-compose`, `systemd` or absent; `compose_file` for
   the compose types, `units` for systemd, `scope` is `system` or `user`, `services` of a
   systemd job are among its `units`; keys of another type are errors (`units` on a compose
@@ -372,10 +375,23 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   start with concurrency 1 (`Manager.Order`), with type, after, stop, a keep label and
   sources, and below them each distinct retention policy once with its label (A, B, … in
   order of first use; `-` = never forgotten) and its jobs; never the repository URL (it
-  may hold credentials).
+  may hold credentials). Without jobs it says so instead of the tables.
 - `restor snapshots [job...]`: `restic <repository global flags> snapshots --tag=<job>…`
   for all or the named jobs (`Plan.Select`, so unknown names are an error), attached to
   the terminal like `restor restic`; other snapshot options go through `restor restic`.
+  `--all` (not with job names) and a config without jobs list every snapshot, without a
+  `--tag` filter, so the series of renamed or removed jobs can be found.
+- `restor restore <snapshot-ID> (--target <dir> | --in-place) [--apply]`: checks the
+  restic version, then runs `restic <global> restore --target=… [--dry-run --verbose=2]
+  [--include=… --iinclude=… --exclude=… --iexclude=… --overwrite=… --verify] -- <ID>`
+  (`restic.RestoreFlags`), attached to the terminal; exit code is restic's. A dry run
+  unless `--apply`; `--in-place` is `--target=/` (kept as its own flag because
+  `--target <original dir>` nests the paths); exactly one of them
+  (`app.ErrRestoreTarget`). The ID must be 8–64 lowercase hex characters, so `latest`
+  (any job, any host) is refused (`restic.ErrRestore`). Files only: no services, locks
+  or hooks, and no job config (a repository-only file works). Logs one info line before
+  and one after (`snapshot`, `target`, `dry_run`). `--delete` is left out on purpose
+  until an integration test shows that it stays inside the snapshot's paths in place.
 - `restor restic <args>`: `restic <repository global flags> <args>` with the restic
   environment, attached to the terminal (`command.Runner.Attach`); restor's flags must
   come before the first restic argument (`SetInterspersed(false)`).
@@ -739,11 +755,14 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
   no real clock and no sleeps: a fake command runner, a fake `Clock`, mocks, `t.TempDir()`
   for lock files. Tests that need real tools are integration tests behind
   `//go:build integration` and are not part of `go test ./...`.
+- `cmd/integration_test.go` drives the CLI end to end (`run`, `validate`, `snapshots`
+  with jobs, `--all` and without jobs, `restore` dry run, `--target`, `--in-place`,
+  `--target /`, the `restic` passthrough) against a local repository.
 - `internal/app/integration_test.go` runs the restic on `PATH` against local repositories
   (`make integration`; `make integration-oldest` with the oldest supported release, which
   CI tests too): one subtest per restic feature restor uses (every backup, forget,
-  global and prune flag, skip-if-unchanged, exit codes 3/10/11/12, a whole `restor run`),
-  so a failing release shows what it lacks. A new restic option gets a check there.
+  global and prune flag, skip-if-unchanged, exit codes 3/10/11/12, a whole `restor run`,
+  `restor restore`), so a failing release shows what it lacks. A new restic option gets a check there.
   Backups that must be unchanged use `testdata/static` and are retried
   (`unchangedWithin`): restic also records the directories above a source, those of a
   temp dir change while other tests run, and even the home directory can change.

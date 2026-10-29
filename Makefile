@@ -32,7 +32,7 @@ check:
 # Integration tests against the restic on PATH (not part of check: they need restic).
 .PHONY: integration
 integration:
-	go test -tags integration -race -count=1 -run TestIntegration ./internal/app
+	go test -tags integration -race -count=1 -run TestIntegration ./internal/app ./cmd
 
 # The same against the oldest restic restor supports (minSupported in
 # internal/restic/version.go), downloaded once into the user's cache directory.

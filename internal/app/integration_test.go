@@ -115,6 +115,7 @@ func TestIntegration(t *testing.T) {
 	t.Run("missing source", testMissingSource)
 	t.Run("exit codes", testExitCodes)
 	t.Run("restor run", testRestorRun)
+	t.Run("restore", testRestore)
 }
 
 func testVersion(t *testing.T) {
@@ -398,7 +399,56 @@ jobs:
 	a, err := New(o)
 	require.NoError(t, err)
 	var out bytes.Buffer
-	require.NoError(t, a.Snapshots(context.Background(), Stdio{Out: &out, Err: &out}))
+	require.NoError(t, a.Snapshots(context.Background(), Stdio{Out: &out, Err: &out}, false))
 	assert.Contains(t, out.String(), r.snapshots(t, "b")[0].ShortID, "restor snapshots b")
 	assert.NotContains(t, out.String(), first[0].ShortID, "not the snapshots of a")
+}
+
+// testRestore restores through app.New and App.Restore with a configuration that has
+// only the repository: a dry run writes nothing, then --target with --include, then
+// --in-place with --verify, all by short ID.
+func testRestore(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	r := newRepo(t)
+	src := filepath.Join(r.dir, "src")
+	write(t, filepath.Join(src, "a.txt"), "a")
+	write(t, filepath.Join(src, "sub", "b.txt"), "b")
+	id, err := r.client(t, restic.Settings{}).Backup(ctx, "files", []string{src}, nil)
+	require.NoError(t, err)
+	path := filepath.Join(r.dir, "config.yaml")
+	write(t, path, "version: 2\nrepository: {url: "+filepath.Join(r.dir, "repo")+"}\n")
+	a, err := New(Options{
+		ConfigPath: path, Getenv: func(string) string { return "" }, Environ: r.env,
+		Log: zerolog.Nop(),
+	})
+	require.NoError(t, err)
+	restore := func(o RestoreOptions) string {
+		t.Helper()
+		o.Snapshot = id[:8]
+		var out bytes.Buffer
+		require.NoError(t, a.Restore(ctx, Stdio{Out: &out, Err: &out}, o), out.String())
+		return out.String()
+	}
+
+	target := filepath.Join(r.dir, "target")
+	out := restore(RestoreOptions{Target: target})
+	assert.NoDirExists(t, target, "a dry run writes nothing")
+	assert.Contains(t, out, filepath.Join(src, "a.txt"), "the dry run lists the files")
+
+	restore(RestoreOptions{
+		Target: target, Include: []string{filepath.Join(src, "sub")},
+		Apply: true,
+	})
+	assert.FileExists(t, filepath.Join(target, src, "sub", "b.txt"))
+	assert.NoFileExists(t, filepath.Join(target, src, "a.txt"), "not included")
+
+	write(t, filepath.Join(src, "a.txt"), "changed")
+	restore(RestoreOptions{InPlace: true, Include: []string{src}, Apply: true, Verify: true})
+	content, err := os.ReadFile(filepath.Join(src, "a.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "a", string(content), "restored in place")
+
+	err = a.Restore(ctx, Stdio{}, RestoreOptions{Snapshot: "latest", InPlace: true})
+	require.ErrorIs(t, err, restic.ErrRestore)
 }

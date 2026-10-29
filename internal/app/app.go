@@ -42,6 +42,12 @@ var (
 	// ErrResticVersion is returned by Run when restic is older than the oldest release
 	// restor supports.
 	ErrResticVersion = errors.New("app: restic is too old")
+	// ErrNoJobs is returned by Run for a configuration without jobs: it is valid for the
+	// commands that only need the repository, but has nothing to back up.
+	ErrNoJobs = errors.New("app: no jobs configured")
+	// ErrRestoreTarget is returned by Restore unless exactly one of Target and InPlace is
+	// set: restor never picks where a restore writes.
+	ErrRestoreTarget = errors.New("app: restore needs either --target <dir> or --in-place")
 )
 
 // Options are the inputs of New.
@@ -76,7 +82,6 @@ func New(o Options) (*App, error) {
 	if plan, err = plan.Select(o.Jobs); err != nil {
 		return nil, err
 	}
-	logJobs(o.Log, plan.Jobs)
 	resticEnv := resticEnv(o.Environ, plan.Repository)
 	warnConfig(o.Log, plan, resticEnv)
 	warnMissingBinaries(o.Log, plan.Jobs, exec.LookPath)
@@ -102,6 +107,10 @@ func New(o Options) (*App, error) {
 
 // Run checks the restic version, then runs one backup cycle.
 func (a *App) Run(ctx context.Context) error {
+	if len(a.plan.Jobs) == 0 {
+		return ErrNoJobs
+	}
+	logJobs(a.log, a.plan.Jobs)
 	if err := a.checkRestic(ctx); err != nil {
 		return err
 	}
@@ -146,15 +155,80 @@ func (a *App) Restic(ctx context.Context, stdio Stdio, args []string) error {
 
 // Snapshots lists the snapshots of the selected jobs (all jobs when none were named),
 // connected to stdio: `restor snapshots web` is `restor restic snapshots --tag=web` with
-// the job name checked against the configuration.
-func (a *App) Snapshots(ctx context.Context, stdio Stdio) error {
-	tags := make([]string, 0, len(a.plan.Jobs))
-	for _, j := range a.plan.Jobs {
-		tags = append(tags, j.Name)
+// the job name checked against the configuration. With all, or without jobs, it lists
+// every snapshot of the repository, also those of renamed or removed jobs.
+func (a *App) Snapshots(ctx context.Context, stdio Stdio, all bool) error {
+	var tags []string
+	if !all {
+		for _, j := range a.plan.Jobs {
+			tags = append(tags, j.Name)
+		}
 	}
 	args := slices.Concat(resticSettings(a.plan.Repository).GlobalArgs, []string{"snapshots"},
 		restic.SnapshotsFlags{Tags: tags}.Args())
 	return a.resticRunner.Attach(ctx, stdio, "restic", args...)
+}
+
+// RestoreOptions are the options of Restore.
+type RestoreOptions struct {
+	// Snapshot is the ID of the restored snapshot (the short ID works).
+	Snapshot string
+	// Target restores below this directory; InPlace restores to the original paths.
+	// Exactly one of them is set.
+	Target  string
+	InPlace bool
+	// Apply writes the files; without it, restic only lists what it would do.
+	Apply bool
+	// Include, IInclude, Exclude and IExclude select the restored files by pattern.
+	Include, IInclude, Exclude, IExclude []string
+	// Overwrite is always, if-changed, if-newer or never; empty keeps restic's default.
+	Overwrite string
+	// Verify reads the restored files back.
+	Verify bool
+}
+
+// Restore runs restic restore for one snapshot, connected to stdio so that restic shows
+// its progress. It is a dry run unless o.Apply is set. It only restores files: stopping
+// the services that use them is left to the user.
+func (a *App) Restore(ctx context.Context, stdio Stdio, o RestoreOptions) error {
+	flags, err := restoreFlags(o)
+	if err != nil {
+		return err
+	}
+	if err := a.checkRestic(ctx); err != nil {
+		return err
+	}
+	log := a.log.With().Str("snapshot", o.Snapshot).Str("target", flags.Target).
+		Bool("dry_run", flags.DryRun).Logger()
+	log.Info().Msg("restoring snapshot")
+	args := slices.Concat(resticSettings(a.plan.Repository).GlobalArgs, []string{"restore"},
+		flags.Args())
+	if err := a.resticRunner.Attach(ctx, stdio, "restic", args...); err != nil {
+		return err
+	}
+	if flags.DryRun {
+		log.Info().Msg("dry run completed, nothing was written; pass --apply to restore")
+		return nil
+	}
+	log.Info().Msg("restore completed")
+	return nil
+}
+
+// restoreFlags maps o onto the restic restore flags and validates them.
+func restoreFlags(o RestoreOptions) (restic.RestoreFlags, error) {
+	if (o.Target == "") == !o.InPlace {
+		return restic.RestoreFlags{}, ErrRestoreTarget
+	}
+	target := o.Target
+	if o.InPlace {
+		target = "/" // restic restores the snapshot's absolute paths below the target
+	}
+	f := restic.RestoreFlags{
+		Snapshot: o.Snapshot, Target: target, DryRun: !o.Apply, Include: o.Include,
+		IInclude: o.IInclude, Exclude: o.Exclude, IExclude: o.IExclude,
+		Overwrite: o.Overwrite, Verify: o.Verify,
+	}
+	return f, f.Validate()
 }
 
 // Describe writes the validated plan to w: the jobs in the order they start with
@@ -167,6 +241,10 @@ func (a *App) Describe(w io.Writer) error {
 	tw := tabwriter.NewWriter(w, 0, 0, columnPadding, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "concurrency:\t%d (0 = all at once)\n", a.plan.Concurrency)
 	_, _ = fmt.Fprintf(tw, "prune:\t%t\n", a.plan.Repository.Prune)
+	if len(jobs) == 0 {
+		_, _ = fmt.Fprintln(tw, "\nno jobs configured: restor run has nothing to back up")
+		return tw.Flush()
+	}
 	_, _ = fmt.Fprintln(tw, "\nJOB\tTYPE\tAFTER\tSTOP\tSTART ALL\tKEEP\tSOURCES")
 	for _, j := range jobs {
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%t\t%t\t%s\t%s\n", j.Name, or(j.Type, "files"),

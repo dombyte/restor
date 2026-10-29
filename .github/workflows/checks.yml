@@ -121,4 +121,4 @@ jobs:
           echo "$RUNNER_TEMP/restic" >> "$GITHUB_PATH"
 
       - name: Integration tests
-        run: restic version && go test -tags integration -race -count=1 -run TestIntegration ./internal/app
+        run: restic version && go test -tags integration -race -count=1 -run TestIntegration ./internal/app ./cmd

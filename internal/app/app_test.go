@@ -65,6 +65,18 @@ func TestNew_Errors(t *testing.T) {
 	require.ErrorIs(t, err, config.ErrUnknownJob)
 }
 
+func TestNew_RepositoryOnly(t *testing.T) {
+	t.Parallel()
+	a, err := New(options(writeConfig(t, "version: 2\nrepository: {url: /repo}\n")))
+	require.NoError(t, err)
+
+	require.ErrorIs(t, a.Run(context.Background()), ErrNoJobs, "before restic runs")
+	var out bytes.Buffer
+	require.NoError(t, a.Describe(&out))
+	assert.Contains(t, out.String(), "no jobs configured")
+	assert.NotContains(t, out.String(), "KEEP")
+}
+
 func TestLockDir_UsesRuntimeDir(t *testing.T) {
 	t.Parallel()
 	if os.Getuid() == 0 {
