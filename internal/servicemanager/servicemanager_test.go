@@ -27,7 +27,7 @@ func TestConstructors_MissingDependencies(t *testing.T) {
 		new  func() error
 	}{
 		{name: "compose without deps", new: func() error {
-			_, err := NewCompose(ComposeSettings{Binary: "docker", File: "f"}, Deps{})
+			_, err := NewCompose(ComposeSettings{Binary: "docker", Files: []string{"f"}}, Deps{})
 			return err
 		}},
 		{name: "compose without file", new: func() error {

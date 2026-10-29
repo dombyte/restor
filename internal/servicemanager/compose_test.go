@@ -18,7 +18,7 @@ const composeFile = "/srv/app/compose.yml"
 func newCompose(t *testing.T) (*Compose, *mocks.MockRunner) {
 	t.Helper()
 	d, r, _ := newDeps(t)
-	c, err := NewCompose(ComposeSettings{Binary: "podman", File: composeFile}, d)
+	c, err := NewCompose(ComposeSettings{Binary: "podman", Files: []string{composeFile}}, d)
 	require.NoError(t, err)
 	return c, r
 }
@@ -33,6 +33,22 @@ func TestCompose_LockKeys(t *testing.T) {
 	t.Parallel()
 	c, _ := newCompose(t)
 	assert.Equal(t, []string{composeFile}, c.LockKeys())
+}
+
+func TestCompose_OverrideFiles(t *testing.T) {
+	t.Parallel()
+	d, r, _ := newDeps(t)
+	files := []string{composeFile, "/srv/app/compose.override.yml"}
+	c, err := NewCompose(ComposeSettings{Binary: "docker", Files: files}, d)
+	require.NoError(t, err)
+	r.On("Run", mock.Anything, "docker", "compose", "-f", files[0], "-f", files[1],
+		"config", "--services").Return([]byte("web\nextra\n"), nil).Once()
+
+	got, err := c.All(context.Background(), nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"web", "extra"}, got, "services of the override too")
+	assert.Equal(t, []string{composeFile}, c.LockKeys(), "the project's file only")
 }
 
 func TestCompose_Running(t *testing.T) {

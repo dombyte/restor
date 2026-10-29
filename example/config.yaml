@@ -164,7 +164,8 @@ defaults:
 #   plus every key of the defaults section.
 #
 # docker-compose / podman-compose:
-#   compose_file: the compose file (required)
+#   compose_file: the compose file (required); with a default name (compose.yaml, …) its
+#                 override file (compose.override.yml, …) is used too, as Compose does
 #   services:     services to stop; default: every service of the compose file
 # systemd:
 #   units:        units to stop (required)
