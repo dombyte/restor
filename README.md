@@ -200,7 +200,10 @@ compose file or a systemd unit never run at the same time. `restor validate` pri
 resulting order.
 
 **Services:** only the services that are running when a job's backup starts are stopped,
-and only those are started again afterwards, also when the backup failed. With
+and only those are started again afterwards, also when the backup failed. When none of
+them runs, restor warns and backs up anyway: check `compose_file` or `units` if the
+services should have been running (a project started with `-p` or from other compose
+files is not found). With
 `start_all: true` the backup also starts the job's other services (`services`, or all of
 the compose file / all `units`), so a service that was down comes back up; a failed start
 of those is only a warning and does not fail the job. `start_all` works with `stop: false`

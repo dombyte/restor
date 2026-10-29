@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -315,6 +316,26 @@ func TestRunJob_NoServices(t *testing.T) {
 
 	require.NoError(t, errOf(f.manager(t, Settings{}).runJob(context.Background(), p)))
 	assert.Equal(t, []string{"lock noop", "backup files", "release noop"}, f.rec.list())
+}
+
+func TestRunJob_NoServicesRunningWarns(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	svc := f.services(t, "key") // a job that stops services, none of them running
+	f.expectLock("key")
+	f.expectBackup("web", nil)
+	p := job("web", svc)
+	p.Settings.Pre, p.Settings.Post = "", ""
+	var logs bytes.Buffer
+	m, err := NewManager(Settings{}, []Job{p}, Deps{
+		Restic: f.restic, Locker: f.locker, Hooks: f.hooks, Log: zerolog.New(&logs),
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, errOf(m.runJob(context.Background(), p)))
+	assert.Contains(t, logs.String(), `"level":"warn","job":"web",`+
+		`"message":"no services running, nothing to stop; backing up anyway"`,
+		"a hot backup must show up in the default log")
 }
 
 func TestRunJob_RestartsOnlyRunningServices(t *testing.T) {

@@ -240,7 +240,9 @@ func (m *Manager) stopServices(ctx context.Context, j Job, log zerolog.Logger) (
 		return nil, err
 	}
 	if len(services) == 0 {
-		log.Debug().Msg("no services running, nothing to stop")
+		// Usually a service that is down, but also what a wrong compose project (started
+		// with -p, or from other compose files) looks like: the backup runs on live data.
+		log.Warn().Msg("no services running, nothing to stop; backing up anyway")
 		return nil, nil
 	}
 	log.Info().Strs("services", services).Msg("stopping services")
