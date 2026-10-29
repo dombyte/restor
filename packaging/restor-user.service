@@ -7,9 +7,10 @@ Description=Restic Backup Orchestrator
 # run a backup, which stops services, at every login.
 Type=oneshot
 ExecStart=/usr/bin/restor run --config %h/.config/restor/config.yaml
-# On stop, restor restarts the services it stopped and exits within its shutdown timeout
-# (logged as shutdown_timeout: the largest start_timeout + 4 minutes); give it longer than
-# that before systemd kills it. 900 s covers a start_timeout up to 11 minutes.
+# On stop, restor restarts the services it stopped, runs the jobs' post hooks and exits
+# within its shutdown timeout (logged as shutdown_timeout: the largest start_timeout + 4
+# minutes, + 1 minute for a post hook); give it longer than that before systemd kills it.
+# 900 s covers a start_timeout up to 10 minutes.
 TimeoutStopSec=900
 # Back up at a lower CPU and I/O priority than the services (best-effort, not idle: an
 # idle backup could starve under load while the services are stopped).

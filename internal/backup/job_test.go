@@ -420,7 +420,7 @@ func TestRunJob_StartAllSkippedAfterCancel(t *testing.T) {
 	f.expectStart(svc, true, nil) // only the stopped service; All is never called
 	p := job("web", svc)
 	p.Settings.StartAll = true
-	p.Settings.Pre = ""
+	p.Settings.Pre, p.Settings.Post = "", ""
 
 	err := errOf(f.manager(t, Settings{}).runJob(ctx, p))
 
@@ -487,12 +487,19 @@ func TestRunJob_RestartAfterCancel(t *testing.T) {
 		RunAndReturn(func(ctx context.Context, _ []string, _ time.Duration) (bool, error) {
 			return ctx.Err() == nil, ctx.Err()
 		})
+	f.hooks.EXPECT().RunEnv(mock.Anything, mock.Anything, "post", "arg").
+		RunAndReturn(func(ctx context.Context, _ []string, _ string, _ ...string) ([]byte, error) {
+			f.rec.add("hook post")
+			return nil, ctx.Err()
+		}).Once()
 	p := job("web", svc)
-	p.Settings.Pre = ""
+	p.Settings.Pre, p.Settings.OnFailure = "", "/bin/job-failed"
 
 	err := errOf(f.manager(t, Settings{}).runJob(ctx, p))
 
 	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, []string{"lock key", "stop", "hook post", "release key"}, f.rec.list(),
+		"the post hook undoes the pre hook, also after a cancel; on_failure is skipped")
 }
 
 func TestRunJob_LocksEveryKey(t *testing.T) {

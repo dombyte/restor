@@ -17,6 +17,11 @@ import (
 // query of at most 30 s), so a slow start ends with a warning, not a cancelled restart.
 const restartGrace = 3 * time.Minute
 
+// postHookGrace bounds the post hook of a job after the run was cancelled: it still runs,
+// to undo what the pre hook did (e.g. a maintenance mode), but must not hold up the
+// shutdown for long.
+const postHookGrace = time.Minute
+
 // Values of RESTOR_HOOK in the hook environment.
 const (
 	hookPre       = "pre"
@@ -172,14 +177,18 @@ func (m *Manager) backupWithServices(ctx context.Context, j Job, log zerolog.Log
 }
 
 // jobHook runs the post or on_failure hook of s with the job's result in its
-// environment; a failure is logged and does not change the result. After a cancel it is
-// skipped: like every hook, it is bound to the run context.
+// environment; a failure is logged and does not change the result. The post hook undoes
+// the pre hook, so it also runs after a cancel, for at most postHookGrace; the on_failure
+// hook is skipped then, like the run-level hooks.
 func (m *Manager) jobHook(ctx context.Context, s JobSettings, kind string, r result,
 	log zerolog.Logger,
 ) {
-	command := s.Post
-	if kind == hookOnFailure {
-		command = s.OnFailure
+	command := s.OnFailure
+	if kind == hookPost {
+		command = s.Post
+		var cancel context.CancelFunc
+		ctx, cancel = graceContext(ctx, postHookGrace)
+		defer cancel()
 	}
 	if strings.TrimSpace(command) == "" {
 		return
@@ -191,6 +200,16 @@ func (m *Manager) jobHook(ctx context.Context, s JobSettings, kind string, r res
 	if err := m.hook(ctx, command, hookEnv(kind, s.Name, r)); err != nil {
 		log.Error().Err(err).Str("hook", kind).Msg("hook failed")
 	}
+}
+
+// graceContext returns a context that ends grace after ctx ends instead of with it, for
+// work that undoes what a job did and must still run after a cancel.
+func graceContext(ctx context.Context, grace time.Duration) (context.Context,
+	context.CancelFunc,
+) {
+	graced, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	stop := context.AfterFunc(ctx, func() { time.AfterFunc(grace, cancel) })
+	return graced, func() { stop(); cancel() }
 }
 
 // hookEnv returns the RESTOR_* variables of a job hook. The pre hook gets only the job
