@@ -222,11 +222,11 @@ restor itself has no data store. What it writes, and who writes it:
   member backing up the same compose file).
 - **Services:** a job stops and restarts only those of its services (`services`, or all
   services of its compose file / its `units` when the list is empty) that are running when
-  its backup starts. Services that were already stopped, and one-shot jobs that have
-  exited, stay as they were, unless the job sets `start_all`: then, after the restart,
-  the job also starts the services it did not stop (`Services.All` minus the stopped
-  ones; `start` leaves running ones as they are), also with `stop: false`, but not after
-  a cancel.
+  its backup starts (none running is a warning: a wrong compose project looks the same).
+  Services that were already stopped, and one-shot jobs that have exited, stay as they
+  were, unless the job sets `start_all`: then, after the restart, the job also starts the
+  services it did not stop (`Services.All` minus the stopped ones; `start` leaves running
+  ones as they are), also with `stop: false`, but not after a cancel.
 
 ## 6. Lifecycle
 
@@ -690,7 +690,8 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
 - Levels: `debug` for command lines, the last output lines of successful commands and
   per-step detail, `info` for lifecycle (run start,
   job done, snapshot ID), `warn` for recovered problems (services not stopped/started
-  in time, stop command failed, missing binary, suspicious config), `error` for failures
+  in time, stop command failed, no running service to stop, missing binary, suspicious
+  config), `error` for failures
   that need attention (job failed, forget/prune/unlock failed, a hook
   failed).
 - Never log secrets: no restic password, S3 keys, env file contents or repository URLs
