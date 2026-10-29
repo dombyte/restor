@@ -13,8 +13,8 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
   (`keep`) with a single prune for the whole repository
 - Hooks before and after each job and on failure, with the job's result in their
   environment
-- `restor restic ...` runs restic against the configured repository, for restores and
-  everything else
+- `restor restore` restores a snapshot, as a dry run unless `--apply` is given
+- `restor restic ...` runs restic against the configured repository, for everything else
 
 ## Installation
 
@@ -87,8 +87,9 @@ restor validate                 # check the config, print the jobs in start orde
 restor snapshots                # list the snapshots of every job
 restor snapshots web            # of this job only (restic snapshots --tag=web)
 restor snapshots --all          # every snapshot, also of renamed or removed jobs
+restor restore 1a2b3c4d --target /tmp/restore          # dry run: list what it would do
+restor restore 1a2b3c4d --target /tmp/restore --apply  # restore below /tmp/restore
 restor restic snapshots         # run restic with the configured repository and env file
-restor restic restore latest --tag web --target /tmp/restore
 restor version
 ```
 
@@ -103,8 +104,8 @@ journal: `journalctl -u restor` (or `journalctl --user -u restor`).
 failed or the run was cancelled. A failed forget or prune is logged and runs the
 top-level `on_failure` hook; a failed `post` or `on_failure` hook is only logged. Neither
 changes the exit code. Before anything is stopped, it checks
-that `restic` is installed and supported (see below). `restor snapshots` and
-`restor restic` exit with restic's exit code.
+that `restic` is installed and supported (see below). `restor snapshots`,
+`restor restore` and `restor restic` exit with restic's exit code.
 
 On SIGINT/SIGTERM restor stops the running backups, restarts the services it stopped,
 starts no further job and exits within its shutdown timeout (the largest `start_timeout`
@@ -149,8 +150,8 @@ environment; `$$` is a literal `$`. Relative `env_file`, `compose_file`, `source
 `exclude_file` paths are resolved against the directory of the config file; `~` is not
 expanded (use `$HOME`). YAML anchors and merge keys work: keep shared blocks under a
 top-level key starting with `x-` and merge them with `<<: *name`. A file with only
-`version` and `repository` is valid: `restor snapshots` and `restor restic` work with
-it, for example on a new host whose real configuration is still
+`version` and `repository` is valid: `restor snapshots`, `restor restore` and
+`restor restic` work with it, for example on a new host whose real configuration is still
 in the backup; `restor run` then fails with "no jobs configured".
 
 **Repository:** `url` (or `RESTIC_REPOSITORY`/`RESTIC_REPOSITORY_FILE` in the env file),
@@ -279,6 +280,35 @@ group, also when its `sources` or `tags` change. With `repository.prune`, one `p
 failed, or whose snapshot is incomplete (restic could not read some files), keeps its
 history and prune waits for a better run. A run that `skip_if_unchanged` skipped counts as
 complete.
+
+## Restore
+
+`restor restore <snapshot-ID>` restores one snapshot with `restic restore`. Find the ID
+with `restor snapshots` (or `--all`), or in the log line of the backup that made it; the
+8-character short ID works. `latest` is refused: in a shared repository it is the newest
+snapshot of any job and host.
+
+```bash
+restor restore 1a2b3c4d --target /tmp/restore            # dry run, lists every file
+restor restore 1a2b3c4d --target /tmp/restore --apply    # /tmp/restore/<original path>
+restor restore 1a2b3c4d --in-place --include /srv/app/db --apply
+```
+
+- **Dry run by default:** without `--apply` restic only lists what it would restore;
+  nothing is written.
+- **Where:** exactly one of `--target <dir>` and `--in-place` is required. `--target`
+  restores the snapshot's absolute paths below `dir`: `--target /srv/app/db` writes
+  `/srv/app/db/srv/app/db/…`, not into the original place. `--in-place` restores to the
+  original paths; it is the same as `--target /`.
+- **Which files:** `--include`, `--iinclude`, `--exclude`, `--iexclude` (patterns, as in
+  restic); `--overwrite` `always` (restic's default), `if-changed`, `if-newer` or `never`;
+  `--verify` reads the restored files back.
+- **Files only:** restore does not stop or start services, take job locks or run hooks.
+  Before an in-place restore, stop the services that use the files and `restor.timer`
+  (`systemctl stop restor.timer`), so that no backup runs meanwhile.
+- Only the repository part of the configuration is needed, so it works on a new host with
+  a file that has `version` and `repository` only. Ownership is restored only when run
+  as root.
 
 ## Upgrading from configuration version 1
 

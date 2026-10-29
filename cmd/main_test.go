@@ -179,6 +179,68 @@ func TestRun_Snapshots(t *testing.T) {
 	assert.Equal(t, "snapshots /repo\n", stdout.String(), "without jobs: every snapshot")
 }
 
+// TestRun_Restore is not parallel: it sets PATH.
+func TestRun_Restore(t *testing.T) {
+	dir := t.TempDir()
+	// A fake restic: a supported version, then the arguments and the repository; exit 3
+	// for a snapshot named ffffffff.
+	script := "#!/bin/sh\nif [ \"$1\" = version ]; then echo restic 0.17.1; exit 0; fi\n" +
+		"echo \"$@\" \"$RESTIC_REPOSITORY\"\n" +
+		"case \"$*\" in *ffffffff*) exit 3;; esac\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "restic"), []byte(script), 0o700))
+	t.Setenv("PATH", dir)
+	path := writeConfig(t, "version: 2\nrepository: {url: /repo, limit_upload: 5}\n")
+	tests := []struct {
+		name   string
+		args   []string
+		code   int
+		stdout string
+		stderr string
+	}{
+		{
+			name: "dry run by default", args: []string{"1a2b3c4d", "--target", "/tmp/r"},
+			stdout: "--limit-upload=5 restore --target=/tmp/r --dry-run --verbose=2 -- " +
+				"1a2b3c4d /repo\n",
+			stderr: "nothing was written; pass --apply to restore",
+		},
+		{
+			name: "in place", args: []string{
+				"1a2b3c4d", "--in-place", "--apply",
+				"--include", "/srv/db", "--overwrite", "if-newer", "--verify",
+			},
+			stdout: "--limit-upload=5 restore --target=/ --include=/srv/db " +
+				"--overwrite=if-newer --verify -- 1a2b3c4d /repo\n",
+			stderr: "restore completed",
+		},
+		{
+			name: "no target", args: []string{"1a2b3c4d"}, code: 1,
+			stderr: "either --target <dir> or --in-place",
+		},
+		{
+			name: "both targets", args: []string{"1a2b3c4d", "--target", "/t", "--in-place"},
+			code: 1, stderr: "either --target <dir> or --in-place",
+		},
+		{
+			name: "latest", args: []string{"latest", "--in-place"}, code: 1,
+			stderr: "is not a snapshot ID",
+		},
+		{
+			name: "restic's exit code", args: []string{"ffffffff", "--in-place"}, code: 3,
+			stdout: "--limit-upload=5 restore --target=/ --dry-run --verbose=2 -- " +
+				"ffffffff /repo\n",
+			stderr: "restore failed",
+		},
+	}
+	for _, tt := range tests {
+		var stdout, stderr bytes.Buffer
+		args := append([]string{"restore", "-c", path}, tt.args...)
+
+		assert.Equal(t, tt.code, run(args, &stdout, &stderr), tt.name)
+		assert.Equal(t, tt.stdout, stdout.String(), tt.name)
+		assert.Contains(t, stderr.String(), tt.stderr, tt.name)
+	}
+}
+
 // TestRun_UserDefaultConfig is not parallel: it sets XDG_CONFIG_HOME.
 func TestRun_UserDefaultConfig(t *testing.T) {
 	if os.Getuid() == 0 {
