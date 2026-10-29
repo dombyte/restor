@@ -284,14 +284,15 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   further job starts, waits end early. (`restor restic` stays in the terminal's process
   group, so Ctrl-C reaches restic directly.)
 - A job that stopped its services restarts them with its own context
-  (`context.WithoutCancel`, bounded by `start_timeout` + 3 min).
+  (`context.WithoutCancel`, bounded by `start_timeout` + 3 min), then runs its post hook,
+  which may undo the pre hook, for at most 1 min after the cancel (`graceContext`).
 - `main` waits at most `Manager.ShutdownTimeout` after the signal, then exits 1: 1 min
-  plus the largest `start_timeout` + 3 min of the jobs that stop services (only the jobs
-  running at the signal restart, at the same time, so the largest counts, not the sum;
-  logged as `shutdown_timeout` at the start of a run). The systemd units set
-  `TimeoutStopSec=900` so systemd does not kill restor while it restarts services; that
-  covers a `start_timeout` up to 11 min, a larger one needs a larger `TimeoutStopSec`. No
-  second-signal "force" mode: the deadline is the force.
+  plus, for the slowest job, `start_timeout` + 3 min when it stops services and 1 min
+  when it has a post hook (only the jobs running at the signal do that, at the same time,
+  so the slowest counts, not the sum; logged as `shutdown_timeout` at the start of a run).
+  The systemd units set `TimeoutStopSec=900` so systemd does not kill restor while it
+  restarts services; that covers a `start_timeout` up to 10 min, a larger one needs a
+  larger `TimeoutStopSec`. No second-signal "force" mode: the deadline is the force.
 - There is no in-process retry and no restart: systemd records the failed run, and the
   next timer run is the retry (`Persistent=true` catches up missed runs).
 
@@ -426,8 +427,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   (or there is none), also when the backup or the restart failed, so it can undo the pre
   hook. The job's on_failure hook runs after it when the job failed (also after a failed
   lock or pre hook). The run-level post runs once after maintenance, then the run-level
-  on_failure when a job, forget, prune or unlock failed. All are skipped after a cancel
-  (a warning); their own failures are logged only.
+  on_failure when a job, forget, prune or unlock failed. After a cancel the job's post
+  hook still runs (for at most 1 min), the others are skipped (a warning); their own
+  failures are logged only.
 
 ### Service managers
 - Compose: `<docker|podman> compose -f <file> …`; services from `config --services` when
@@ -561,7 +563,10 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `flock` locks still guard against a second restor process.
 - **Restart services even when the backup failed or the run was cancelled:** a failed
   backup must not leave production services down. `backup_timeout` exists for the same
-  reason: a hanging backup would otherwise keep them down until someone notices.
+  reason: a hanging backup would otherwise keep them down until someone notices. The
+  job's post hook runs after a cancel for the same reason (it may end a maintenance mode
+  the pre hook started), bounded so that a hanging hook cannot block the shutdown; the
+  notification hooks are skipped.
 - **Tag = lowercase job name:** keeps each job's retention separate in a shared
   repository; lowercase keeps the tags of snapshots made by earlier versions (viper
   lowercased the names). Renaming a job starts a new snapshot series (the old one is no

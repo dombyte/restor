@@ -108,9 +108,10 @@ that `restic` is installed and supported (see below). `restor snapshots`,
 `restor restore` and `restor restic` exit with restic's exit code.
 
 On SIGINT/SIGTERM restor stops the running backups, restarts the services it stopped,
-starts no further job and exits within its shutdown timeout (the largest `start_timeout`
-+ 4 minutes, logged as `shutdown_timeout`). The shipped units allow 900 s
-(`TimeoutStopSec`); raise it if a `start_timeout` is above 11 minutes.
+runs the `post` hook of those jobs, starts no further job and exits within its shutdown
+timeout (the largest `start_timeout` + 4 minutes, + 1 minute for a `post` hook, logged as
+`shutdown_timeout`). The shipped units allow 900 s (`TimeoutStopSec`); raise it if a
+`start_timeout` is above 10 minutes.
 
 ## Configuration
 
@@ -240,7 +241,8 @@ The top-level hooks get a summary of the whole run: `RESTOR_HOOK`, `RESTOR_STATU
 (`; `-separated). A top-level `post` is the place for one notification per run.
 
 A failing `post` or `on_failure` hook is logged and changes nothing. After a cancel
-(SIGTERM) the remaining hooks are skipped.
+(SIGTERM) a job's `post` hook still runs, for at most one minute, so that it can undo its
+`pre` hook (e.g. a maintenance mode); the other hooks are skipped.
 
 `example/hooks/` (in the release archives, and in `/usr/share/doc/restor/examples/hooks/`
 of the packages) has scripts to copy and adapt; each one explains its use at the top:

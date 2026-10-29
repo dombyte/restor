@@ -194,6 +194,19 @@ func TestManager_ShutdownTimeout(t *testing.T) {
 		"the largest start timeout counts, not the sum")
 }
 
+func TestManager_ShutdownTimeoutPostHook(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	hooked := fileJob(f, t, "hooked", "")
+	hooked.Settings.Post = "/bin/post"
+	files := fileJob(f, t, "files", "")
+	files.Settings.Post, files.Settings.StopServices = "/bin/post", false
+	m := f.manager(t, Settings{}, hooked, files)
+
+	assert.Equal(t, shutdownGrace+20*time.Second+restartGrace+postHookGrace,
+		m.ShutdownTimeout(), "the post hook runs after the restart")
+}
+
 func TestManager_RunOrder(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)

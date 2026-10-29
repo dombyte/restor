@@ -359,7 +359,8 @@ func waitForRun(ctx context.Context, done <-chan error, timeout time.Duration,
 	case <-ctx.Done():
 	}
 	log.Warn().Stringer("timeout", timeout).
-		Msg("shutdown requested, waiting for running jobs to restart their services")
+		Msg("shutdown requested, waiting for running jobs to restart their services " +
+			"and run their post hooks")
 	select {
 	case err := <-done:
 		return err

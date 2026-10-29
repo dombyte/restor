@@ -143,17 +143,22 @@ func (m *Manager) Run(ctx context.Context) error {
 }
 
 // ShutdownTimeout returns how long the run may take after its context was cancelled: the
-// running commands end, then each running job restarts the services it stopped. Only the
-// jobs running at the cancel restart (no further job starts), and they restart at the
-// same time, so the largest start timeout counts, not the sum.
+// running commands end, then each running job restarts the services it stopped and runs
+// its post hook. Only the jobs running at the cancel do that (no further job starts), and
+// they do it at the same time, so the slowest job counts, not the sum.
 func (m *Manager) ShutdownTimeout() time.Duration {
-	var restart time.Duration
+	var slowest time.Duration
 	for _, j := range m.jobs {
+		var d time.Duration
 		if j.Settings.StopServices {
-			restart = max(restart, j.Settings.StartTimeout+restartGrace)
+			d += j.Settings.StartTimeout + restartGrace
 		}
+		if strings.TrimSpace(j.Settings.Post) != "" {
+			d += postHookGrace
+		}
+		slowest = max(slowest, d)
 	}
-	return shutdownGrace + restart
+	return shutdownGrace + slowest
 }
 
 // Order returns the job names in the order they start with concurrency 1.
