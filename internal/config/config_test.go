@@ -172,7 +172,6 @@ projects:
 		"environments: unknown key (line 4): removed",
 		"global: unknown key (line 5): replaced by repository and defaults",
 		"projects: unknown key (line 6): renamed to jobs in configuration version 2",
-		"jobs: at least one job is required",
 	} {
 		assert.Contains(t, err.Error(), want)
 	}
@@ -347,6 +346,15 @@ func TestLoad_StartAll(t *testing.T) {
 	assert.True(t, plan.Jobs[0].StartsAll(), "from defaults")
 	assert.False(t, plan.Jobs[1].StartsAll(), "the job's own value replaces the default")
 	assert.False(t, plan.Jobs[2].StartsAll(), "a files-only job has no services")
+}
+
+func TestLoad_RepositoryOnly(t *testing.T) {
+	t.Parallel()
+	plan, err := load(t, "version: 2\nrepository: {url: /srv/repo}\n", nil)
+
+	require.NoError(t, err, "snapshots, restore and restic need no job")
+	assert.Empty(t, plan.Jobs)
+	assert.Equal(t, "/srv/repo", plan.Repository.URL)
 }
 
 func TestLoad_FileErrors(t *testing.T) {

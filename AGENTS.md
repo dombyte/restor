@@ -239,7 +239,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 2. `app.New`: `config.Load` (file, expansion, paths, env file, defaults, validation),
    `Plan.Select` for the named jobs, and wiring. Any error ends the run (exit 1); an
    invalid config is logged one line per problem.
-3. `App.Run`: `restic version` must succeed and be at least the oldest supported release
+3. `App.Run`: a config without jobs fails here (`app.ErrNoJobs`; it is valid for the
+   commands that only need the repository); `restic version` must succeed and be at least the oldest supported release
    (`restic.Supported`), before any service is stopped; a release newer than the newest
    tested one is logged as a warning and runs.
 4. `Manager.Run`: run the jobs as the schedule allows; when the run was not cancelled:
@@ -247,8 +248,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
    `repository.prune` and only when every job has a complete snapshot, one prune + unlock
    (only if at least one job forgot). Then the run-level post hook, and the run-level
    on_failure hook when a job, forget, prune or unlock failed.
-5. Exit code: 0 when every job backed up; 1 when config failed, restic is missing or too
-   old, any job failed or the run was cancelled. Forget, prune, unlock and hook failures
+5. Exit code: 0 when every job backed up; 1 when config failed, there are no jobs,
+   restic is missing or too old, any job failed or the run was cancelled. Forget, prune, unlock and hook failures
    are logged but do **not** change the exit code; after a failed or incomplete job only
    its forget, prune and unlock are skipped (warnings), and a cancelled run does no
    maintenance. `restor restic` exits with restic's exit code.
@@ -341,8 +342,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   **never expanded**. Service managers and hooks get only the process env (hooks plus
   their `RESTOR_*` variables).
 - Validation (all problems at once, with field paths): `version` is 2; `concurrency` ≥ 0;
-  at least one job; job names and tags are not empty, do not start with `-` and contain
-  no `,` or whitespace (they are restic tags, and restic splits `--tag` on commas);
+  `jobs` may be empty; job names and tags are not empty, do not start with `-` and
+  contain no `,` or whitespace (they are restic tags, and restic splits `--tag` on commas);
   `type` is `docker-compose`, `podman-compose`, `systemd` or absent; `compose_file` for
   the compose types, `units` for systemd, `scope` is `system` or `user`, `services` of a
   systemd job are among its `units`; keys of another type are errors (`units` on a compose
@@ -372,7 +373,7 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   start with concurrency 1 (`Manager.Order`), with type, after, stop, a keep label and
   sources, and below them each distinct retention policy once with its label (A, B, … in
   order of first use; `-` = never forgotten) and its jobs; never the repository URL (it
-  may hold credentials).
+  may hold credentials). Without jobs it says so instead of the tables.
 - `restor snapshots [job...]`: `restic <repository global flags> snapshots --tag=<job>…`
   for all or the named jobs (`Plan.Select`, so unknown names are an error), attached to
   the terminal like `restor restic`; other snapshot options go through `restor restic`.

@@ -42,6 +42,9 @@ var (
 	// ErrResticVersion is returned by Run when restic is older than the oldest release
 	// restor supports.
 	ErrResticVersion = errors.New("app: restic is too old")
+	// ErrNoJobs is returned by Run for a configuration without jobs: it is valid for the
+	// commands that only need the repository, but has nothing to back up.
+	ErrNoJobs = errors.New("app: no jobs configured")
 )
 
 // Options are the inputs of New.
@@ -102,6 +105,9 @@ func New(o Options) (*App, error) {
 
 // Run checks the restic version, then runs one backup cycle.
 func (a *App) Run(ctx context.Context) error {
+	if len(a.plan.Jobs) == 0 {
+		return ErrNoJobs
+	}
 	if err := a.checkRestic(ctx); err != nil {
 		return err
 	}
@@ -167,6 +173,10 @@ func (a *App) Describe(w io.Writer) error {
 	tw := tabwriter.NewWriter(w, 0, 0, columnPadding, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "concurrency:\t%d (0 = all at once)\n", a.plan.Concurrency)
 	_, _ = fmt.Fprintf(tw, "prune:\t%t\n", a.plan.Repository.Prune)
+	if len(jobs) == 0 {
+		_, _ = fmt.Fprintln(tw, "\nno jobs configured: restor run has nothing to back up")
+		return tw.Flush()
+	}
 	_, _ = fmt.Fprintln(tw, "\nJOB\tTYPE\tAFTER\tSTOP\tSTART ALL\tKEEP\tSOURCES")
 	for _, j := range jobs {
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%t\t%t\t%s\t%s\n", j.Name, or(j.Type, "files"),

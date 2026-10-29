@@ -147,7 +147,10 @@ so typos never go unnoticed. Durations are strings such as `30s`, `5m` or `4h`.
 environment; `$$` is a literal `$`. Relative `env_file`, `compose_file`, `sources` and
 `exclude_file` paths are resolved against the directory of the config file; `~` is not
 expanded (use `$HOME`). YAML anchors and merge keys work: keep shared blocks under a
-top-level key starting with `x-` and merge them with `<<: *name`.
+top-level key starting with `x-` and merge them with `<<: *name`. A file with only
+`version` and `repository` is valid: `restor snapshots` and `restor restic` work with
+it, for example on a new host whose real configuration is still
+in the backup; `restor run` then fails with "no jobs configured".
 
 **Repository:** `url` (or `RESTIC_REPOSITORY`/`RESTIC_REPOSITORY_FILE` in the env file),
 `env_file`, `backend_options` (`--option key=value`), `limit_upload`, `limit_download`

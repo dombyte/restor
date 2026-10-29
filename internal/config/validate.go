@@ -22,7 +22,6 @@ func (f *File) validate() []error {
 	v.check(f.Version == Version, "version",
 		fmt.Sprintf("must be %d (see the README for the changes)", Version))
 	v.check(valueOr(f.Concurrency, DefaultConcurrency) >= 0, "concurrency", "must be >= 0")
-	v.check(len(f.Jobs) > 0, "jobs", "at least one job is required")
 	v.repository(f.Repository)
 	v.at("defaults").common(f, f.Defaults)
 	for _, name := range sortedKeys(f.Jobs) {
