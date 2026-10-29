@@ -293,6 +293,15 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   The systemd units set `TimeoutStopSec=900` so systemd does not kill restor while it
   restarts services; that covers a `start_timeout` up to 10 min, a larger one needs a
   larger `TimeoutStopSec`. No second-signal "force" mode: the deadline is the force.
+- The units set `KillMode=process`: systemd signals only restor, which signals its own
+  commands. With the default `control-group`, systemd waits for every process left in the
+  unit's cgroup when the run ends: with podman-compose (which runs `podman start` itself;
+  the docker-compose provider goes through the podman API service) the `conmon` of each
+  restarted container stays there and ignores SIGTERM, so every run hung for
+  `TimeoutStopSec` and then lost the container's monitor. For the same reason the units
+  lower the backup's share with `CPUWeight=`/`IOWeight=` (not inherited; containers get
+  their own scope) instead of `Nice=`/`IOSchedulingClass=` (inherited by the containers
+  podman-compose restarts).
 - There is no in-process retry and no restart: systemd records the failed run, and the
   next timer run is the retry (`Persistent=true` catches up missed runs).
 
