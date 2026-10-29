@@ -64,6 +64,12 @@ func (c *Compose) Running(ctx context.Context, requested []string) ([]string, er
 	return slices.DeleteFunc(services, func(s string) bool { return !running[s] }), nil
 }
 
+// All returns requested, or every service of the compose file when it is empty, whether
+// running or not. A requested name that is not a service of the compose file is an error.
+func (c *Compose) All(ctx context.Context, requested []string) ([]string, error) {
+	return c.services(ctx, requested)
+}
+
 // services returns a copy of requested, or every service of the compose file.
 func (c *Compose) services(ctx context.Context, requested []string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, statusTimeout)

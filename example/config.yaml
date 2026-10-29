@@ -93,6 +93,12 @@ defaults:
   # Stop the job's services during its backup (only for jobs with a type). Default: true.
   stop: true
 
+  # After the backup, also start the job's services that were not running when it began
+  # (only for jobs with a type). A failed start of those is a warning only. Compose
+  # `start` does not create removed containers, and one-shot services would run again:
+  # list `services` when the project has some. Default: false.
+  start_all: false
+
   # How long to wait for the services to stop / start again. Defaults: 1m and 2m.
   stop_timeout: 1m
   start_timeout: 2m
@@ -191,6 +197,8 @@ jobs:
     type: podman-compose
     compose_file: /srv/wiki/compose.yml
     stop: false
+    # Make sure the wiki is up after each backup, also when it was down before.
+    start_all: true
     sources: [/srv/wiki/data]
 
   # systemd units of the system (scope: system is the default), with shared settings

@@ -57,6 +57,7 @@ type Job struct {
 	// sorted.
 	After             []string
 	Stop              bool
+	StartAll          bool
 	StopTimeout       time.Duration
 	StartTimeout      time.Duration
 	BackupTimeout     time.Duration
@@ -77,6 +78,9 @@ type Job struct {
 
 // StopsServices reports whether the job stops services during its backup.
 func (j Job) StopsServices() bool { return j.Type != TypeFiles && j.Stop }
+
+// StartsAll reports whether the job starts all of its services after its backup.
+func (j Job) StartsAll() bool { return j.Type != TypeFiles && j.StartAll }
 
 // Select returns the plan with only the named jobs (all for no names). Their order
 // among each other is kept; ordering against jobs that are not selected is dropped.
@@ -180,6 +184,7 @@ func (f *File) job(name string, j JobConfig, after []string) Job {
 		Name: name, Type: j.Type, ComposeFile: j.ComposeFile, Units: j.Units,
 		Scope: or(j.Scope, ScopeSystem), Services: j.Services, Sources: j.Sources,
 		After: after, Stop: pick(j.Stop, d.Stop, true),
+		StartAll:      pick(j.StartAll, d.StartAll, false),
 		StopTimeout:   duration(j.StopTimeout, d.StopTimeout, DefaultStopTimeout),
 		StartTimeout:  duration(j.StartTimeout, d.StartTimeout, DefaultStartTimeout),
 		BackupTimeout: duration(j.BackupTimeout, d.BackupTimeout, 0),

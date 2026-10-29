@@ -178,7 +178,7 @@ func (v *validator) job(f *File, name string, j JobConfig) {
 			"leave it out for files only)", j.Type, TypeDockerCompose, TypePodmanCompose,
 			TypeSystemd))
 	}
-	if j.Type != TypeFiles && pick(j.Stop, f.Defaults.Stop, true) {
+	if j.Type != TypeFiles {
 		v.timeouts(f.Defaults, j)
 	}
 	v.keepTags(f.Defaults, j)
@@ -222,7 +222,7 @@ func (v *validator) systemd(j JobConfig) {
 func (v *validator) files(j JobConfig) {
 	unset := map[string]bool{
 		"compose_file": j.ComposeFile == "", "units": j.Units == nil, "scope": j.Scope == "",
-		"services": j.Services == nil, "stop": j.Stop == nil,
+		"services": j.Services == nil, "stop": j.Stop == nil, "start_all": j.StartAll == nil,
 		"stop_timeout": j.StopTimeout == nil, "start_timeout": j.StartTimeout == nil,
 	}
 	for _, field := range sortedKeys(unset) {
@@ -235,12 +235,17 @@ func (v *validator) onlyFor(unset bool, field, types string) {
 	v.check(unset, field, "only for type "+types)
 }
 
-// timeouts checks that a job that stops services waits for them.
+// timeouts checks that a job waits for the services it stops or starts.
 func (v *validator) timeouts(d Defaults, j JobConfig) {
-	stop := pick(j.StopTimeout, d.StopTimeout, Duration(DefaultStopTimeout))
-	start := pick(j.StartTimeout, d.StartTimeout, Duration(DefaultStartTimeout))
-	v.check(stop != 0, "stop_timeout", "must be > 0 when services are stopped")
-	v.check(start != 0, "start_timeout", "must be > 0 when services are stopped")
+	stops := pick(j.Stop, d.Stop, true)
+	if stops {
+		stop := pick(j.StopTimeout, d.StopTimeout, Duration(DefaultStopTimeout))
+		v.check(stop != 0, "stop_timeout", "must be > 0 when services are stopped")
+	}
+	if stops || pick(j.StartAll, d.StartAll, false) {
+		start := pick(j.StartTimeout, d.StartTimeout, Duration(DefaultStartTimeout))
+		v.check(start != 0, "start_timeout", "must be > 0 when services are started")
+	}
 }
 
 // cycle reports the first chain of jobs that wait for themselves through before/after.

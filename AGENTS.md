@@ -221,7 +221,10 @@ restor itself has no data store. What it writes, and who writes it:
 - **Services:** a job stops and restarts only those of its services (`services`, or all
   services of its compose file / its `units` when the list is empty) that are running when
   its backup starts. Services that were already stopped, and one-shot jobs that have
-  exited, stay as they were.
+  exited, stay as they were, unless the job sets `start_all`: then, after the restart,
+  the job also starts the services it did not stop (`Services.All` minus the stopped
+  ones; `start` leaves running ones as they are), also with `stop: false`, but not after
+  a cancel.
 
 ## 6. Lifecycle
 
@@ -262,6 +265,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   prune are skipped. A snapshot that `--skip-if-unchanged` skipped (a summary without ID)
   counts as **complete**: the latest snapshot is still current.
 - Restarting services fails → job fails; not running within `start_timeout` → warning.
+- `start_all`: listing or starting the services that were not stopped fails, or they are
+  not running within `start_timeout` → warning only (a service that was down must not
+  block forget and prune on every run).
 - A failed job runs its on_failure hook after the post hook.
 - Other jobs always continue, also those that run after the failed one; each failure is
   logged once by `Manager` with the job, and `main` logs the summary
@@ -324,7 +330,7 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `scope`, `services`, `before` and `after` (`config.Defaults`, inlined into
   `config.JobConfig`). A job's own value replaces the default, lists included (an empty
   list clears the default); `keep` is replaced as a whole. Unset: `stop` true,
-  `stop_timeout` 1m, `start_timeout` 2m, `concurrency` 1.
+  `start_all` false, `stop_timeout` 1m, `start_timeout` 2m, `concurrency` 1.
 - Job names are case-insensitive and used in lowercase (also as the restic tag and in
   `before`/`after`); names that differ only in case are an error. `before: [x]` on job a
   is `after: [a]` on x; the Plan holds only the merged, sorted `After` lists.
@@ -340,10 +346,10 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `type` is `docker-compose`, `podman-compose`, `systemd` or absent; `compose_file` for
   the compose types, `units` for systemd, `scope` is `system` or `user`, `services` of a
   systemd job are among its `units`; keys of another type are errors (`units` on a compose
-  job, `services`/`stop`/timeouts on a files-only job); `sources` required, no empty
+  job, `services`/`stop`/`start_all`/timeouts on a files-only job); `sources` required, no empty
   entries; `before`/`after` name other existing jobs and form no cycle (the first cycle is
-  reported as `a → b → a`); durations ≥ 0, and stop/start timeouts > 0 when services are
-  stopped; `keep` counts ≥ 0 and `within…` restic durations (`1y2m3d4h`); sizes
+  reported as `a → b → a`); durations ≥ 0, `stop_timeout` > 0 when services are
+  stopped and `start_timeout` > 0 when they are stopped or `start_all` is set; `keep` counts ≥ 0 and `within…` restic durations (`1y2m3d4h`); sizes
   (`exclude_larger_than`) like `500M`; `max_unused` a percentage, size or `unlimited`;
   `backend_options` keys like `s3.connections` with non-empty values; limits ≥ 0; env file
   names and values without NUL bytes; no extra `tags` that are the name of a job (forget
@@ -931,8 +937,8 @@ protection):
 ### Adding a job type
 1. New file in `servicemanager` with a `…Settings` struct and a constructor that takes
    `Deps` (Runner, Clock) and validates them; it implements `backup.Services`: `LockKeys`
-   (one key per independently managed unit), `Services`, and `Stop`/`Start` that wait with
-   `waitUntil` and return false when the timeout passes.
+   (one key per independently managed unit), `Running`, `All`, and `Stop`/`Start` that
+   wait with `waitUntil` and return false when the timeout passes.
 2. Config: add the `Type…` constant, its keys in `JobConfig` (not in `Defaults`) and
    `Job`, validation in `validator.job` (a case for the type, and its keys as errors for
    the other types), and a commented example in `example/config.yaml`.

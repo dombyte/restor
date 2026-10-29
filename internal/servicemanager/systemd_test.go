@@ -74,6 +74,20 @@ func TestSystemd_Running(t *testing.T) {
 	}
 }
 
+func TestSystemd_All(t *testing.T) {
+	t.Parallel()
+	s, _ := newSystemd(t, false) // no systemctl call: the units are configured
+
+	got, err := s.All(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a.service", "b.service"}, got)
+	got, err = s.All(context.Background(), []string{"b.service"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b.service"}, got)
+	_, err = s.All(context.Background(), []string{"x.service"})
+	require.ErrorIs(t, err, errUnknownUnit)
+}
+
 func toAny(list []string) []any {
 	out := make([]any, len(list))
 	for i, s := range list {

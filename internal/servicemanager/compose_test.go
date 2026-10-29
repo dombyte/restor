@@ -62,6 +62,21 @@ func TestCompose_Running(t *testing.T) {
 	assert.Contains(t, err.Error(), `"postgress"`)
 }
 
+func TestCompose_All(t *testing.T) {
+	t.Parallel()
+	c, r := newCompose(t)
+	expectCompose(r, "config", "--services").Return([]byte("web\ndb\n"), nil).Times(3)
+
+	got, err := c.All(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"web", "db"}, got, "every service, running or not")
+	got, err = c.All(context.Background(), []string{"db"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"db"}, got)
+	_, err = c.All(context.Background(), []string{"cache"})
+	require.ErrorIs(t, err, errUnknownService)
+}
+
 func TestCompose_RunningListFails(t *testing.T) {
 	t.Parallel()
 	c, r := newCompose(t)

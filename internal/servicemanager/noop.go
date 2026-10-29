@@ -27,6 +27,9 @@ func (n *Noop) LockKeys() []string { return []string{n.lockKey} }
 // Running returns no services.
 func (n *Noop) Running(context.Context, []string) ([]string, error) { return nil, nil }
 
+// All returns no services.
+func (n *Noop) All(context.Context, []string) ([]string, error) { return nil, nil }
+
 // Stop does nothing.
 func (n *Noop) Stop(context.Context, []string, time.Duration) (bool, error) { return true, nil }
 
