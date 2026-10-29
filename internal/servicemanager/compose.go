@@ -22,8 +22,9 @@ const composeServiceLabel = "com.docker.compose.service"
 type ComposeSettings struct {
 	// Binary is "docker" or "podman"; the manager runs `<binary> compose -f <file> …`.
 	Binary string
-	// File is the compose file path.
-	File string
+	// Files are the compose file paths, each passed with -f; the first one names the
+	// project in lock keys and errors, the others override it.
+	Files []string
 }
 
 // Compose manages the services of one compose file with docker or podman compose.
@@ -40,15 +41,18 @@ func NewCompose(s ComposeSettings, d Deps) (*Compose, error) {
 	}
 	if err := util.RequireAll(ErrMissingDependency,
 		util.Requirement{Name: "Binary", OK: s.Binary != ""},
-		util.Requirement{Name: "File", OK: s.File != ""},
+		util.Requirement{Name: "Files", OK: len(s.Files) > 0 && s.Files[0] != ""},
 	); err != nil {
 		return nil, err
 	}
 	return &Compose{s: s, runner: d.Runner, clock: d.Clock}, nil
 }
 
-// LockKeys returns the compose file path.
-func (c *Compose) LockKeys() []string { return []string{c.s.File} }
+// LockKeys returns the path of the compose file.
+func (c *Compose) LockKeys() []string { return []string{c.file()} }
+
+// file returns the compose file that names the project.
+func (c *Compose) file() string { return c.s.Files[0] }
 
 // Running returns the services among requested (every service of the compose file when
 // it is empty) that have a running container. A requested name that is not a service of
@@ -77,7 +81,7 @@ func (c *Compose) services(ctx context.Context, requested []string) ([]string, e
 	defer cancel()
 	out, err := c.run(ctx, "config", "--services")
 	if err != nil {
-		return nil, fmt.Errorf("servicemanager: list services of %s: %w", c.s.File, err)
+		return nil, fmt.Errorf("servicemanager: list services of %s: %w", c.file(), err)
 	}
 	all := strings.Fields(string(out))
 	if len(requested) == 0 {
@@ -85,7 +89,7 @@ func (c *Compose) services(ctx context.Context, requested []string) ([]string, e
 	}
 	for _, s := range requested {
 		if !slices.Contains(all, s) {
-			return nil, fmt.Errorf("servicemanager: %w: %q in %s", errUnknownService, s, c.s.File)
+			return nil, fmt.Errorf("servicemanager: %w: %q in %s", errUnknownService, s, c.file())
 		}
 	}
 	return slices.Clone(requested), nil
@@ -108,7 +112,7 @@ func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Dura
 	// Compose reports this on stderr, which the runner's error carries.
 	if _, err := c.run(cmdCtx, args...); err != nil &&
 		!strings.Contains(strings.ToLower(err.Error()), "no containers to stop") {
-		return false, fmt.Errorf("servicemanager: stop %s: %w", c.s.File, err)
+		return false, fmt.Errorf("servicemanager: stop %s: %w", c.file(), err)
 	}
 	return waitUntil(ctx, c.clock, deadline, func(ctx context.Context) (bool, error) {
 		running, err := c.running(ctx)
@@ -129,7 +133,7 @@ func (c *Compose) Start(ctx context.Context, services []string, timeout time.Dur
 	cmdCtx, cancel := commandContext(ctx, timeout)
 	defer cancel()
 	if _, err := c.run(cmdCtx, append([]string{"start"}, services...)...); err != nil {
-		return false, fmt.Errorf("servicemanager: start %s: %w", c.s.File, err)
+		return false, fmt.Errorf("servicemanager: start %s: %w", c.file(), err)
 	}
 	return waitUntil(ctx, c.clock, deadline, func(ctx context.Context) (bool, error) {
 		running, err := c.running(ctx)
@@ -143,11 +147,11 @@ func (c *Compose) running(ctx context.Context) (map[string]bool, error) {
 	defer cancel()
 	out, err := c.run(ctx, "ps", "--format", "json")
 	if err != nil {
-		return nil, fmt.Errorf("servicemanager: status of %s: %w", c.s.File, err)
+		return nil, fmt.Errorf("servicemanager: status of %s: %w", c.file(), err)
 	}
 	entries, err := parseComposePs(out)
 	if err != nil {
-		return nil, fmt.Errorf("servicemanager: status of %s: %w", c.s.File, err)
+		return nil, fmt.Errorf("servicemanager: status of %s: %w", c.file(), err)
 	}
 	running := map[string]bool{}
 	for _, e := range entries {
@@ -159,7 +163,11 @@ func (c *Compose) running(ctx context.Context) (map[string]bool, error) {
 }
 
 func (c *Compose) run(ctx context.Context, args ...string) ([]byte, error) {
-	return c.runner.Run(ctx, c.s.Binary, append([]string{"compose", "-f", c.s.File}, args...)...)
+	all := []string{"compose"}
+	for _, f := range c.s.Files {
+		all = append(all, "-f", f)
+	}
+	return c.runner.Run(ctx, c.s.Binary, append(all, args...)...)
 }
 
 // psEntry is one container of `compose ps --format json`. Docker Compose sets Service;

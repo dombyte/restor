@@ -173,7 +173,7 @@ not start with `-` or contain `,` or whitespace.
 |---|---|
 | `type` | `docker-compose`, `podman-compose` or `systemd`; leave it out for files only |
 | `sources` | paths to back up (required) |
-| `compose_file` | the compose file (compose types, required) |
+| `compose_file` | the compose file (compose types, required); for `compose.yaml`, `compose.yml`, `docker-compose.yml` or `docker-compose.yaml` the override file next to it (`compose.override.yml`, …) is used too, as `docker compose` without `-f` does |
 | `units`, `scope` | the systemd units (required) and `system` (default) or `user` |
 | `services` | services to stop; default: all of the compose file / all `units` |
 | `before`, `after` | jobs that run after / before this one |

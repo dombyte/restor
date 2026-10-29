@@ -104,7 +104,8 @@ func TestLoad(t *testing.T) {
 	db, etc, host, web := plan.Jobs[0], plan.Jobs[1], plan.Jobs[2], plan.Jobs[3]
 	assert.Equal(t, Job{
 		Name: "db", Type: TypeDockerCompose, ComposeFile: filepath.Join(dir, "app/compose.yml"),
-		Scope: ScopeSystem, Services: []string{"db"}, Sources: []string{filepath.Join(dir, "data/db")},
+		ComposeFiles: []string{filepath.Join(dir, "app/compose.yml")}, Scope: ScopeSystem,
+		Services: []string{"db"}, Sources: []string{filepath.Join(dir, "data/db")},
 		Stop: true, StopTimeout: 30 * time.Second, StartTimeout: DefaultStartTimeout,
 		Keep: Keep{Daily: 7, Weekly: 4}, Exclude: []string{"*.tmp"}, OnFailure: "/bin/notify job",
 	}, db)
@@ -449,6 +450,50 @@ jobs:
 	assert.Equal(t, []string{"/srv/app/data"}, db.Sources)
 	assert.Equal(t, 10*time.Second, web.StopTimeout)
 	assert.Equal(t, "/srv/app/compose.yml", web.ComposeFile)
+}
+
+func TestComposeFiles(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for _, name := range []string{
+		"compose.yml", "stack.yml", "compose.override.yaml", "docker-compose.override.yml",
+	} {
+		writeFile(t, dir, name, "services: {}\n")
+	}
+	empty := t.TempDir()
+	tests := []struct {
+		name, file string
+		want       []string
+	}{
+		{name: "no compose file", file: "", want: nil},
+		{
+			name: "default name with override", file: filepath.Join(dir, "compose.yml"),
+			want: []string{
+				filepath.Join(dir, "compose.yml"), filepath.Join(dir, "compose.override.yaml"),
+			},
+		},
+		{
+			name: "other override name", file: filepath.Join(dir, "docker-compose.yml"),
+			want: []string{
+				filepath.Join(dir, "docker-compose.yml"),
+				filepath.Join(dir, "compose.override.yaml"),
+			},
+		},
+		{
+			name: "own name, no override", file: filepath.Join(dir, "stack.yml"),
+			want: []string{filepath.Join(dir, "stack.yml")},
+		},
+		{
+			name: "no override file", file: filepath.Join(empty, "compose.yaml"),
+			want: []string{filepath.Join(empty, "compose.yaml")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, composeFiles(tt.file))
+		})
+	}
 }
 
 func TestLoad_UnknownKeysInMergedMappings(t *testing.T) {

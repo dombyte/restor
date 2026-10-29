@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -48,7 +50,9 @@ type Job struct {
 	// Type is TypeFiles, TypeDockerCompose, TypePodmanCompose or TypeSystemd.
 	Type        string
 	ComposeFile string
-	Units       []string
+	// ComposeFiles are ComposeFile and the override file Compose would load with it.
+	ComposeFiles []string
+	Units        []string
 	// Scope is ScopeSystem or ScopeUser (systemd only).
 	Scope    string
 	Services []string
@@ -181,7 +185,8 @@ func (f *File) job(name string, j JobConfig, after []string) Job {
 		return time.Duration(pick(job, def, Duration(fallback)))
 	}
 	return Job{
-		Name: name, Type: j.Type, ComposeFile: j.ComposeFile, Units: j.Units,
+		Name: name, Type: j.Type, ComposeFile: j.ComposeFile,
+		ComposeFiles: composeFiles(j.ComposeFile), Units: j.Units,
 		Scope: or(j.Scope, ScopeSystem), Services: j.Services, Sources: j.Sources,
 		After: after, Stop: pick(j.Stop, d.Stop, true),
 		StartAll:      pick(j.StartAll, d.StartAll, false),
@@ -199,6 +204,42 @@ func (f *File) job(name string, j JobConfig, after []string) Job {
 		Tags:              list(j.Tags, d.Tags),
 		Pre:               pick(j.Pre, d.Pre, ""), Post: pick(j.Post, d.Post, ""),
 		OnFailure: pick(j.OnFailure, d.OnFailure, ""),
+	}
+}
+
+// composeFiles returns compose_file, plus the override file next to it when compose_file
+// has one of Compose's default names: `docker compose` in that directory loads both, so
+// the services restor sees are the ones that were started. With an explicit -f, Compose
+// loads no override itself. Like Compose, the first override name found wins.
+func composeFiles(file string) []string {
+	if file == "" {
+		return nil
+	}
+	files := []string{file}
+	if !slices.Contains(composeDefaultNames(), filepath.Base(file)) {
+		return files
+	}
+	for _, name := range composeOverrideNames() {
+		override := filepath.Join(filepath.Dir(file), name)
+		// An override that cannot be stat'ed is left out: Compose fails on it anyway.
+		if _, err := os.Stat(override); err == nil {
+			return append(files, override)
+		}
+	}
+	return files
+}
+
+// composeDefaultNames are the compose files Compose finds without -f.
+func composeDefaultNames() []string {
+	return []string{"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"}
+}
+
+// composeOverrideNames are the override files Compose loads next to a default file, in
+// the order it looks for them.
+func composeOverrideNames() []string {
+	return []string{
+		"compose.override.yml", "compose.override.yaml",
+		"docker-compose.override.yml", "docker-compose.override.yaml",
 	}
 }
 

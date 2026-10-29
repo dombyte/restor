@@ -432,11 +432,16 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   failures are logged only.
 
 ### Service managers
-- Compose: `<docker|podman> compose -f <file> …`; services from `config --services` when
-  not listed (a listed name that `config --services` does not report fails the job); stop
-  with `stop -t <stop_timeout in s, rounded up> <services>` (ignores "no containers to
-  stop"), start with `start <services>` (not `up`: a backup never recreates containers
-  from a changed compose file). Running = `ps --format json` reports the service with `State`
+- Compose: `<docker|podman> compose -f <file> [-f <override>] …`; the override is the first
+  of `compose.override.yml`, `compose.override.yaml`, `docker-compose.override.yml`,
+  `docker-compose.override.yaml` next to a file with a default name (`compose.yaml`,
+  `compose.yml`, `docker-compose.yml`, `docker-compose.yaml`), found at load time
+  (`config.composeFiles`), as Compose itself does without `-f`; the first file is the lock
+  key. Services from `config --services` when not listed (a listed name that
+  `config --services` does not report fails the job); stop with
+  `stop -t <stop_timeout in s, rounded up> <services>` (ignores "no containers to stop"),
+  start with `start <services>` (not `up`: a backup never recreates containers from a
+  changed compose file). Running = `ps --format json` reports the service with `State`
   `running` (Docker JSON lines or a JSON array; podman-compose via the
   `com.docker.compose.service` label).
 - systemd: `systemctl [--user] stop|start <units>` (stop ignores "not running"/"not

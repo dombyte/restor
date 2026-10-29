@@ -136,11 +136,11 @@ func TestCreateServiceManager(t *testing.T) {
 		wantErr  error
 	}{
 		{
-			job:      config.Job{Type: config.TypeDockerCompose, ComposeFile: "/d"},
+			job:      config.Job{Type: config.TypeDockerCompose, ComposeFiles: []string{"/d", "/o"}},
 			lockKeys: []string{"/d"},
 		},
 		{
-			job:      config.Job{Type: config.TypePodmanCompose, ComposeFile: "/p"},
+			job:      config.Job{Type: config.TypePodmanCompose, ComposeFiles: []string{"/p"}},
 			lockKeys: []string{"/p"},
 		},
 		{job: config.Job{
