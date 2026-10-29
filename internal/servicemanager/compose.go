@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -90,8 +91,8 @@ func (c *Compose) services(ctx context.Context, requested []string) ([]string, e
 	return slices.Clone(requested), nil
 }
 
-// Stop runs `stop -t <timeout> <services>` and waits until none of them is running. It
-// returns false when they still run after timeout.
+// Stop runs `stop -t <timeout in seconds, rounded up> <services>` and waits until none of
+// them is running. It returns false when they still run after timeout.
 func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Duration) (
 	bool, error,
 ) {
@@ -101,7 +102,9 @@ func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Dura
 	deadline := c.clock.Now().Add(timeout)
 	cmdCtx, cancel := commandContext(ctx, timeout)
 	defer cancel()
-	args := append([]string{"stop", "-t", strconv.Itoa(int(timeout.Seconds()))}, services...)
+	// Compose takes whole seconds; truncating 500ms to 0 would kill the containers at once.
+	seconds := strconv.Itoa(int(math.Ceil(timeout.Seconds())))
+	args := append([]string{"stop", "-t", seconds}, services...)
 	// Compose reports this on stderr, which the runner's error carries.
 	if _, err := c.run(cmdCtx, args...); err != nil &&
 		!strings.Contains(strings.ToLower(err.Error()), "no containers to stop") {

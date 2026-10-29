@@ -102,6 +102,18 @@ func TestCompose_Stop(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestCompose_StopRoundsUpToSeconds(t *testing.T) {
+	t.Parallel()
+	c, r := newCompose(t)
+	expectCompose(r, "stop", "-t", "1", "web").Return(nil, nil).Once()
+	expectCompose(r, "ps", "--format", "json").Return(nil, nil).Once()
+
+	ok, err := c.Stop(context.Background(), []string{"web"}, 500*time.Millisecond)
+
+	require.NoError(t, err)
+	assert.True(t, ok, "-t 0 would kill the containers without a grace period")
+}
+
 func TestCompose_StopTimeout(t *testing.T) {
 	t.Parallel()
 	c, r := newCompose(t)

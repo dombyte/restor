@@ -434,9 +434,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 ### Service managers
 - Compose: `<docker|podman> compose -f <file> …`; services from `config --services` when
   not listed (a listed name that `config --services` does not report fails the job); stop
-  with `stop -t <stop_timeout> <services>` (ignores "no containers to stop"), start with
-  `start <services>` (not `up`: a backup never recreates containers from a changed
-  compose file). Running = `ps --format json` reports the service with `State`
+  with `stop -t <stop_timeout in s, rounded up> <services>` (ignores "no containers to
+  stop"), start with `start <services>` (not `up`: a backup never recreates containers
+  from a changed compose file). Running = `ps --format json` reports the service with `State`
   `running` (Docker JSON lines or a JSON array; podman-compose via the
   `com.docker.compose.service` label).
 - systemd: `systemctl [--user] stop|start <units>` (stop ignores "not running"/"not
