@@ -41,11 +41,13 @@ type Restic interface {
 // (a compose file, each systemd unit); a job runs only while it holds all of them, and
 // jobs that share a key never run at the same time. Running returns the services among
 // requested (all when empty) that run now: only those are stopped and started again.
+// All returns requested (all when empty) whether running or not, for JobSettings.StartAll.
 // Stop and Start report false when the services did not reach the expected state within
 // the timeout.
 type Services interface {
 	LockKeys() []string
 	Running(ctx context.Context, requested []string) ([]string, error)
+	All(ctx context.Context, requested []string) ([]string, error)
 	Stop(ctx context.Context, services []string, timeout time.Duration) (bool, error)
 	Start(ctx context.Context, services []string, timeout time.Duration) (bool, error)
 }

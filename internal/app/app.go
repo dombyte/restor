@@ -167,11 +167,11 @@ func (a *App) Describe(w io.Writer) error {
 	tw := tabwriter.NewWriter(w, 0, 0, columnPadding, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "concurrency:\t%d (0 = all at once)\n", a.plan.Concurrency)
 	_, _ = fmt.Fprintf(tw, "prune:\t%t\n", a.plan.Repository.Prune)
-	_, _ = fmt.Fprintln(tw, "\nJOB\tTYPE\tAFTER\tSTOP\tKEEP\tSOURCES")
+	_, _ = fmt.Fprintln(tw, "\nJOB\tTYPE\tAFTER\tSTOP\tSTART ALL\tKEEP\tSOURCES")
 	for _, j := range jobs {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%t\t%s\t%s\n", j.Name, or(j.Type, "files"),
-			or(strings.Join(j.After, ","), "-"), j.StopsServices(), labels[j.Name],
-			strings.Join(j.Sources, " "))
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%t\t%t\t%s\t%s\n", j.Name, or(j.Type, "files"),
+			or(strings.Join(j.After, ","), "-"), j.StopsServices(), j.StartsAll(),
+			labels[j.Name], strings.Join(j.Sources, " "))
 	}
 	_, _ = fmt.Fprintln(tw, "\nKEEP")
 	for _, g := range groups {
@@ -326,7 +326,7 @@ func CreateServiceManager(j config.Job, d servicemanager.Deps) (backup.Services,
 func jobSettings(j config.Job) backup.JobSettings {
 	return backup.JobSettings{
 		Name: j.Name, After: j.After, Services: j.Services, Sources: j.Sources,
-		StopServices: j.StopsServices(), StopTimeout: j.StopTimeout,
+		StopServices: j.StopsServices(), StartAll: j.StartsAll(), StopTimeout: j.StopTimeout,
 		StartTimeout: j.StartTimeout, BackupTimeout: j.BackupTimeout,
 		BackupArgs: backupFlags(j).Args(), ForgetArgs: keep(j.Keep).Args(),
 		Pre: j.Pre, Post: j.Post, OnFailure: j.OnFailure,
@@ -380,7 +380,8 @@ func logJobs(log zerolog.Logger, jobs []config.Job) {
 	for _, j := range jobs {
 		log.Info().Str("job", j.Name).Str("type", or(j.Type, "files")).
 			Strs("sources", j.Sources).Strs("after", j.After).
-			Bool("stop", j.StopsServices()).Msg("job configured")
+			Bool("stop", j.StopsServices()).Bool("start_all", j.StartsAll()).
+			Msg("job configured")
 	}
 }
 

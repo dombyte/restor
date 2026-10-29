@@ -335,6 +335,99 @@ func TestRunJob_RestartsOnlyRunningServices(t *testing.T) {
 	require.NoError(t, errOf(f.manager(t, Settings{}).runJob(context.Background(), p)))
 }
 
+func TestRunJob_StartAll(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		stop     bool
+		running  []string
+		startErr error
+		started  bool
+	}{
+		{
+			name: "starts the services that were down", stop: true, running: []string{"web"},
+			started: true,
+		},
+		{name: "without stop", running: nil, started: true},
+		{
+			name: "failed start is a warning", stop: true, running: []string{"web"},
+			startErr: assert.AnError,
+		},
+		{name: "start timeout is a warning", stop: true, running: []string{"web"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			svc := mocks.NewMockServices(t)
+			svc.EXPECT().LockKeys().Return([]string{"key"})
+			if tt.stop {
+				svc.EXPECT().Running(mock.Anything, []string{"web", "db"}).
+					Return(tt.running, nil).Once()
+				svc.EXPECT().Stop(mock.Anything, tt.running, 10*time.Second).
+					Return(true, nil).Once()
+				svc.EXPECT().Start(mock.Anything, tt.running, 20*time.Second).
+					Return(true, nil).Once()
+			}
+			svc.EXPECT().All(mock.Anything, []string{"web", "db"}).
+				Return([]string{"web", "db"}, nil).Once()
+			others := []string{"web", "db"}
+			if tt.stop {
+				others = []string{"db"}
+			}
+			svc.EXPECT().Start(mock.Anything, others, 20*time.Second).
+				Return(tt.started, tt.startErr).Once()
+			f.expectLock("key")
+			f.expectBackup("web", nil)
+			p := job("web", svc)
+			p.Settings.Services = []string{"web", "db"}
+			p.Settings.StopServices, p.Settings.StartAll = tt.stop, true
+			p.Settings.Pre, p.Settings.Post = "", ""
+
+			require.NoError(t, errOf(f.manager(t, Settings{}).runJob(context.Background(), p)))
+		})
+	}
+}
+
+func TestRunJob_StartAllListFails(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	svc := mocks.NewMockServices(t)
+	svc.EXPECT().LockKeys().Return([]string{"key"})
+	svc.EXPECT().All(mock.Anything, mock.Anything).Return(nil, assert.AnError).Once()
+	f.expectLock("key")
+	f.expectBackup("web", nil)
+	p := job("web", svc)
+	p.Settings.StopServices, p.Settings.StartAll = false, true
+	p.Settings.Pre, p.Settings.Post = "", ""
+
+	require.NoError(t, errOf(f.manager(t, Settings{}).runJob(context.Background(), p)),
+		"a service that was down must not fail the backup")
+}
+
+func TestRunJob_StartAllSkippedAfterCancel(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	svc := f.services(t, "key", "web")
+	ctx, cancel := context.WithCancel(context.Background())
+	f.expectLock("key")
+	f.expectStop(svc, true, nil)
+	f.restic.EXPECT().Backup(mock.Anything, "web", mock.Anything, mock.Anything).
+		RunAndReturn(func(context.Context, string, []string, []string) (string, error) {
+			cancel()
+			return "", context.Canceled
+		})
+	f.expectStart(svc, true, nil) // only the stopped service; All is never called
+	p := job("web", svc)
+	p.Settings.StartAll = true
+	p.Settings.Pre = ""
+
+	err := errOf(f.manager(t, Settings{}).runJob(ctx, p))
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, []string{"lock key", "stop", "start", "release key"}, f.rec.list())
+}
+
 func TestRunJob_ServicesFail(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)

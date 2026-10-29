@@ -43,6 +43,8 @@ type JobSettings struct {
 	Sources []string
 	// StopServices stops the services during the backup.
 	StopServices bool
+	// StartAll also starts the services that were not running when the backup began.
+	StartAll bool
 	// StopTimeout and StartTimeout bound waiting for the services.
 	StopTimeout  time.Duration
 	StartTimeout time.Duration
@@ -165,6 +167,7 @@ func (m *Manager) backupWithServices(ctx context.Context, j Job, log zerolog.Log
 			outcome: outcomeFailed, snapshotID: r.snapshotID, err: errors.Join(r.err, err),
 		}
 	}
+	m.startOthers(ctx, j, stopped, log)
 	return r
 }
 
@@ -253,6 +256,36 @@ func (m *Manager) startServices(ctx context.Context, j Job, services []string,
 		log.Warn().Stringer("timeout", timeout).Msg("services did not start within the timeout")
 	}
 	return nil
+}
+
+// startOthers starts the job's services that it did not stop (StartAll); those already
+// running are left as they are by the service manager. A failure is a warning only: a
+// service that was down before the backup must not fail it, or one broken service would
+// block forget and prune on every run. After a cancel it is skipped.
+func (m *Manager) startOthers(ctx context.Context, j Job, stopped []string,
+	log zerolog.Logger,
+) {
+	if !j.Settings.StartAll || ctx.Err() != nil {
+		return
+	}
+	all, err := j.Services.All(ctx, j.Settings.Services)
+	if err != nil {
+		log.Warn().Err(err).Msg("cannot list the services to start")
+		return
+	}
+	others := slices.DeleteFunc(all, func(s string) bool { return slices.Contains(stopped, s) })
+	if len(others) == 0 {
+		return
+	}
+	log.Info().Strs("services", others).Msg("starting services that were not stopped")
+	running, err := j.Services.Start(ctx, others, j.Settings.StartTimeout)
+	switch {
+	case err != nil:
+		log.Warn().Err(err).Msg("cannot start services that were not stopped")
+	case !running:
+		log.Warn().Stringer("timeout", j.Settings.StartTimeout).
+			Msg("services that were not stopped did not start within the timeout")
+	}
 }
 
 // backup runs restic. A snapshot without some unreadable source files, or a run that

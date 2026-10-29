@@ -51,14 +51,9 @@ func (s *Systemd) LockKeys() []string {
 // (active, activating, reloading, …). A requested name that is not a configured unit is
 // an error: falling back to all units would stop more than asked.
 func (s *Systemd) Running(ctx context.Context, requested []string) ([]string, error) {
-	units := s.s.Units
-	if len(requested) > 0 {
-		units = requested
-	}
-	for _, u := range units {
-		if !slices.Contains(s.s.Units, u) {
-			return nil, fmt.Errorf("servicemanager: %w: %q", errUnknownUnit, u)
-		}
+	units, err := s.All(ctx, requested)
+	if err != nil {
+		return nil, err
 	}
 	states, err := s.states(ctx, units)
 	if err != nil {
@@ -71,6 +66,21 @@ func (s *Systemd) Running(ctx context.Context, requested []string) ([]string, er
 		}
 	}
 	return up, nil
+}
+
+// All returns a copy of requested, or all units when it is empty, whether up or not. A
+// requested name that is not a configured unit is an error.
+func (s *Systemd) All(_ context.Context, requested []string) ([]string, error) {
+	units := s.s.Units
+	if len(requested) > 0 {
+		units = requested
+	}
+	for _, u := range units {
+		if !slices.Contains(s.s.Units, u) {
+			return nil, fmt.Errorf("servicemanager: %w: %q", errUnknownUnit, u)
+		}
+	}
+	return slices.Clone(units), nil
 }
 
 // Stop runs `systemctl stop <units>` and waits until none of them is active. It returns

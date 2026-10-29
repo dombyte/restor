@@ -47,6 +47,74 @@ func (_m *MockServices) EXPECT() *MockServices_Expecter {
 	return &MockServices_Expecter{mock: &_m.Mock}
 }
 
+// All provides a mock function for the type MockServices
+func (_mock *MockServices) All(ctx context.Context, requested []string) ([]string, error) {
+	ret := _mock.Called(ctx, requested)
+
+	if len(ret) == 0 {
+		panic("no return value specified for All")
+	}
+
+	var r0 []string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []string) ([]string, error)); ok {
+		return returnFunc(ctx, requested)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []string) []string); ok {
+		r0 = returnFunc(ctx, requested)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, []string) error); ok {
+		r1 = returnFunc(ctx, requested)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockServices_All_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'All'
+type MockServices_All_Call struct {
+	*mock.Call
+}
+
+// All is a helper method to define mock.On call
+//   - ctx context.Context
+//   - requested []string
+func (_e *MockServices_Expecter) All(ctx any, requested any) *MockServices_All_Call {
+	return &MockServices_All_Call{Call: _e.mock.On("All", ctx, requested)}
+}
+
+func (_c *MockServices_All_Call) Run(run func(ctx context.Context, requested []string)) *MockServices_All_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 []string
+		if args[1] != nil {
+			arg1 = args[1].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockServices_All_Call) Return(strings []string, err error) *MockServices_All_Call {
+	_c.Call.Return(strings, err)
+	return _c
+}
+
+func (_c *MockServices_All_Call) RunAndReturn(run func(ctx context.Context, requested []string) ([]string, error)) *MockServices_All_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // LockKeys provides a mock function for the type MockServices
 func (_mock *MockServices) LockKeys() []string {
 	ret := _mock.Called()

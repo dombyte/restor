@@ -140,6 +140,7 @@ func TestLoad_Defaults(t *testing.T) {
 	assert.Empty(t, plan.Repository.Env)
 	j := plan.Jobs[0]
 	assert.True(t, j.Stop)
+	assert.False(t, j.StartAll)
 	assert.Equal(t, DefaultStopTimeout, j.StopTimeout)
 	assert.Equal(t, DefaultStartTimeout, j.StartTimeout)
 	assert.Zero(t, j.BackupTimeout)
@@ -283,6 +284,15 @@ func TestLoad_Validation(t *testing.T) {
 			"files services", "jobs: {web: {services: [a], sources: [/a]}}",
 			"jobs.web.services: only for jobs with a type",
 		},
+		{
+			"files start all", "jobs: {web: {start_all: true, sources: [/a]}}",
+			"jobs.web.start_all: only for jobs with a type",
+		},
+		{
+			"start all timeout", "jobs: {web: {type: systemd, units: [a], stop: false, " +
+				"start_all: true, start_timeout: 0s, sources: [/a]}}",
+			"jobs.web.start_timeout: must be > 0 when services are started",
+		},
 		{"stop timeout", "jobs: {web: {type: systemd, units: [a], stop_timeout: 0s, " +
 			"sources: [/a]}}", "jobs.web.stop_timeout: must be > 0 when services are stopped"},
 		{"start timeout", "defaults: {start_timeout: 0s}\njobs: {web: {type: systemd, " +
@@ -322,8 +332,21 @@ func TestLoad_Validation(t *testing.T) {
 func TestLoad_StopFalseNeedsNoTimeouts(t *testing.T) {
 	t.Parallel()
 	_, err := load(t, "version: 2\njobs: {web: {type: systemd, units: [a], stop: false, "+
-		"stop_timeout: 0s, sources: [/a]}}", nil)
+		"stop_timeout: 0s, start_timeout: 0s, sources: [/a]}}", nil)
 	require.NoError(t, err)
+}
+
+func TestLoad_StartAll(t *testing.T) {
+	t.Parallel()
+	plan, err := load(t, "version: 2\ndefaults: {start_all: true}\njobs:\n"+
+		"  a: {type: systemd, units: [x], sources: [/a]}\n"+
+		"  b: {type: systemd, units: [y], start_all: false, sources: [/b]}\n"+
+		"  c: {sources: [/c]}\n", nil)
+
+	require.NoError(t, err)
+	assert.True(t, plan.Jobs[0].StartsAll(), "from defaults")
+	assert.False(t, plan.Jobs[1].StartsAll(), "the job's own value replaces the default")
+	assert.False(t, plan.Jobs[2].StartsAll(), "a files-only job has no services")
 }
 
 func TestLoad_FileErrors(t *testing.T) {

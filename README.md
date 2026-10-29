@@ -172,6 +172,7 @@ not start with `-` or contain `,` or whitespace.
 | `services` | services to stop; default: all of the compose file / all `units` |
 | `before`, `after` | jobs that run after / before this one |
 | `stop` | stop the services during the backup (default `true`) |
+| `start_all` | after the backup, also start the services that were not running (default `false`) |
 | `stop_timeout`, `start_timeout` | wait for the services to stop / start (default `1m` / `2m`) |
 | `backup_timeout` | cancel a backup that takes longer; the services start again, the job fails |
 | `keep` | retention: `last`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`, `within…`, and `tags` next to another rule (not one of the job's own `tags`) |
@@ -193,7 +194,13 @@ compose file or a systemd unit never run at the same time. `restor validate` pri
 resulting order.
 
 **Services:** only the services that are running when a job's backup starts are stopped,
-and only those are started again afterwards, also when the backup failed. A systemd unit
+and only those are started again afterwards, also when the backup failed. With
+`start_all: true` the backup also starts the job's other services (`services`, or all of
+the compose file / all `units`), so a service that was down comes back up; a failed start
+of those is only a warning and does not fail the job. `start_all` works with `stop: false`
+too. Compose `start` does not create containers that were removed (`down`), and one-shot
+services (init containers, `Type=oneshot` units) run again, so list `services` when the
+project has some. After a cancel only the stopped services are started. A systemd unit
 counts as started once `systemctl is-active` reports `active`. A `Type=simple` unit is
 `active` as soon as its process runs, so restor cannot tell when it crashes right after
 starting; use `Type=notify`, or check the unit in a `post` hook, when its start has to be

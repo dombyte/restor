@@ -72,6 +72,7 @@ type RepositoryConfig struct {
 // lists mean "not set": a job's own value replaces the default, also for lists.
 type Defaults struct {
 	Stop              *bool     `yaml:"stop"`
+	StartAll          *bool     `yaml:"start_all"`
 	StopTimeout       *Duration `yaml:"stop_timeout"`
 	StartTimeout      *Duration `yaml:"start_timeout"`
 	BackupTimeout     *Duration `yaml:"backup_timeout"`

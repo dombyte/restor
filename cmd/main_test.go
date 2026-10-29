@@ -105,10 +105,10 @@ jobs:
 	assert.Contains(t, out, path+" is valid")
 	assert.Contains(t, out, "prune:        true")
 	assert.Regexp(t, `(?s)JOB.*\n`+
-		`db +docker-compose +- +true +A +/d\n`+
-		`etc +files +- +false +A +/etc\n`+
-		`tmp +files +- +false +- +/tmp/x\n`+
-		`web +docker-compose +db +true +B +/w\n`, out)
+		`db +docker-compose +- +true +false +A +/d\n`+
+		`etc +files +- +false +false +A +/etc\n`+
+		`tmp +files +- +false +false +- +/tmp/x\n`+
+		`web +docker-compose +db +true +false +B +/w\n`, out)
 	assert.Regexp(t, `(?s)\nKEEP\n`+
 		`  A +daily=7 weekly=4 +\(db, etc\)\n`+
 		`  - +never forgotten +\(tmp\)\n`+
