@@ -47,6 +47,8 @@ var (
 	// the default configuration file in.
 	errNoConfig = errors.New("no default configuration file: HOME is not set, " +
 		"pass --config <file>")
+	// errAllWithJobs is returned by `restor snapshots --all` with job names.
+	errAllWithJobs = errors.New("--all lists every snapshot: name no jobs with it")
 )
 
 func main() {
@@ -149,21 +151,29 @@ func newValidateCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
 }
 
 func newSnapshotsCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
-	return &cobra.Command{
+	var all bool
+	cmd := &cobra.Command{
 		Use:   "snapshots [job...]",
 		Short: "List the snapshots of all jobs, or of the named ones",
 		Long: `List the snapshots of all jobs, or of the named ones: restic snapshots with
-the job names as tags. Use "restor restic snapshots" for other options.`,
+the job names as tags. --all, or a configuration without jobs, lists every snapshot of
+the repository, also those of renamed or removed jobs. Use "restor restic snapshots" for
+other options.`,
 		RunE: func(cmd *cobra.Command, jobs []string) error {
+			if all && len(jobs) > 0 {
+				return errAllWithJobs
+			}
 			log := newLogger(stderr, level(f.debug, zerolog.WarnLevel))
 			a, err := newApp(f, jobs, log)
 			if err != nil {
 				return err
 			}
 			stdio := app.Stdio{In: os.Stdin, Out: stdout, Err: stderr}
-			return a.Snapshots(cmd.Context(), stdio)
+			return a.Snapshots(cmd.Context(), stdio, all)
 		},
 	}
+	cmd.Flags().BoolVar(&all, "all", false, "list every snapshot, not only those of the jobs")
+	return cmd
 }
 
 func newResticCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {

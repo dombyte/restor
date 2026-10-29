@@ -398,7 +398,7 @@ jobs:
 	a, err := New(o)
 	require.NoError(t, err)
 	var out bytes.Buffer
-	require.NoError(t, a.Snapshots(context.Background(), Stdio{Out: &out, Err: &out}))
+	require.NoError(t, a.Snapshots(context.Background(), Stdio{Out: &out, Err: &out}, false))
 	assert.Contains(t, out.String(), r.snapshots(t, "b")[0].ShortID, "restor snapshots b")
 	assert.NotContains(t, out.String(), first[0].ShortID, "not the snapshots of a")
 }

@@ -86,6 +86,7 @@ restor validate                 # check the config, print the jobs in start orde
                                 # each retention policy once, with the jobs using it
 restor snapshots                # list the snapshots of every job
 restor snapshots web            # of this job only (restic snapshots --tag=web)
+restor snapshots --all          # every snapshot, also of renamed or removed jobs
 restor restic snapshots         # run restic with the configured repository and env file
 restor restic restore latest --tag web --target /tmp/restore
 restor version

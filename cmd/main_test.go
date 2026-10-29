@@ -164,6 +164,19 @@ func TestRun_Snapshots(t *testing.T) {
 	assert.Equal(t, 1, run([]string{"snapshots", "-c", path, "x"}, &stdout, &stderr))
 	assert.Contains(t, stderr.String(), "unknown job: x")
 	assert.Empty(t, stdout.String(), "restic does not run")
+
+	stderr.Reset()
+	assert.Equal(t, 1, run([]string{"snapshots", "-c", path, "--all", "a"}, &stdout, &stderr))
+	assert.Contains(t, stderr.String(), "name no jobs")
+	assert.Empty(t, stdout.String(), "restic does not run")
+
+	assert.Equal(t, 0, run([]string{"snapshots", "-c", path, "--all"}, &stdout, &stderr))
+	assert.Equal(t, "--limit-upload=5 snapshots /repo\n", stdout.String(), "no tag filter")
+
+	stdout.Reset()
+	repoOnly := writeConfig(t, "version: 2\nrepository: {url: /repo}\n")
+	assert.Equal(t, 0, run([]string{"snapshots", "-c", repoOnly}, &stdout, &stderr))
+	assert.Equal(t, "snapshots /repo\n", stdout.String(), "without jobs: every snapshot")
 }
 
 // TestRun_UserDefaultConfig is not parallel: it sets XDG_CONFIG_HOME.

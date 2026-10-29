@@ -152,11 +152,14 @@ func (a *App) Restic(ctx context.Context, stdio Stdio, args []string) error {
 
 // Snapshots lists the snapshots of the selected jobs (all jobs when none were named),
 // connected to stdio: `restor snapshots web` is `restor restic snapshots --tag=web` with
-// the job name checked against the configuration.
-func (a *App) Snapshots(ctx context.Context, stdio Stdio) error {
-	tags := make([]string, 0, len(a.plan.Jobs))
-	for _, j := range a.plan.Jobs {
-		tags = append(tags, j.Name)
+// the job name checked against the configuration. With all, or without jobs, it lists
+// every snapshot of the repository, also those of renamed or removed jobs.
+func (a *App) Snapshots(ctx context.Context, stdio Stdio, all bool) error {
+	var tags []string
+	if !all {
+		for _, j := range a.plan.Jobs {
+			tags = append(tags, j.Name)
+		}
 	}
 	args := slices.Concat(resticSettings(a.plan.Repository).GlobalArgs, []string{"snapshots"},
 		restic.SnapshotsFlags{Tags: tags}.Args())

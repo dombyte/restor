@@ -377,6 +377,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - `restor snapshots [job...]`: `restic <repository global flags> snapshots --tag=<job>…`
   for all or the named jobs (`Plan.Select`, so unknown names are an error), attached to
   the terminal like `restor restic`; other snapshot options go through `restor restic`.
+  `--all` (not with job names) and a config without jobs list every snapshot, without a
+  `--tag` filter, so the series of renamed or removed jobs can be found.
 - `restor restic <args>`: `restic <repository global flags> <args>` with the restic
   environment, attached to the terminal (`command.Runner.Attach`); restor's flags must
   come before the first restic argument (`SetInterspersed(false)`).
