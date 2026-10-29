@@ -226,7 +226,9 @@ such a job `after` the other one, or set `concurrency: 1`.
 
 **Hooks** are commands split on spaces and run without a shell; use a script with its
 absolute path for anything more (a relative path resolves against the working directory,
-`/` under systemd, and restor warns about it).
+`/` under systemd, and restor warns about it). A script that starts a program in the
+background should redirect its output (`daemon >/dev/null 2>&1 &`): restor waits 10 s
+for output that is still open and then warns.
 
 | Hook | Runs | Environment |
 |---|---|---|

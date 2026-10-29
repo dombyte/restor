@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -58,6 +59,8 @@ func helper(mode string) int {
 		"term":       helperTerm,
 		"group":      helperGroup,
 		"termfile":   helperTermFile,
+		"background": helperBackground,
+		"sleep":      helperSleep,
 	}
 	if h, ok := helpers[mode]; ok {
 		return h()
@@ -142,6 +145,25 @@ func helperGroup() int {
 	if err := child.Wait(); err != nil {
 		return 2
 	}
+	return 0
+}
+
+// helperBackground starts a sleep child that inherits its stdout, like a hook script
+// that runs "daemon &", and exits successfully.
+func helperBackground() int {
+	child := exec.Command(os.Args[0])
+	child.Env = append(os.Environ(), helperEnv+"=sleep")
+	child.Stdout = os.Stdout
+	if err := child.Start(); err != nil {
+		return 2
+	}
+	fmt.Println("started")
+	return 0
+}
+
+// helperSleep keeps running for a while, holding the output it inherited.
+func helperSleep() int {
+	time.Sleep(5 * time.Second)
 	return 0
 }
 
@@ -298,6 +320,17 @@ func TestRunner_RunCancelSignalsTheProcessGroup(t *testing.T) {
 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.FileExists(t, term, "the child of the program got SIGTERM too")
+}
+
+func TestRunner_RunBackgroundProcessHoldsOutput(t *testing.T) {
+	t.Parallel()
+	r := newRunner("background")
+	r.waitDelay = 100 * time.Millisecond
+
+	out, err := r.Run(context.Background(), os.Args[0])
+
+	require.NoError(t, err, "the program itself succeeded")
+	assert.Equal(t, "started\n", string(out))
 }
 
 func TestSignalGroup_ExitedGroup(t *testing.T) {

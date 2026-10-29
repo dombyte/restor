@@ -413,7 +413,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 
 ### Hooks
 - Split on whitespace and executed directly (no shell): no quoting, pipes or redirects.
-  Use a script for anything more.
+  Use a script for anything more. A program that exits successfully while a process it
+  started still holds its output succeeds after the 10 s `WaitDelay`, with a warning
+  (`exec.ErrWaitDelay`).
 - Run with the process environment, the run context and these variables: `pre` gets
   `RESTOR_JOB`, `RESTOR_HOOK=pre`; `post` and the job's `on_failure` also
   `RESTOR_STATUS` (`success`, `incomplete`, `failed`), `RESTOR_SNAPSHOT_ID` (empty without
