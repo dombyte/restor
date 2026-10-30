@@ -21,7 +21,10 @@ func TestLoadEnvFile(t *testing.T) {
 		},
 		{name: "line without =", content: "A=1\nbroken\n", wantErr: true},
 		{name: "unterminated quote", content: "A=\"1\n", wantErr: true},
-		{name: "line too long", content: string(make([]byte, 70000)), wantErr: true},
+		{
+			name: "long value", content: "KEY=" + strings.Repeat("x", 70000) + "\r\nB=2\r\n",
+			want: map[string]string{"KEY": strings.Repeat("x", 70000), "B": "2"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
