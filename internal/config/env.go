@@ -1,8 +1,6 @@
 package config
 
 import (
-	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -24,26 +22,23 @@ func loadEnvFile(path string) (map[string]string, error) {
 	return parseDotEnv(data)
 }
 
-// parseDotEnv parses KEY=value lines, as systemd's EnvironmentFile= does. Blank lines and
-// # comments are skipped, and an "export " prefix is ignored. A value in double or single
-// quotes is taken as is; an unquoted value ends at " #". A line without "=" is an error,
-// so a mistyped secret is not silently dropped.
+// parseDotEnv parses KEY=value lines of any length. Blank lines and # comments are
+// skipped, and an "export " prefix is ignored. A value in double or single quotes is
+// taken as is, without escape sequences (unlike systemd's EnvironmentFile=); an unquoted
+// value ends at " #". A line without "=" is an error, so a mistyped secret is not
+// silently dropped.
 func parseDotEnv(data []byte) (map[string]string, error) {
 	env := map[string]string{}
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for n := 1; scanner.Scan(); n++ {
-		line := strings.TrimSpace(scanner.Text())
+	for i, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		key, value, err := dotEnvLine(line)
 		if err != nil {
-			return nil, fmt.Errorf("line %d: %w", n, err)
+			return nil, fmt.Errorf("line %d: %w", i+1, err)
 		}
 		env[key] = value
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
 	}
 	return env, nil
 }

@@ -164,8 +164,8 @@ in the backup; `restor run` then fails with "no jobs configured".
 
 **The env file** holds the variables of restic only: the repository password and the
 backend credentials, and restic's own settings such as `RESTIC_CACHE_DIR` or
-`RESTIC_COMPRESSION`. One `KEY=value` per line, as systemd's `EnvironmentFile=`; values
-are taken literally, so a `$` in a password stays a `$`. Keep it private (`chmod 600`);
+`RESTIC_COMPRESSION`. One `KEY=value` per line, like systemd's `EnvironmentFile=`, but
+values are taken literally, also in quotes: a `$` or `\` in a password stays as it is. Keep it private (`chmod 600`);
 restor warns when other users can read it. Hooks and service managers do not see it.
 
 **Jobs:** the name is case-insensitive, its lowercase form is the restic tag, and it must
