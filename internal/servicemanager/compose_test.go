@@ -56,7 +56,7 @@ func TestCompose_Running(t *testing.T) {
 	ps := []byte(`{"Service":"web","State":"running"}` + "\n" +
 		`{"Service":"db","State":"exited"}`)
 	c, r := newCompose(t)
-	expectCompose(r, "config", "--services").Return([]byte("web\ndb\njob\n\n"), nil).Times(4)
+	expectCompose(r, "config", "--services").Return([]byte("web\ndb\njob\n\n"), nil).Once()
 	expectCompose(r, "ps", "--format", "json").Return(ps, nil).Once()
 	requested := []string{"web", "db"}
 	got, err := c.Running(context.Background(), requested)
@@ -81,11 +81,15 @@ func TestCompose_Running(t *testing.T) {
 func TestCompose_All(t *testing.T) {
 	t.Parallel()
 	c, r := newCompose(t)
-	expectCompose(r, "config", "--services").Return([]byte("web\ndb\n"), nil).Times(3)
+	expectCompose(r, "config", "--services").Return([]byte("web\ndb\n"), nil).Once()
 
 	got, err := c.All(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"web", "db"}, got, "every service, running or not")
+	got[0] = "changed"
+	got, err = c.All(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"web", "db"}, got, "listed once, callers get copies")
 	got, err = c.All(context.Background(), []string{"db"})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"db"}, got)
