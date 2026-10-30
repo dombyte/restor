@@ -102,9 +102,11 @@ func (r result) status() string {
 func (m *Manager) runJob(ctx context.Context, j Job) result {
 	s := j.Settings
 	log := m.d.Log.With().Str("job", s.Name).Logger()
+	var r result
 	releases, err := m.lockAll(j.Services.LockKeys())
-	r := result{outcome: outcomeFailed, err: fmt.Errorf("backup: %s: %w", s.Name, err)}
-	if err == nil {
+	if err != nil {
+		r = result{outcome: outcomeFailed, err: fmt.Errorf("backup: %s: %w", s.Name, err)}
+	} else {
 		log.Info().Msg("starting job")
 		r = m.backupJob(ctx, j, log)
 	}
