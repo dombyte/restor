@@ -146,8 +146,9 @@ example/                   config.yaml (full reference, kept valid by a test), r
 packaging/                 .deb/.rpm only: system + user units (/usr/bin/restor) and the
                            install/remove scripts (nfpm in .goreleaser.yaml)
 scripts/pre-commit.sh      local checks (make check)
-scripts/install-restic.sh  downloads a restic release, checksum verified (CI, make
-                           integration-oldest)
+scripts/install-restic.sh  downloads a restic release, checksum and signature verified
+                           (CI, make integration-oldest; needs gpg)
+scripts/restic-release-key.asc  restic's release signing key (CF8F…A907), pinned
 ```
 
 Layout rules:
@@ -157,7 +158,7 @@ Layout rules:
 - `pkg/` only for code meant for other modules, and only with user confirmation.
 - Root files: `AGENTS.md`, `README.md`, `.golangci.yml`, `.goreleaser.yaml`,
   `.mockery.yaml`, `Makefile`, `renovate.json`, `scripts/pre-commit.sh`,
-  `scripts/install-restic.sh`, `example/`, `packaging/`.
+  `scripts/install-restic.sh`, `scripts/restic-release-key.asc`, `example/`, `packaging/`.
 
 ---
 
@@ -808,7 +809,7 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
 | `.golangci.yml` | v2 config, linters from section 12, formatters gofumpt + goimports |
 | `scripts/pre-commit.sh` | check-only (never rewrites or stages): fmt diff, lint, deadcode, govulncheck, build, `go test -race` |
 | `Makefile` | `build` (ldflags build info), `check` (runs the script), `clean`, `run`, `integration` (restic on PATH), `integration-oldest` (downloads `minSupported` into `~/.cache/restor/restic`) |
-| `.github/workflows/checks.yml` | on push to main, PRs and `workflow_call`: tidy check, build, race tests, deadcode, govulncheck, mock drift, golangci-lint, integration tests against the oldest supported and the newest tested restic (downloaded, checksum verified); a `gate` job skips them on a push to main that is a PR's merge commit (15.5); `concurrency` cancels superseded PR runs only |
+| `.github/workflows/checks.yml` | on push to main, PRs and `workflow_call`: tidy check, build, race tests, deadcode, govulncheck, mock drift, golangci-lint, integration tests against the oldest supported and the newest tested restic (downloaded; checksums verified, and their signature by restic's pinned release key); a `gate` job skips them on a push to main that is a PR's merge commit (15.5); `concurrency` cancels superseded PR runs only |
 | `.github/workflows/release.yml` | on `vX.Y.Z` / `vX.Y.Z-*` tags: a `guard` job verifies the exact tag format and that the tag is on `main`, then reuses `checks.yml` (granted `pull-requests: read` for the gate); passes `GOVERSION` to goreleaser; `concurrency` runs one release per tag, never cancelled |
 | `.goreleaser.yaml` | `go mod verify` only (never rewrites), `-trimpath`, reproducible (`CommitDate`), `goamd64: v1`, grouped changelog, archives + nfpm `.deb`/`.rpm` (`mtime` = `CommitDate`), no image (section 8) |
 | `.gitignore` | never commit local config (`config.yaml`, `*.env` in the root), secrets or build output |
