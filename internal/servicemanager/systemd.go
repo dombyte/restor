@@ -41,10 +41,19 @@ func NewSystemd(s SystemdSettings, d Deps) (*Systemd, error) {
 	return &Systemd{s: s, runner: d.Runner, clock: d.Clock}, nil
 }
 
-// LockKeys returns the unit names, sorted: one lock per unit, so projects that share
-// only some units still exclude each other.
+// LockKeys returns one key per unit, sorted, so jobs that share only some units still
+// exclude each other: "systemd:<unit>", or "systemd-user:<unit>" for the user manager,
+// whose units are not the system's.
 func (s *Systemd) LockKeys() []string {
-	return slices.Compact(slices.Sorted(slices.Values(s.s.Units)))
+	prefix := "systemd:"
+	if s.s.User {
+		prefix = "systemd-user:"
+	}
+	keys := make([]string, 0, len(s.s.Units))
+	for _, u := range slices.Compact(slices.Sorted(slices.Values(s.s.Units))) {
+		keys = append(keys, prefix+u)
+	}
+	return keys
 }
 
 // Running returns the units among requested (all units when it is empty) that are up
