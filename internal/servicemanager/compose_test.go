@@ -32,7 +32,7 @@ func expectCompose(r *mocks.MockRunner, args ...any) *mock.Call {
 func TestCompose_LockKeys(t *testing.T) {
 	t.Parallel()
 	c, _ := newCompose(t)
-	assert.Equal(t, []string{composeFile}, c.LockKeys())
+	assert.Equal(t, []string{"compose:" + composeFile}, c.LockKeys())
 }
 
 func TestCompose_OverrideFiles(t *testing.T) {
@@ -48,7 +48,7 @@ func TestCompose_OverrideFiles(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"web", "extra"}, got, "services of the override too")
-	assert.Equal(t, []string{composeFile}, c.LockKeys(), "the project's file only")
+	assert.Equal(t, []string{"compose:" + composeFile}, c.LockKeys(), "the project's file only")
 }
 
 func TestCompose_Running(t *testing.T) {

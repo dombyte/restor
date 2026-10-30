@@ -394,7 +394,7 @@ func CreateServiceManager(j config.Job, d servicemanager.Deps) (backup.Services,
 		}, d)
 	case config.TypeFiles:
 		// Keyed by job: file jobs share no services and may run at the same time.
-		return servicemanager.NewNoop(servicemanager.NoopSettings{LockKey: "files-" + j.Name}),
+		return servicemanager.NewNoop(servicemanager.NoopSettings{LockKey: "files:" + j.Name}),
 			nil
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownType, j.Type)

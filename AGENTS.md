@@ -213,11 +213,13 @@ restor itself has no data store. What it writes, and who writes it:
   `/run/restor` for root on Linux, `$XDG_RUNTIME_DIR/restor` for other users, else
   `restor-<uid>` in the temp dir; it is refused unless it is a real directory owned by the
   user and not writable by others (`ErrUnsafeDir`). The keys come from the service manager
-  (`LockKeys`): the compose file path, one key per systemd unit, or `files-<job>`; a job
-  takes all of its keys before it starts and fails if one is held. The locks stop two
-  restor processes from stopping and backing up the same compose file or unit at once,
-  also when two jobs share only some of their units. Within one run the schedule never
-  starts two jobs that share a key, so they wait for each other instead of failing.
+  (`LockKeys`), prefixed with the kind of service: `compose:<file>`, one
+  `systemd:<unit>` (`systemd-user:<unit>` for the user manager) per unit, or
+  `files:<job>`; a job takes all of its keys before it starts and fails if one is held.
+  The locks stop two restor processes from stopping and backing up the same compose file
+  or unit at once, also when two jobs share only some of their units. Within one run the
+  schedule never starts two jobs that share a key, so they wait for each other instead
+  of failing.
   Runs of different users do not see each other's locks (rare: root and a `docker` group
   member backing up the same compose file).
 - **Services:** a job stops and restarts only those of its services (`services`, or all
@@ -466,7 +468,7 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `services` selects some of `units` (a name that is not one of them is a validation
   error); empty means all units.
 - Files only (no type): the `noop` service manager; no services, every operation
-  succeeds, lock key `files-<job>`.
+  succeeds, lock key `files:<job>`.
 - Stop and start poll every 500 ms until the expected state or the timeout; a failed
   status query is retried, and its error counts only when the last poll failed. The
   timeout counts from before the stop/start command, so a slow command shortens the wait

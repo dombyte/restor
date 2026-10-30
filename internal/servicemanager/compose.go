@@ -48,8 +48,9 @@ func NewCompose(s ComposeSettings, d Deps) (*Compose, error) {
 	return &Compose{s: s, runner: d.Runner, clock: d.Clock}, nil
 }
 
-// LockKeys returns the path of the compose file.
-func (c *Compose) LockKeys() []string { return []string{c.file()} }
+// LockKeys returns "compose:<compose file path>", for docker and podman alike: both
+// back up the same data.
+func (c *Compose) LockKeys() []string { return []string{"compose:" + c.file()} }
 
 // file returns the compose file that names the project.
 func (c *Compose) file() string { return c.s.Files[0] }

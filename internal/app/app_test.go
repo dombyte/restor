@@ -137,18 +137,18 @@ func TestCreateServiceManager(t *testing.T) {
 	}{
 		{
 			job:      config.Job{Type: config.TypeDockerCompose, ComposeFiles: []string{"/d", "/o"}},
-			lockKeys: []string{"/d"},
+			lockKeys: []string{"compose:/d"},
 		},
 		{
 			job:      config.Job{Type: config.TypePodmanCompose, ComposeFiles: []string{"/p"}},
-			lockKeys: []string{"/p"},
+			lockKeys: []string{"compose:/p"},
 		},
 		{job: config.Job{
 			Type: config.TypeSystemd, Units: []string{"b", "a"}, Scope: config.ScopeUser,
-		}, lockKeys: []string{"a", "b"}},
+		}, lockKeys: []string{"systemd-user:a", "systemd-user:b"}},
 		{
 			job:      config.Job{Name: "etc", Type: config.TypeFiles},
-			lockKeys: []string{"files-etc"},
+			lockKeys: []string{"files:etc"},
 		},
 		{job: config.Job{Type: "nope"}, wantErr: ErrUnknownType},
 		{

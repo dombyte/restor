@@ -30,7 +30,10 @@ func TestSystemd_LockKeys(t *testing.T) {
 	d, _, _ := newDeps(t)
 	s, err := NewSystemd(SystemdSettings{Units: []string{"b", "a", "b"}}, d)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"a", "b"}, s.LockKeys(), "one key per unit, sorted")
+	assert.Equal(t, []string{"systemd:a", "systemd:b"}, s.LockKeys(), "one key per unit, sorted")
+	s, err = NewSystemd(SystemdSettings{Units: []string{"a"}, User: true}, d)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"systemd-user:a"}, s.LockKeys(), "user units are others")
 }
 
 func TestSystemd_Running(t *testing.T) {
