@@ -27,11 +27,15 @@ type ComposeSettings struct {
 	Files []string
 }
 
-// Compose manages the services of one compose file with docker or podman compose.
+// Compose manages the services of one compose file with docker or podman compose. It
+// belongs to one job of one run, which uses it from one goroutine at a time.
 type Compose struct {
 	s      ComposeSettings
 	runner Runner
 	clock  util.Clock
+	// services caches `config --services`: the compose files do not change during a job,
+	// and the command is slow (Compose parses and interpolates every file).
+	services []string
 }
 
 // NewCompose returns a Compose manager.
@@ -59,7 +63,7 @@ func (c *Compose) file() string { return c.s.Files[0] }
 // it is empty) that have a running container. A requested name that is not a service of
 // the compose file is an error: a typo would otherwise back up a running service.
 func (c *Compose) Running(ctx context.Context, requested []string) ([]string, error) {
-	services, err := c.services(ctx, requested)
+	services, err := c.listServices(ctx, requested)
 	if err != nil {
 		return nil, err
 	}
@@ -73,20 +77,17 @@ func (c *Compose) Running(ctx context.Context, requested []string) ([]string, er
 // All returns requested, or every service of the compose file when it is empty, whether
 // running or not. A requested name that is not a service of the compose file is an error.
 func (c *Compose) All(ctx context.Context, requested []string) ([]string, error) {
-	return c.services(ctx, requested)
+	return c.listServices(ctx, requested)
 }
 
-// services returns a copy of requested, or every service of the compose file.
-func (c *Compose) services(ctx context.Context, requested []string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(ctx, statusTimeout)
-	defer cancel()
-	out, err := c.run(ctx, "config", "--services")
+// listServices returns a copy of requested, or of every service of the compose file.
+func (c *Compose) listServices(ctx context.Context, requested []string) ([]string, error) {
+	all, err := c.allServices(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("servicemanager: list services of %s: %w", c.file(), err)
+		return nil, err
 	}
-	all := strings.Fields(string(out))
 	if len(requested) == 0 {
-		return all, nil
+		return slices.Clone(all), nil
 	}
 	for _, s := range requested {
 		if !slices.Contains(all, s) {
@@ -94,6 +95,21 @@ func (c *Compose) services(ctx context.Context, requested []string) ([]string, e
 		}
 	}
 	return slices.Clone(requested), nil
+}
+
+// allServices returns every service of the compose file, listed once.
+func (c *Compose) allServices(ctx context.Context) ([]string, error) {
+	if c.services != nil {
+		return c.services, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, statusTimeout)
+	defer cancel()
+	out, err := c.run(ctx, "config", "--services")
+	if err != nil {
+		return nil, fmt.Errorf("servicemanager: list services of %s: %w", c.file(), err)
+	}
+	c.services = strings.Fields(string(out))
+	return c.services, nil
 }
 
 // Stop runs `stop -t <timeout in seconds, rounded up> <services>` and waits until none of
