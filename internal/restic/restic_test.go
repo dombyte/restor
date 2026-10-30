@@ -299,6 +299,19 @@ func TestClient_BackupErrorText(t *testing.T) {
 			incomp: true,
 		},
 		{
+			name: "separator inside a message",
+			err: fmt.Errorf("command: restic: %w: %s; done", exitError(1),
+				`{"message_type":"exit_error","code":1,"message":"Fatal: a; b"}`),
+			want: "restic: backup web: command: restic: exit status 1: Fatal: a; b; done",
+		},
+		{
+			name: "cut message stays",
+			err: fmt.Errorf("command: restic: %w: %s", exitError(1),
+				`{"message_type":"exit_error","code":1,"message":"Fatal: a; b`),
+			want: "restic: backup web: command: restic: exit status 1: " +
+				`{"message_type":"exit_error","code":1,"message":"Fatal: a; b`,
+		},
+		{
 			name: "plain text stays",
 			err:  fmt.Errorf("command: restic: %w: {not json; Fatal: x", exitError(1)),
 			want: "restic: backup web: command: restic: exit status 1: {not json; Fatal: x",
