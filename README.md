@@ -212,7 +212,8 @@ of those is only a warning and does not fail the job. `start_all` works with `st
 too. Compose `start` does not create containers that were removed (`down`), and one-shot
 services (init containers, `Type=oneshot` units) run again, so list `services` when the
 project has some. After a cancel only the stopped services are started. A systemd unit
-counts as started once `systemctl is-active` reports `active`. A `Type=simple` unit is
+counts as started once `systemctl is-active` reports `active`, a `Type=oneshot` unit also
+once it has run (`inactive`). A `Type=simple` unit is
 `active` as soon as its process runs, so restor cannot tell when it crashes right after
 starting; use `Type=notify`, or check the unit in a `post` hook, when its start has to be
 confirmed. A lock per compose file and per unit keeps two restor runs from working on the

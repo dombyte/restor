@@ -149,6 +149,39 @@ func TestSystemd_Start(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestSystemd_StartOneshot(t *testing.T) {
+	t.Parallel()
+	units := []any{"a.service", "job.service"}
+	tests := []struct {
+		name      string
+		show      string
+		showErr   error
+		wantStart bool
+	}{
+		{name: "oneshot ran", show: "Type=simple\n\nType=oneshot\n", wantStart: true},
+		{name: "simple unit stopped", show: "Type=oneshot\n\nType=simple\n"},
+		{name: "show fails", showErr: assert.AnError},
+		{name: "show output unexpected", show: "Type=oneshot\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s, r := newSystemd(t, false)
+			expectSystemctl(r, append([]any{"start"}, units...)...).Return(nil, nil).Once()
+			expectSystemctl(r, append([]any{"is-active"}, units...)...).
+				Return([]byte("active\ninactive\n"), assert.AnError)
+			expectSystemctl(r, append([]any{"show", "--property=Type"}, units...)...).
+				Return([]byte(tt.show), tt.showErr).Once()
+
+			ok, err := s.Start(context.Background(), []string{"a.service", "job.service"},
+				time.Second)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantStart, ok)
+		})
+	}
+}
+
 func TestSystemd_StartTimeout(t *testing.T) {
 	t.Parallel()
 	s, r := newSystemd(t, false)
