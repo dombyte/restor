@@ -22,25 +22,31 @@ func (e *readableError) Unwrap() error { return e.err }
 
 // readable returns err with each JSON message in its text replaced by what the message
 // says, e.g. "Fatal: all source directories/files do not exist" instead of
-// {"message_type":"exit_error","code":1,"message":"Fatal: …"}. The runner joins the last
-// output lines with "; ", so each part holds at most one message; a part that is no
-// complete message stays as it is. err itself is returned when nothing changed.
+// {"message_type":"exit_error","code":1,"message":"Fatal: …"}. A message is decoded from
+// where it starts to where its JSON value ends, so a "; " inside it (the runner joins
+// the output lines with "; ") does not split it; one that is not complete stays as it
+// is. err itself is returned when nothing changed.
 func readable(err error) error {
-	parts := strings.Split(err.Error(), "; ")
+	rest := err.Error()
+	var b strings.Builder
 	changed := false
-	for i, part := range parts {
-		start := strings.Index(part, jsonStart)
+	for {
+		start := strings.Index(rest, jsonStart)
 		if start < 0 {
-			continue
+			break
 		}
-		if text, ok := messageText(part[start:]); ok {
-			parts[i], changed = part[:start]+text, true
+		text, n, ok := messageText(rest[start:])
+		if !ok {
+			n, text = len(jsonStart), jsonStart
 		}
+		b.WriteString(rest[:start] + text)
+		rest, changed = rest[start+n:], changed || ok
 	}
 	if !changed {
 		return err
 	}
-	return &readableError{msg: strings.Join(parts, "; "), err: err}
+	b.WriteString(rest)
+	return &readableError{msg: b.String(), err: err}
 }
 
 // message is an error message of `restic backup --json`: "exit_error" carries its text
@@ -52,18 +58,20 @@ type message struct {
 	} `json:"error"`
 }
 
-// messageText returns the text of the JSON message s.
-func messageText(s string) (string, bool) {
+// messageText returns the text of the JSON message at the start of s and its length.
+func messageText(s string) (string, int, bool) {
 	var m message
-	if json.Unmarshal([]byte(s), &m) != nil {
-		return "", false
+	dec := json.NewDecoder(strings.NewReader(s))
+	if dec.Decode(&m) != nil {
+		return "", 0, false
 	}
+	n := int(dec.InputOffset())
 	switch {
 	case m.Message != "":
-		return m.Message, true
+		return m.Message, n, true
 	case m.Error.Message != "":
-		return m.Error.Message, true
+		return m.Error.Message, n, true
 	default:
-		return "", false
+		return "", 0, false
 	}
 }
