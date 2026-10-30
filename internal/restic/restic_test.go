@@ -135,16 +135,24 @@ func TestClient_BackupUnchanged(t *testing.T) {
 	// restic 0.19 with --skip-if-unchanged when nothing changed: no snapshot_id.
 	out := `{"message_type":"summary","files_unmodified":2,"dirs_unmodified":9,` +
 		`"total_files_processed":2,"total_bytes_processed":9,"total_duration":0.67}`
-	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--group-by=host,tags", "--tag=web", "--", "/a").
-		Return([]byte(out), nil)
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--group-by=host,tags",
+		"--skip-if-unchanged", "--tag=web", "--", "/a").Return([]byte(out), nil)
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--group-by=host,tags",
+		"--tag=web", "--", "/a").Return([]byte(out), nil)
 
-	id, err := c.Backup(context.Background(), "web", []string{"/a"}, nil)
+	id, err := c.Backup(context.Background(), "web", []string{"/a"},
+		BackupFlags{SkipIfUnchanged: true}.Args())
 
 	assert.Empty(t, id)
 	var unchanged *UnchangedError
 	require.ErrorAs(t, err, &unchanged)
 	assert.True(t, unchanged.Unchanged())
 	assert.EqualError(t, err, "restic: backup web: nothing changed, no snapshot created")
+
+	id, err = c.Backup(context.Background(), "web", []string{"/a"}, nil)
+
+	require.NoError(t, err, "without --skip-if-unchanged a missing ID is not explained")
+	assert.Empty(t, id, "the caller counts a backup without ID as incomplete")
 }
 
 func TestClient_BackupOtherExitCodeFails(t *testing.T) {

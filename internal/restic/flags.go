@@ -11,8 +11,12 @@ import (
 	"time"
 )
 
-// snapshotIDPattern matches a full or shortened snapshot ID.
-const snapshotIDPattern = `^[0-9a-f]{8,64}$`
+const (
+	// snapshotIDPattern matches a full or shortened snapshot ID.
+	snapshotIDPattern = `^[0-9a-f]{8,64}$`
+	// skipIfUnchanged lets backup skip the snapshot when nothing changed.
+	skipIfUnchanged = "--skip-if-unchanged"
+)
 
 // ErrRestore is wrapped by the problems RestoreFlags.Validate reports.
 var ErrRestore = errors.New("restic: invalid restore options")
@@ -67,7 +71,7 @@ func (f BackupFlags) Args() []string {
 		args = append(args, "--exclude-larger-than="+f.ExcludeLargerThan)
 	}
 	args = appendBool(args, "--one-file-system", f.OneFileSystem)
-	args = appendBool(args, "--skip-if-unchanged", f.SkipIfUnchanged)
+	args = appendBool(args, skipIfUnchanged, f.SkipIfUnchanged)
 	return appendEach(args, "--tag", f.Tags)
 }
 

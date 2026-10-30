@@ -496,8 +496,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   8-character short ID; none for a `dry_run` summary or a missing summary, which is a
   warning, not an error) and the counters logged at info (`files_new`, `bytes_added`,
   `duration`, …). Lines that are not JSON are skipped. Exit code 3 returns the ID with a
-  `*restic.IncompleteError`; a real summary without ID (skipped as unchanged) returns a
-  `*restic.UnchangedError`. `backup` matches them through `Incomplete() bool` and
+  `*restic.IncompleteError`; a real summary without ID returns a `*restic.UnchangedError`
+  only when `--skip-if-unchanged` was passed (else the empty ID makes the job incomplete).
+  `backup` matches them through `Incomplete() bool` and
   `Unchanged() bool` interfaces, so it does not import `restic`.
 - Exit codes 10 (no repository), 11 (repository locked; hint: `repository.retry_lock`)
   and 12 (wrong password) are named in the error before the runner's error, which keeps
