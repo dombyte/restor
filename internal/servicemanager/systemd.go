@@ -104,8 +104,10 @@ func (s *Systemd) Stop(ctx context.Context, units []string, timeout time.Duratio
 	})
 }
 
-// Start runs `systemctl start <units>` and waits until all of them are active. It
-// returns false when some are not active after timeout.
+// Start runs `systemctl start <units>` and waits until all of them are active, or, for a
+// Type=oneshot unit, inactive: `systemctl start` waits until a oneshot unit has run and
+// fails when it failed, so inactive means it ran (unless it sets RemainAfterExit=yes,
+// then it is active). It returns false when some are not started after timeout.
 func (s *Systemd) Start(ctx context.Context, units []string, timeout time.Duration) (bool, error) {
 	if len(units) == 0 {
 		return true, nil
@@ -116,12 +118,46 @@ func (s *Systemd) Start(ctx context.Context, units []string, timeout time.Durati
 	if _, err := s.run(cmdCtx, append([]string{"start"}, units...)...); err != nil {
 		return false, fmt.Errorf("servicemanager: start %s: %w", unitList(units), err)
 	}
+	var oneshot []bool // looked up once, when a unit is inactive
 	return waitUntil(ctx, s.clock, deadline, func(ctx context.Context) (bool, error) {
 		states, err := s.states(ctx, units)
-		return err == nil && !slices.ContainsFunc(states, func(st string) bool {
-			return st != "active"
-		}), err
+		if err != nil {
+			return false, err
+		}
+		if oneshot == nil && slices.Contains(states, "inactive") {
+			oneshot = s.oneshots(ctx, units)
+		}
+		return started(states, oneshot), nil
 	})
+}
+
+// started reports whether every unit is active, or inactive and a oneshot unit.
+func started(states []string, oneshot []bool) bool {
+	for i, st := range states {
+		if st != "active" && (st != "inactive" || i >= len(oneshot) || !oneshot[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// oneshots reports for each unit whether it is a Type=oneshot unit, from
+// `systemctl show --property=Type <units>` (one "Type=…" block per unit, in order). When
+// the query fails, no unit counts as oneshot: Start then waits for active, as before,
+// and reports a timeout instead of a started unit.
+func (s *Systemd) oneshots(ctx context.Context, units []string) []bool {
+	ctx, cancel := context.WithTimeout(ctx, statusTimeout)
+	defer cancel()
+	oneshot := make([]bool, len(units))
+	out, err := s.run(ctx, append([]string{"show", "--property=Type"}, units...)...)
+	blocks := strings.Split(strings.TrimSpace(string(out)), "\n\n")
+	if err != nil || len(blocks) != len(units) {
+		return oneshot
+	}
+	for i, b := range blocks {
+		oneshot[i] = strings.TrimSpace(b) == "Type=oneshot"
+	}
+	return oneshot
 }
 
 // states runs `systemctl is-active <units>`, which prints one state per unit in order

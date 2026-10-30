@@ -458,8 +458,11 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - systemd: `systemctl [--user] stop|start <units>` (stop ignores "not running"/"not
   loaded"); state from `systemctl is-active <units>`. Up (running before the backup, and
   not yet stopped) = `active`, `activating`, `deactivating`, `reloading` or `refreshing`;
-  started = all `active` (a `Type=simple` unit is `active` as soon as its process runs,
-  so a crash right after the start is not seen; README says so).
+  started = all `active`, or `inactive` for a `Type=oneshot` unit (`systemctl start`
+  waits until it has run and fails when it failed; the type comes from
+  `systemctl show --property=Type <units>`, queried once when a unit is inactive). A
+  `Type=simple` unit is `active` as soon as its process runs, so a crash right after the
+  start is not seen; README says so.
   `services` selects some of `units` (a name that is not one of them is a validation
   error); empty means all units.
 - Files only (no type): the `noop` service manager; no services, every operation
