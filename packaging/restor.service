@@ -8,14 +8,22 @@ Description=Restic Backup Orchestrator
 # run a backup, which stops services, at every boot.
 Type=oneshot
 ExecStart=/usr/bin/restor run --config /etc/restor/config.yaml
-# On stop, restor restarts the services it stopped and exits within its shutdown timeout
-# (logged as shutdown_timeout: the largest start_timeout + 4 minutes); give it longer than
-# that before systemd kills it. 900 s covers a start_timeout up to 11 minutes.
+# On stop, restor restarts the services it stopped, runs the jobs' post hooks and exits
+# within its shutdown timeout (logged as shutdown_timeout: the largest start_timeout + 4
+# minutes, + 1 minute for a post hook); give it longer than that before systemd kills it.
+# 900 s covers a start_timeout up to 10 minutes.
 TimeoutStopSec=900
-# Back up at a lower CPU and I/O priority than the services (best-effort, not idle: an
-# idle backup could starve under load while the services are stopped).
-Nice=10
-IOSchedulingClass=best-effort
-IOSchedulingPriority=7
+# restor signals the commands it runs itself on stop (SIGTERM to each process group,
+# SIGKILL 10 s later), so systemd only signals restor. With the default (control-group)
+# it would also wait for, and finally kill, what must outlive the run: with podman-compose
+# the conmon of every container restor restarted stays in this unit's cgroup.
+KillMode=process
+# Back up with less CPU and I/O than the services get. Weights instead of Nice= and
+# IOSchedulingClass=, which every child process inherits: the containers podman-compose
+# restarts would keep running at the lower priority. Weights are not inherited (the
+# containers get cgroups of their own) and, unlike idle classes, never starve a backup
+# while the services are stopped.
+CPUWeight=20
+IOWeight=20
 StandardOutput=journal
 StandardError=journal

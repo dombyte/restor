@@ -18,7 +18,7 @@ const composeFile = "/srv/app/compose.yml"
 func newCompose(t *testing.T) (*Compose, *mocks.MockRunner) {
 	t.Helper()
 	d, r, _ := newDeps(t)
-	c, err := NewCompose(ComposeSettings{Binary: "podman", File: composeFile}, d)
+	c, err := NewCompose(ComposeSettings{Binary: "podman", Files: []string{composeFile}}, d)
 	require.NoError(t, err)
 	return c, r
 }
@@ -32,7 +32,23 @@ func expectCompose(r *mocks.MockRunner, args ...any) *mock.Call {
 func TestCompose_LockKeys(t *testing.T) {
 	t.Parallel()
 	c, _ := newCompose(t)
-	assert.Equal(t, []string{composeFile}, c.LockKeys())
+	assert.Equal(t, []string{"compose:" + composeFile}, c.LockKeys())
+}
+
+func TestCompose_OverrideFiles(t *testing.T) {
+	t.Parallel()
+	d, r, _ := newDeps(t)
+	files := []string{composeFile, "/srv/app/compose.override.yml"}
+	c, err := NewCompose(ComposeSettings{Binary: "docker", Files: files}, d)
+	require.NoError(t, err)
+	r.On("Run", mock.Anything, "docker", "compose", "-f", files[0], "-f", files[1],
+		"config", "--services").Return([]byte("web\nextra\n"), nil).Once()
+
+	got, err := c.All(context.Background(), nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"web", "extra"}, got, "services of the override too")
+	assert.Equal(t, []string{"compose:" + composeFile}, c.LockKeys(), "the project's file only")
 }
 
 func TestCompose_Running(t *testing.T) {
@@ -40,7 +56,7 @@ func TestCompose_Running(t *testing.T) {
 	ps := []byte(`{"Service":"web","State":"running"}` + "\n" +
 		`{"Service":"db","State":"exited"}`)
 	c, r := newCompose(t)
-	expectCompose(r, "config", "--services").Return([]byte("web\ndb\njob\n\n"), nil).Times(4)
+	expectCompose(r, "config", "--services").Return([]byte("web\ndb\njob\n\n"), nil).Once()
 	expectCompose(r, "ps", "--format", "json").Return(ps, nil).Once()
 	requested := []string{"web", "db"}
 	got, err := c.Running(context.Background(), requested)
@@ -65,11 +81,15 @@ func TestCompose_Running(t *testing.T) {
 func TestCompose_All(t *testing.T) {
 	t.Parallel()
 	c, r := newCompose(t)
-	expectCompose(r, "config", "--services").Return([]byte("web\ndb\n"), nil).Times(3)
+	expectCompose(r, "config", "--services").Return([]byte("web\ndb\n"), nil).Once()
 
 	got, err := c.All(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"web", "db"}, got, "every service, running or not")
+	got[0] = "changed"
+	got, err = c.All(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"web", "db"}, got, "listed once, callers get copies")
 	got, err = c.All(context.Background(), []string{"db"})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"db"}, got)
@@ -100,6 +120,18 @@ func TestCompose_Stop(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, ok)
+}
+
+func TestCompose_StopRoundsUpToSeconds(t *testing.T) {
+	t.Parallel()
+	c, r := newCompose(t)
+	expectCompose(r, "stop", "-t", "1", "web").Return(nil, nil).Once()
+	expectCompose(r, "ps", "--format", "json").Return(nil, nil).Once()
+
+	ok, err := c.Stop(context.Background(), []string{"web"}, 500*time.Millisecond)
+
+	require.NoError(t, err)
+	assert.True(t, ok, "-t 0 would kill the containers without a grace period")
 }
 
 func TestCompose_StopTimeout(t *testing.T) {

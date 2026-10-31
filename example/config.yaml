@@ -144,7 +144,8 @@ defaults:
   #   pre:        before the services are stopped; if it fails the job fails and its
   #               services are not touched
   #   post:       after the services are started again, whenever pre succeeded (also
-  #               after a failed backup, so it can undo pre); not after a cancel
+  #               after a failed backup or a cancel, so it can undo pre; after a
+  #               cancel it gets at most one minute)
   #   on_failure: after post, when the job failed
   # example/hooks/ has scripts to start from: as pre and post hook here, ntfy.sh (or
   # notifyapp.sh) reports the start and the result of every job.
@@ -163,7 +164,8 @@ defaults:
 #   plus every key of the defaults section.
 #
 # docker-compose / podman-compose:
-#   compose_file: the compose file (required)
+#   compose_file: the compose file (required); with a default name (compose.yaml, …) its
+#                 override file (compose.override.yml, …) is used too, as Compose does
 #   services:     services to stop; default: every service of the compose file
 # systemd:
 #   units:        units to stop (required)

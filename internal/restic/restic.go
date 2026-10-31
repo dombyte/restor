@@ -145,17 +145,18 @@ func (c *Client) Backup(ctx context.Context, tag string, sources, args []string)
 	if found {
 		c.logSummary(tag, sum)
 	}
-	return backupResult(tag, sum, found, err)
+	return backupResult(tag, sum, found, slices.Contains(args, skipIfUnchanged), err)
 }
 
 // backupResult returns the snapshot ID of a backup that ended with err (nil or exit code
-// 3) and the summary sum, if found.
-func backupResult(tag string, sum summary, found bool, err error) (string, error) {
+// 3) and the summary sum, if found; skip tells whether --skip-if-unchanged was passed.
+func backupResult(tag string, sum summary, found, skip bool, err error) (string, error) {
 	switch {
 	case err != nil:
 		return sum.snapshotID(), &IncompleteError{Tag: tag, Err: readable(err)}
-	case found && !sum.DryRun && sum.SnapshotID == "":
-		// Only a skipped snapshot leaves the ID out of a real summary.
+	case skip && found && !sum.DryRun && sum.SnapshotID == "":
+		// Only a skipped snapshot leaves the ID out of a real summary. Without the flag a
+		// missing ID is unexplained: the caller treats it as incomplete.
 		return "", &UnchangedError{Tag: tag}
 	}
 	return sum.snapshotID(), nil

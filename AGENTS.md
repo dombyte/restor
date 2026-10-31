@@ -146,8 +146,9 @@ example/                   config.yaml (full reference, kept valid by a test), r
 packaging/                 .deb/.rpm only: system + user units (/usr/bin/restor) and the
                            install/remove scripts (nfpm in .goreleaser.yaml)
 scripts/pre-commit.sh      local checks (make check)
-scripts/install-restic.sh  downloads a restic release, checksum verified (CI, make
-                           integration-oldest)
+scripts/install-restic.sh  downloads a restic release, checksum and signature verified
+                           (CI, make integration-oldest; needs gpg)
+scripts/restic-release-key.asc  restic's release signing key (CF8F…A907), pinned
 ```
 
 Layout rules:
@@ -157,7 +158,7 @@ Layout rules:
 - `pkg/` only for code meant for other modules, and only with user confirmation.
 - Root files: `AGENTS.md`, `README.md`, `.golangci.yml`, `.goreleaser.yaml`,
   `.mockery.yaml`, `Makefile`, `renovate.json`, `scripts/pre-commit.sh`,
-  `scripts/install-restic.sh`, `example/`, `packaging/`.
+  `scripts/install-restic.sh`, `scripts/restic-release-key.asc`, `example/`, `packaging/`.
 
 ---
 
@@ -213,20 +214,22 @@ restor itself has no data store. What it writes, and who writes it:
   `/run/restor` for root on Linux, `$XDG_RUNTIME_DIR/restor` for other users, else
   `restor-<uid>` in the temp dir; it is refused unless it is a real directory owned by the
   user and not writable by others (`ErrUnsafeDir`). The keys come from the service manager
-  (`LockKeys`): the compose file path, one key per systemd unit, or `files-<job>`; a job
-  takes all of its keys before it starts and fails if one is held. The locks stop two
-  restor processes from stopping and backing up the same compose file or unit at once,
-  also when two jobs share only some of their units. Within one run the schedule never
-  starts two jobs that share a key, so they wait for each other instead of failing.
+  (`LockKeys`), prefixed with the kind of service: `compose:<file>`, one
+  `systemd:<unit>` (`systemd-user:<unit>` for the user manager) per unit, or
+  `files:<job>`; a job takes all of its keys before it starts and fails if one is held.
+  The locks stop two restor processes from stopping and backing up the same compose file
+  or unit at once, also when two jobs share only some of their units. Within one run the
+  schedule never starts two jobs that share a key, so they wait for each other instead
+  of failing.
   Runs of different users do not see each other's locks (rare: root and a `docker` group
   member backing up the same compose file).
 - **Services:** a job stops and restarts only those of its services (`services`, or all
   services of its compose file / its `units` when the list is empty) that are running when
-  its backup starts. Services that were already stopped, and one-shot jobs that have
-  exited, stay as they were, unless the job sets `start_all`: then, after the restart,
-  the job also starts the services it did not stop (`Services.All` minus the stopped
-  ones; `start` leaves running ones as they are), also with `stop: false`, but not after
-  a cancel.
+  its backup starts (none running is a warning: a wrong compose project looks the same).
+  Services that were already stopped, and one-shot jobs that have exited, stay as they
+  were, unless the job sets `start_all`: then, after the restart, the job also starts the
+  services it did not stop (`Services.All` minus the stopped ones; `start` leaves running
+  ones as they are), also with `stop: false`, but not after a cancel.
 
 ## 6. Lifecycle
 
@@ -284,14 +287,24 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   further job starts, waits end early. (`restor restic` stays in the terminal's process
   group, so Ctrl-C reaches restic directly.)
 - A job that stopped its services restarts them with its own context
-  (`context.WithoutCancel`, bounded by `start_timeout` + 3 min).
+  (`context.WithoutCancel`, bounded by `start_timeout` + 3 min), then runs its post hook,
+  which may undo the pre hook, for at most 1 min after the cancel (`graceContext`).
 - `main` waits at most `Manager.ShutdownTimeout` after the signal, then exits 1: 1 min
-  plus the largest `start_timeout` + 3 min of the jobs that stop services (only the jobs
-  running at the signal restart, at the same time, so the largest counts, not the sum;
-  logged as `shutdown_timeout` at the start of a run). The systemd units set
-  `TimeoutStopSec=900` so systemd does not kill restor while it restarts services; that
-  covers a `start_timeout` up to 11 min, a larger one needs a larger `TimeoutStopSec`. No
-  second-signal "force" mode: the deadline is the force.
+  plus, for the slowest job, `start_timeout` + 3 min when it stops services and 1 min
+  when it has a post hook (only the jobs running at the signal do that, at the same time,
+  so the slowest counts, not the sum; logged as `shutdown_timeout` at the start of a run).
+  The systemd units set `TimeoutStopSec=900` so systemd does not kill restor while it
+  restarts services; that covers a `start_timeout` up to 10 min, a larger one needs a
+  larger `TimeoutStopSec`. No second-signal "force" mode: the deadline is the force.
+- The units set `KillMode=process`: systemd signals only restor, which signals its own
+  commands. With the default `control-group`, systemd waits for every process left in the
+  unit's cgroup when the run ends: with podman-compose (which runs `podman start` itself;
+  the docker-compose provider goes through the podman API service) the `conmon` of each
+  restarted container stays there and ignores SIGTERM, so every run hung for
+  `TimeoutStopSec` and then lost the container's monitor. For the same reason the units
+  lower the backup's share with `CPUWeight=`/`IOWeight=` (not inherited; containers get
+  their own scope) instead of `Nice=`/`IOSchedulingClass=` (inherited by the containers
+  podman-compose restarts).
 - There is no in-process retry and no restart: systemd records the failed run, and the
   next timer run is the retry (`Persistent=true` catches up missed runs).
 
@@ -412,7 +425,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 
 ### Hooks
 - Split on whitespace and executed directly (no shell): no quoting, pipes or redirects.
-  Use a script for anything more.
+  Use a script for anything more. A program that exits successfully while a process it
+  started still holds its output succeeds after the 10 s `WaitDelay`, with a warning
+  (`exec.ErrWaitDelay`).
 - Run with the process environment, the run context and these variables: `pre` gets
   `RESTOR_JOB`, `RESTOR_HOOK=pre`; `post` and the job's `on_failure` also
   `RESTOR_STATUS` (`success`, `incomplete`, `failed`), `RESTOR_SNAPSHOT_ID` (empty without
@@ -426,26 +441,35 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   (or there is none), also when the backup or the restart failed, so it can undo the pre
   hook. The job's on_failure hook runs after it when the job failed (also after a failed
   lock or pre hook). The run-level post runs once after maintenance, then the run-level
-  on_failure when a job, forget, prune or unlock failed. All are skipped after a cancel
-  (a warning); their own failures are logged only.
+  on_failure when a job, forget, prune or unlock failed. After a cancel the job's post
+  hook still runs (for at most 1 min), the others are skipped (a warning); their own
+  failures are logged only.
 
 ### Service managers
-- Compose: `<docker|podman> compose -f <file> …`; services from `config --services` when
-  not listed (a listed name that `config --services` does not report fails the job); stop
-  with `stop -t <stop_timeout> <services>` (ignores "no containers to stop"), start with
-  `start <services>` (not `up`: a backup never recreates containers from a changed
-  compose file). Running = `ps --format json` reports the service with `State`
+- Compose: `<docker|podman> compose -f <file> [-f <override>] …`; the override is the first
+  of `compose.override.yml`, `compose.override.yaml`, `docker-compose.override.yml`,
+  `docker-compose.override.yaml` next to a file with a default name (`compose.yaml`,
+  `compose.yml`, `docker-compose.yml`, `docker-compose.yaml`), found at load time
+  (`config.composeFiles`), as Compose itself does without `-f`; the first file is the lock
+  key. Services from `config --services` (listed once per job) when not listed (a listed
+  name that `config --services` does not report fails the job); stop with
+  `stop -t <stop_timeout in s, rounded up> <services>` (ignores "no containers to stop"),
+  start with `start <services>` (not `up`: a backup never recreates containers from a
+  changed compose file). Running = `ps --format json` reports the service with `State`
   `running` (Docker JSON lines or a JSON array; podman-compose via the
   `com.docker.compose.service` label).
 - systemd: `systemctl [--user] stop|start <units>` (stop ignores "not running"/"not
   loaded"); state from `systemctl is-active <units>`. Up (running before the backup, and
   not yet stopped) = `active`, `activating`, `deactivating`, `reloading` or `refreshing`;
-  started = all `active` (a `Type=simple` unit is `active` as soon as its process runs,
-  so a crash right after the start is not seen; README says so).
+  started = all `active`, or `inactive` for a `Type=oneshot` unit (`systemctl start`
+  waits until it has run and fails when it failed; the type comes from
+  `systemctl show --property=Type <units>`, queried once when a unit is inactive). A
+  `Type=simple` unit is `active` as soon as its process runs, so a crash right after the
+  start is not seen; README says so.
   `services` selects some of `units` (a name that is not one of them is a validation
   error); empty means all units.
 - Files only (no type): the `noop` service manager; no services, every operation
-  succeeds, lock key `files-<job>`.
+  succeeds, lock key `files:<job>`.
 - Stop and start poll every 500 ms until the expected state or the timeout; a failed
   status query is retried, and its error counts only when the last poll failed. The
   timeout counts from before the stop/start command, so a slow command shortens the wait
@@ -473,8 +497,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   8-character short ID; none for a `dry_run` summary or a missing summary, which is a
   warning, not an error) and the counters logged at info (`files_new`, `bytes_added`,
   `duration`, …). Lines that are not JSON are skipped. Exit code 3 returns the ID with a
-  `*restic.IncompleteError`; a real summary without ID (skipped as unchanged) returns a
-  `*restic.UnchangedError`. `backup` matches them through `Incomplete() bool` and
+  `*restic.IncompleteError`; a real summary without ID returns a `*restic.UnchangedError`
+  only when `--skip-if-unchanged` was passed (else the empty ID makes the job incomplete).
+  `backup` matches them through `Incomplete() bool` and
   `Unchanged() bool` interfaces, so it does not import `restic`.
 - Exit codes 10 (no repository), 11 (repository locked; hint: `repository.retry_lock`)
   and 12 (wrong password) are named in the error before the runner's error, which keeps
@@ -561,7 +586,10 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `flock` locks still guard against a second restor process.
 - **Restart services even when the backup failed or the run was cancelled:** a failed
   backup must not leave production services down. `backup_timeout` exists for the same
-  reason: a hanging backup would otherwise keep them down until someone notices.
+  reason: a hanging backup would otherwise keep them down until someone notices. The
+  job's post hook runs after a cancel for the same reason (it may end a maintenance mode
+  the pre hook started), bounded so that a hanging hook cannot block the shutdown; the
+  notification hooks are skipped.
 - **Tag = lowercase job name:** keeps each job's retention separate in a shared
   repository; lowercase keeps the tags of snapshots made by earlier versions (viper
   lowercased the names). Renaming a job starts a new snapshot series (the old one is no
@@ -685,7 +713,8 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
 - Levels: `debug` for command lines, the last output lines of successful commands and
   per-step detail, `info` for lifecycle (run start,
   job done, snapshot ID), `warn` for recovered problems (services not stopped/started
-  in time, stop command failed, missing binary, suspicious config), `error` for failures
+  in time, stop command failed, no running service to stop, missing binary, suspicious
+  config), `error` for failures
   that need attention (job failed, forget/prune/unlock failed, a hook
   failed).
 - Never log secrets: no restic password, S3 keys, env file contents or repository URLs
@@ -780,7 +809,7 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
 | `.golangci.yml` | v2 config, linters from section 12, formatters gofumpt + goimports |
 | `scripts/pre-commit.sh` | check-only (never rewrites or stages): fmt diff, lint, deadcode, govulncheck, build, `go test -race` |
 | `Makefile` | `build` (ldflags build info), `check` (runs the script), `clean`, `run`, `integration` (restic on PATH), `integration-oldest` (downloads `minSupported` into `~/.cache/restor/restic`) |
-| `.github/workflows/checks.yml` | on push to main, PRs and `workflow_call`: tidy check, build, race tests, deadcode, govulncheck, mock drift, golangci-lint, integration tests against the oldest supported and the newest tested restic (downloaded, checksum verified); a `gate` job skips them on a push to main that is a PR's merge commit (15.5); `concurrency` cancels superseded PR runs only |
+| `.github/workflows/checks.yml` | on push to main, PRs and `workflow_call`: tidy check, build, race tests, deadcode, govulncheck, mock drift, golangci-lint, integration tests against the oldest supported and the newest tested restic (downloaded; checksums verified, and their signature by restic's pinned release key); a `gate` job skips them on a push to main that is a PR's merge commit (15.5); `concurrency` cancels superseded PR runs only |
 | `.github/workflows/release.yml` | on `vX.Y.Z` / `vX.Y.Z-*` tags: a `guard` job verifies the exact tag format and that the tag is on `main`, then reuses `checks.yml` (granted `pull-requests: read` for the gate); passes `GOVERSION` to goreleaser; `concurrency` runs one release per tag, never cancelled |
 | `.goreleaser.yaml` | `go mod verify` only (never rewrites), `-trimpath`, reproducible (`CommitDate`), `goamd64: v1`, grouped changelog, archives + nfpm `.deb`/`.rpm` (`mtime` = `CommitDate`), no image (section 8) |
 | `.gitignore` | never commit local config (`config.yaml`, `*.env` in the root), secrets or build output |

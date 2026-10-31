@@ -384,17 +384,17 @@ func CreateServiceManager(j config.Job, d servicemanager.Deps) (backup.Services,
 	switch j.Type {
 	case config.TypeDockerCompose:
 		return servicemanager.NewCompose(
-			servicemanager.ComposeSettings{Binary: "docker", File: j.ComposeFile}, d)
+			servicemanager.ComposeSettings{Binary: "docker", Files: j.ComposeFiles}, d)
 	case config.TypePodmanCompose:
 		return servicemanager.NewCompose(
-			servicemanager.ComposeSettings{Binary: "podman", File: j.ComposeFile}, d)
+			servicemanager.ComposeSettings{Binary: "podman", Files: j.ComposeFiles}, d)
 	case config.TypeSystemd:
 		return servicemanager.NewSystemd(servicemanager.SystemdSettings{
 			Units: j.Units, User: j.Scope == config.ScopeUser,
 		}, d)
 	case config.TypeFiles:
 		// Keyed by job: file jobs share no services and may run at the same time.
-		return servicemanager.NewNoop(servicemanager.NoopSettings{LockKey: "files-" + j.Name}),
+		return servicemanager.NewNoop(servicemanager.NoopSettings{LockKey: "files:" + j.Name}),
 			nil
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownType, j.Type)
@@ -456,8 +456,11 @@ func component(log zerolog.Logger, name string) zerolog.Logger {
 
 func logJobs(log zerolog.Logger, jobs []config.Job) {
 	for _, j := range jobs {
-		log.Info().Str("job", j.Name).Str("type", or(j.Type, "files")).
-			Strs("sources", j.Sources).Strs("after", j.After).
+		e := log.Info().Str("job", j.Name).Str("type", or(j.Type, "files"))
+		if len(j.ComposeFiles) > 0 {
+			e = e.Strs("compose_files", j.ComposeFiles)
+		}
+		e.Strs("sources", j.Sources).Strs("after", j.After).
 			Bool("stop", j.StopsServices()).Bool("start_all", j.StartsAll()).
 			Msg("job configured")
 	}

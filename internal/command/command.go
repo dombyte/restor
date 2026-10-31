@@ -35,13 +35,14 @@ var ErrEmptyCommand = errors.New("command: empty command")
 
 // Runner executes programs directly (no shell) with Env as their complete environment.
 type Runner struct {
-	env []string
-	log zerolog.Logger
+	env       []string
+	log       zerolog.Logger
+	waitDelay time.Duration
 }
 
 // New returns a Runner whose programs get env (KEY=value pairs, later entries win).
 func New(env []string, log zerolog.Logger) *Runner {
-	return &Runner{env: env, log: log}
+	return &Runner{env: env, log: log, waitDelay: waitDelay}
 }
 
 // Run executes name with args and returns its stdout (the last maxOutput bytes). Stderr
@@ -49,7 +50,9 @@ func New(env []string, log zerolog.Logger) *Runner {
 // callers that parse the output. A non-zero exit returns the output too, with an error
 // that carries the last lines of stderr, or of stdout when stderr is empty. When ctx
 // ends, the program's process group gets SIGTERM, the program SIGKILL after waitDelay,
-// and what is left of the group SIGKILL when it ended.
+// and what is left of the group SIGKILL when it ended. A program that exits successfully
+// while a process it started still holds its output succeeds after waitDelay, with a
+// warning.
 func (r *Runner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return r.RunEnv(ctx, nil, name, args...)
 }
@@ -72,17 +75,10 @@ func (r *Runner) RunEnv(ctx context.Context, env []string, name string, args ...
 	// hook script's children), not only the program itself.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return signalGroup(cmd.Process.Pid, syscall.SIGTERM) }
-	cmd.WaitDelay = waitDelay
+	cmd.WaitDelay = r.waitDelay
 	stdout, stderr := &tailBuffer{max: maxOutput}, &tailBuffer{max: maxStderr}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	err := cmd.Run()
-	if ctx.Err() != nil && cmd.Process != nil {
-		// Kill what is left of a cancelled group: after waitDelay exec only kills the
-		// program itself.
-		if kerr := signalGroup(cmd.Process.Pid, syscall.SIGKILL); kerr != nil {
-			r.log.Warn().Err(kerr).Str("program", name).Msg("cannot kill process group")
-		}
-	}
+	err := r.finish(ctx, cmd, name, cmd.Run())
 	out, errOut := stdout.Bytes(), stderr.Bytes()
 	if err != nil {
 		if len(bytes.TrimSpace(errOut)) == 0 {
@@ -93,6 +89,25 @@ func (r *Runner) RunEnv(ctx context.Context, env []string, name string, args ...
 	r.log.Debug().Str("program", name).Str("output", tail(out, maxOutputLines)).
 		Str("stderr", tail(errOut, maxOutputLines)).Msg("command finished")
 	return out, nil
+}
+
+// finish cleans up after cmd ended with err and returns the error of the run.
+func (r *Runner) finish(ctx context.Context, cmd *exec.Cmd, name string, err error) error {
+	if ctx.Err() != nil && cmd.Process != nil {
+		// Kill what is left of a cancelled group: after waitDelay exec only kills the
+		// program itself.
+		if kerr := signalGroup(cmd.Process.Pid, syscall.SIGKILL); kerr != nil {
+			r.log.Warn().Err(kerr).Str("program", name).Msg("cannot kill process group")
+		}
+	}
+	if ctx.Err() == nil && errors.Is(err, exec.ErrWaitDelay) {
+		// The program succeeded, but something it started in the background (a hook's
+		// "daemon &") still holds its output. That process keeps running, without output.
+		r.log.Warn().Str("program", name).Msg("a process the program started still holds " +
+			"its output; redirect the output of background processes")
+		return nil
+	}
+	return err
 }
 
 // Stdio are the standard streams of an attached program.

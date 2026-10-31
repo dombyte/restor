@@ -30,7 +30,10 @@ func TestSystemd_LockKeys(t *testing.T) {
 	d, _, _ := newDeps(t)
 	s, err := NewSystemd(SystemdSettings{Units: []string{"b", "a", "b"}}, d)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"a", "b"}, s.LockKeys(), "one key per unit, sorted")
+	assert.Equal(t, []string{"systemd:a", "systemd:b"}, s.LockKeys(), "one key per unit, sorted")
+	s, err = NewSystemd(SystemdSettings{Units: []string{"a"}, User: true}, d)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"systemd-user:a"}, s.LockKeys(), "user units are others")
 }
 
 func TestSystemd_Running(t *testing.T) {
@@ -147,6 +150,39 @@ func TestSystemd_Start(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, ok)
+}
+
+func TestSystemd_StartOneshot(t *testing.T) {
+	t.Parallel()
+	units := []any{"a.service", "job.service"}
+	tests := []struct {
+		name      string
+		show      string
+		showErr   error
+		wantStart bool
+	}{
+		{name: "oneshot ran", show: "Type=simple\n\nType=oneshot\n", wantStart: true},
+		{name: "simple unit stopped", show: "Type=oneshot\n\nType=simple\n"},
+		{name: "show fails", showErr: assert.AnError},
+		{name: "show output unexpected", show: "Type=oneshot\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s, r := newSystemd(t, false)
+			expectSystemctl(r, append([]any{"start"}, units...)...).Return(nil, nil).Once()
+			expectSystemctl(r, append([]any{"is-active"}, units...)...).
+				Return([]byte("active\ninactive\n"), assert.AnError)
+			expectSystemctl(r, append([]any{"show", "--property=Type"}, units...)...).
+				Return([]byte(tt.show), tt.showErr).Once()
+
+			ok, err := s.Start(context.Background(), []string{"a.service", "job.service"},
+				time.Second)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantStart, ok)
+		})
+	}
 }
 
 func TestSystemd_StartTimeout(t *testing.T) {

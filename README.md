@@ -108,9 +108,12 @@ that `restic` is installed and supported (see below). `restor snapshots`,
 `restor restore` and `restor restic` exit with restic's exit code.
 
 On SIGINT/SIGTERM restor stops the running backups, restarts the services it stopped,
-starts no further job and exits within its shutdown timeout (the largest `start_timeout`
-+ 4 minutes, logged as `shutdown_timeout`). The shipped units allow 900 s
-(`TimeoutStopSec`); raise it if a `start_timeout` is above 11 minutes.
+runs the `post` hook of those jobs, starts no further job and exits within its shutdown
+timeout (the largest `start_timeout` + 4 minutes, + 1 minute for a `post` hook, logged as
+`shutdown_timeout`). The shipped units allow 900 s (`TimeoutStopSec`); raise it if a
+`start_timeout` is above 10 minutes. Keep `KillMode=process` and the `CPUWeight=`/
+`IOWeight=` settings in custom units: containers that podman-compose starts again keep
+their monitor process in restor's cgroup and would inherit a `Nice=` setting.
 
 ## Configuration
 
@@ -161,8 +164,8 @@ in the backup; `restor run` then fails with "no jobs configured".
 
 **The env file** holds the variables of restic only: the repository password and the
 backend credentials, and restic's own settings such as `RESTIC_CACHE_DIR` or
-`RESTIC_COMPRESSION`. One `KEY=value` per line, as systemd's `EnvironmentFile=`; values
-are taken literally, so a `$` in a password stays a `$`. Keep it private (`chmod 600`);
+`RESTIC_COMPRESSION`. One `KEY=value` per line, like systemd's `EnvironmentFile=`, but
+values are taken literally, also in quotes: a `$` or `\` in a password stays as it is. Keep it private (`chmod 600`);
 restor warns when other users can read it. Hooks and service managers do not see it.
 
 **Jobs:** the name is case-insensitive, its lowercase form is the restic tag, and it must
@@ -172,13 +175,13 @@ not start with `-` or contain `,` or whitespace.
 |---|---|
 | `type` | `docker-compose`, `podman-compose` or `systemd`; leave it out for files only |
 | `sources` | paths to back up (required) |
-| `compose_file` | the compose file (compose types, required) |
+| `compose_file` | the compose file (compose types, required); for `compose.yaml`, `compose.yml`, `docker-compose.yml` or `docker-compose.yaml` the override file next to it (`compose.override.yml`, …) is used too, as `docker compose` without `-f` does |
 | `units`, `scope` | the systemd units (required) and `system` (default) or `user` |
 | `services` | services to stop; default: all of the compose file / all `units` |
 | `before`, `after` | jobs that run after / before this one |
 | `stop` | stop the services during the backup (default `true`) |
 | `start_all` | after the backup, also start the services that were not running (default `false`) |
-| `stop_timeout`, `start_timeout` | wait for the services to stop / start (default `1m` / `2m`) |
+| `stop_timeout`, `start_timeout` | wait for the services to stop / start (default `1m` / `2m`); compose gets the stop timeout in whole seconds, rounded up |
 | `backup_timeout` | cancel a backup that takes longer; the services start again, the job fails |
 | `keep` | retention: `last`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`, `within…`, and `tags` next to another rule (not one of the job's own `tags`) |
 | `exclude`, `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`, `exclude_larger_than`, `one_file_system` | what restic leaves out (the restic options of the same name) |
@@ -199,14 +202,18 @@ compose file or a systemd unit never run at the same time. `restor validate` pri
 resulting order.
 
 **Services:** only the services that are running when a job's backup starts are stopped,
-and only those are started again afterwards, also when the backup failed. With
+and only those are started again afterwards, also when the backup failed. When none of
+them runs, restor warns and backs up anyway: check `compose_file` or `units` if the
+services should have been running (a project started with `-p` or from other compose
+files is not found). With
 `start_all: true` the backup also starts the job's other services (`services`, or all of
 the compose file / all `units`), so a service that was down comes back up; a failed start
 of those is only a warning and does not fail the job. `start_all` works with `stop: false`
 too. Compose `start` does not create containers that were removed (`down`), and one-shot
 services (init containers, `Type=oneshot` units) run again, so list `services` when the
 project has some. After a cancel only the stopped services are started. A systemd unit
-counts as started once `systemctl is-active` reports `active`. A `Type=simple` unit is
+counts as started once `systemctl is-active` reports `active`, a `Type=oneshot` unit also
+once it has run (`inactive`). A `Type=simple` unit is
 `active` as soon as its process runs, so restor cannot tell when it crashes right after
 starting; use `Type=notify`, or check the unit in a `post` hook, when its start has to be
 confirmed. A lock per compose file and per unit keeps two restor runs from working on the
@@ -222,7 +229,9 @@ such a job `after` the other one, or set `concurrency: 1`.
 
 **Hooks** are commands split on spaces and run without a shell; use a script with its
 absolute path for anything more (a relative path resolves against the working directory,
-`/` under systemd, and restor warns about it).
+`/` under systemd, and restor warns about it). A script that starts a program in the
+background should redirect its output (`daemon >/dev/null 2>&1 &`): restor waits 10 s
+for output that is still open and then warns.
 
 | Hook | Runs | Environment |
 |---|---|---|
@@ -240,7 +249,8 @@ The top-level hooks get a summary of the whole run: `RESTOR_HOOK`, `RESTOR_STATU
 (`; `-separated). A top-level `post` is the place for one notification per run.
 
 A failing `post` or `on_failure` hook is logged and changes nothing. After a cancel
-(SIGTERM) the remaining hooks are skipped.
+(SIGTERM) a job's `post` hook still runs, for at most one minute, so that it can undo its
+`pre` hook (e.g. a maintenance mode); the other hooks are skipped.
 
 `example/hooks/` (in the release archives, and in `/usr/share/doc/restor/examples/hooks/`
 of the packages) has scripts to copy and adapt; each one explains its use at the top:

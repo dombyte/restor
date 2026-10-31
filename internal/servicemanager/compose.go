@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,15 +22,20 @@ const composeServiceLabel = "com.docker.compose.service"
 type ComposeSettings struct {
 	// Binary is "docker" or "podman"; the manager runs `<binary> compose -f <file> …`.
 	Binary string
-	// File is the compose file path.
-	File string
+	// Files are the compose file paths, each passed with -f; the first one names the
+	// project in lock keys and errors, the others override it.
+	Files []string
 }
 
-// Compose manages the services of one compose file with docker or podman compose.
+// Compose manages the services of one compose file with docker or podman compose. It
+// belongs to one job of one run, which uses it from one goroutine at a time.
 type Compose struct {
 	s      ComposeSettings
 	runner Runner
 	clock  util.Clock
+	// services caches `config --services`: the compose files do not change during a job,
+	// and the command is slow (Compose parses and interpolates every file).
+	services []string
 }
 
 // NewCompose returns a Compose manager.
@@ -39,21 +45,25 @@ func NewCompose(s ComposeSettings, d Deps) (*Compose, error) {
 	}
 	if err := util.RequireAll(ErrMissingDependency,
 		util.Requirement{Name: "Binary", OK: s.Binary != ""},
-		util.Requirement{Name: "File", OK: s.File != ""},
+		util.Requirement{Name: "Files", OK: len(s.Files) > 0 && s.Files[0] != ""},
 	); err != nil {
 		return nil, err
 	}
 	return &Compose{s: s, runner: d.Runner, clock: d.Clock}, nil
 }
 
-// LockKeys returns the compose file path.
-func (c *Compose) LockKeys() []string { return []string{c.s.File} }
+// LockKeys returns "compose:<compose file path>", for docker and podman alike: both
+// back up the same data.
+func (c *Compose) LockKeys() []string { return []string{"compose:" + c.file()} }
+
+// file returns the compose file that names the project.
+func (c *Compose) file() string { return c.s.Files[0] }
 
 // Running returns the services among requested (every service of the compose file when
 // it is empty) that have a running container. A requested name that is not a service of
 // the compose file is an error: a typo would otherwise back up a running service.
 func (c *Compose) Running(ctx context.Context, requested []string) ([]string, error) {
-	services, err := c.services(ctx, requested)
+	services, err := c.listServices(ctx, requested)
 	if err != nil {
 		return nil, err
 	}
@@ -67,31 +77,43 @@ func (c *Compose) Running(ctx context.Context, requested []string) ([]string, er
 // All returns requested, or every service of the compose file when it is empty, whether
 // running or not. A requested name that is not a service of the compose file is an error.
 func (c *Compose) All(ctx context.Context, requested []string) ([]string, error) {
-	return c.services(ctx, requested)
+	return c.listServices(ctx, requested)
 }
 
-// services returns a copy of requested, or every service of the compose file.
-func (c *Compose) services(ctx context.Context, requested []string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(ctx, statusTimeout)
-	defer cancel()
-	out, err := c.run(ctx, "config", "--services")
+// listServices returns a copy of requested, or of every service of the compose file.
+func (c *Compose) listServices(ctx context.Context, requested []string) ([]string, error) {
+	all, err := c.allServices(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("servicemanager: list services of %s: %w", c.s.File, err)
+		return nil, err
 	}
-	all := strings.Fields(string(out))
 	if len(requested) == 0 {
-		return all, nil
+		return slices.Clone(all), nil
 	}
 	for _, s := range requested {
 		if !slices.Contains(all, s) {
-			return nil, fmt.Errorf("servicemanager: %w: %q in %s", errUnknownService, s, c.s.File)
+			return nil, fmt.Errorf("servicemanager: %w: %q in %s", errUnknownService, s, c.file())
 		}
 	}
 	return slices.Clone(requested), nil
 }
 
-// Stop runs `stop -t <timeout> <services>` and waits until none of them is running. It
-// returns false when they still run after timeout.
+// allServices returns every service of the compose file, listed once.
+func (c *Compose) allServices(ctx context.Context) ([]string, error) {
+	if c.services != nil {
+		return c.services, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, statusTimeout)
+	defer cancel()
+	out, err := c.run(ctx, "config", "--services")
+	if err != nil {
+		return nil, fmt.Errorf("servicemanager: list services of %s: %w", c.file(), err)
+	}
+	c.services = strings.Fields(string(out))
+	return c.services, nil
+}
+
+// Stop runs `stop -t <timeout in seconds, rounded up> <services>` and waits until none of
+// them is running. It returns false when they still run after timeout.
 func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Duration) (
 	bool, error,
 ) {
@@ -101,11 +123,13 @@ func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Dura
 	deadline := c.clock.Now().Add(timeout)
 	cmdCtx, cancel := commandContext(ctx, timeout)
 	defer cancel()
-	args := append([]string{"stop", "-t", strconv.Itoa(int(timeout.Seconds()))}, services...)
+	// Compose takes whole seconds; truncating 500ms to 0 would kill the containers at once.
+	seconds := strconv.Itoa(int(math.Ceil(timeout.Seconds())))
+	args := append([]string{"stop", "-t", seconds}, services...)
 	// Compose reports this on stderr, which the runner's error carries.
 	if _, err := c.run(cmdCtx, args...); err != nil &&
 		!strings.Contains(strings.ToLower(err.Error()), "no containers to stop") {
-		return false, fmt.Errorf("servicemanager: stop %s: %w", c.s.File, err)
+		return false, fmt.Errorf("servicemanager: stop %s: %w", c.file(), err)
 	}
 	return waitUntil(ctx, c.clock, deadline, func(ctx context.Context) (bool, error) {
 		running, err := c.running(ctx)
@@ -126,7 +150,7 @@ func (c *Compose) Start(ctx context.Context, services []string, timeout time.Dur
 	cmdCtx, cancel := commandContext(ctx, timeout)
 	defer cancel()
 	if _, err := c.run(cmdCtx, append([]string{"start"}, services...)...); err != nil {
-		return false, fmt.Errorf("servicemanager: start %s: %w", c.s.File, err)
+		return false, fmt.Errorf("servicemanager: start %s: %w", c.file(), err)
 	}
 	return waitUntil(ctx, c.clock, deadline, func(ctx context.Context) (bool, error) {
 		running, err := c.running(ctx)
@@ -140,11 +164,11 @@ func (c *Compose) running(ctx context.Context) (map[string]bool, error) {
 	defer cancel()
 	out, err := c.run(ctx, "ps", "--format", "json")
 	if err != nil {
-		return nil, fmt.Errorf("servicemanager: status of %s: %w", c.s.File, err)
+		return nil, fmt.Errorf("servicemanager: status of %s: %w", c.file(), err)
 	}
 	entries, err := parseComposePs(out)
 	if err != nil {
-		return nil, fmt.Errorf("servicemanager: status of %s: %w", c.s.File, err)
+		return nil, fmt.Errorf("servicemanager: status of %s: %w", c.file(), err)
 	}
 	running := map[string]bool{}
 	for _, e := range entries {
@@ -156,7 +180,11 @@ func (c *Compose) running(ctx context.Context) (map[string]bool, error) {
 }
 
 func (c *Compose) run(ctx context.Context, args ...string) ([]byte, error) {
-	return c.runner.Run(ctx, c.s.Binary, append([]string{"compose", "-f", c.s.File}, args...)...)
+	all := []string{"compose"}
+	for _, f := range c.s.Files {
+		all = append(all, "-f", f)
+	}
+	return c.runner.Run(ctx, c.s.Binary, append(all, args...)...)
 }
 
 // psEntry is one container of `compose ps --format json`. Docker Compose sets Service;
