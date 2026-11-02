@@ -343,13 +343,22 @@ func TestLoad_Validation(t *testing.T) {
 			"jobs.db.stdin_filename: only with stdin_command",
 		},
 		{
+			"requires", "jobs: {web: {requires: [db], sources: [/a]}}",
+			`jobs.web.requires: "db" is not another job`,
+		},
+		{
+			"requires cycle", "jobs: {a: {requires: [b], sources: [/a]}, " +
+				"b: {after: [a], sources: [/a]}}",
+			"jobs.a: before/after/requires form a cycle: a → b → a",
+		},
+		{
 			"duplicate", "jobs: {web: {sources: [/a]}, WEB: {sources: [/b]}}",
 			"jobs.web: duplicate job name",
 		},
 		{
 			"cycle", "jobs: {a: {after: [c], sources: [/a]}, b: {after: [a], sources: [/a]}, " +
 				"c: {before: [b], after: [b], sources: [/a]}}",
-			"jobs.a: before/after form a cycle: a → c → b → a",
+			"jobs.a: before/after/requires form a cycle: a → c → b → a",
 		},
 	}
 	for _, tt := range tests {
@@ -418,6 +427,22 @@ func TestLoad_Check(t *testing.T) {
 		assert.True(t, plan.Repository.Check)
 		assert.Equal(t, subset, plan.Repository.CheckReadDataSubset)
 	}
+}
+
+func TestLoad_Requires(t *testing.T) {
+	t.Parallel()
+	plan, err := load(t, `version: 2
+jobs:
+  db: {sources: [/db]}
+  dump: {sources: [/dump]}
+  files: {sources: [/f], requires: [DB, dump, db], after: [x]}
+  x: {sources: [/x], before: [files]}
+`, nil)
+
+	require.NoError(t, err)
+	files := plan.Jobs[2]
+	assert.Equal(t, []string{"db", "dump"}, files.Requires, "lowercase, sorted, once")
+	assert.Equal(t, []string{"db", "dump", "x"}, files.After, "requires orders too")
 }
 
 func TestLoad_RepositoryOnly(t *testing.T) {

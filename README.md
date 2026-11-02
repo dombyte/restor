@@ -7,8 +7,8 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
 - Several backup jobs from one YAML file, with defaults shared by all jobs
 - Stops and restarts the services of a job during its backup (Docker/Podman Compose,
   systemd)
-- Job order with `before`/`after`, and as many jobs at once as `concurrency` allows;
-  jobs that share services never run at the same time
+- Job order with `before`/`after`, dependencies with `requires`, and as many jobs at once
+  as `concurrency` allows; jobs that share services never run at the same time
 - Database dumps streamed straight into the repository (`stdin_command`), no temp files
 - Typed, validated restic options (excludes, tags, limits, ...) and retention policies
   (`keep`) with a single prune for the whole repository, and an optional `restic check`
@@ -193,6 +193,7 @@ not start with `-` or contain `,` or whitespace.
 | `units`, `scope` | the systemd units (required) and `system` (default) or `user` |
 | `services` | services to stop; default: all of the compose file / all `units` |
 | `before`, `after` | jobs that run after / before this one |
+| `requires` | jobs that must succeed for this one to run (it also runs after them) |
 | `stop` | stop the services during the backup (default `true`) |
 | `start_all` | after the backup, also start the services that were not running (default `false`) |
 | `stop_timeout`, `start_timeout` | wait for the services to stop / start (default `1m` / `2m`); compose gets the stop timeout in whole seconds, rounded up |
@@ -204,8 +205,8 @@ not start with `-` or contain `,` or whitespace.
 | `pre`, `post`, `on_failure` | hooks, see below |
 
 Every key except `type`, `sources`, `stdin_command`, `stdin_filename`, `compose_file`,
-`units`, `scope`, `services`, `before` and `after` can also be set under `defaults`. A job's own value replaces the
-default; lists are replaced, not merged.
+`units`, `scope`, `services`, `before`, `after` and `requires` can also be set under
+`defaults`. A job's own value replaces the default; lists are replaced, not merged.
 
 **Database dumps:** a job with `stdin_command` backs up what the command writes to
 stdout, as one file named `stdin_filename`, with restic's `--stdin-from-command`: no dump
@@ -238,6 +239,14 @@ of another. Among the jobs that may start, the one first by name starts first, s
 `concurrency: 1` and no `before`/`after` the jobs run in name order. Jobs that share a
 compose file or a systemd unit never run at the same time. `restor validate` prints the
 resulting order.
+
+**Dependencies:** `requires: [db]` makes a job wait for `db` like `after`, and skips it
+when `db` failed: no file backup without the database dump next to it. The skipped job
+counts as failed: the run exits 1, its `on_failure` hook runs (its `pre` and `post` do
+not) with `RESTOR_ERROR` saying which job it required, and it is listed in
+`RESTOR_FAILED_JOBS`. A skipped job in turn skips the jobs that require it. An
+incomplete snapshot (some unreadable files) does not skip. `restor run files` without
+`db` runs `files` without checking `db`.
 
 **Services:** only the services that are running when a job's backup starts are stopped,
 and only those are started again afterwards, also when the backup failed. When none of

@@ -206,6 +206,7 @@ func (v *validator) job(f *File, name string, j JobConfig) {
 	v.check(!slices.Contains(j.Sources, ""), "sources", "must not contain empty entries")
 	v.references(f, name, "before", j.Before)
 	v.references(f, name, "after", j.After)
+	v.references(f, name, "requires", j.Requires)
 	switch j.Type {
 	case TypeDockerCompose, TypePodmanCompose:
 		v.compose(j)
@@ -251,7 +252,7 @@ func (v *validator) keepTags(d Defaults, j JobConfig) {
 	}
 }
 
-// references checks that before/after name other jobs.
+// references checks that before/after/requires name other jobs.
 func (v *validator) references(f *File, self, field string, names []string) {
 	for _, n := range names {
 		_, ok := f.Jobs[n]
@@ -311,7 +312,8 @@ func (v *validator) cycle(f *File) {
 	done := map[string]bool{}
 	for _, name := range sortedKeys(f.Jobs) {
 		if c := findCycle(name, after, done, nil); c != nil {
-			v.check(false, "jobs."+c[0], "before/after form a cycle: "+strings.Join(c, " → "))
+			v.check(false, "jobs."+c[0], "before/after/requires form a cycle: "+
+				strings.Join(c, " → "))
 			return
 		}
 	}

@@ -42,6 +42,9 @@ type JobSettings struct {
 	Name string
 	// After are the jobs that must finish before this one starts.
 	After []string
+	// Requires are jobs (also in After) whose failure skips this one: it fails without
+	// running.
+	Requires []string
 	// Services limits the stopped services; empty means all of the service manager's.
 	Services []string
 	// Sources are the positional arguments of the backup: the backed up paths, or the
@@ -116,6 +119,17 @@ func (m *Manager) runJob(ctx context.Context, j Job) result {
 		log.Error().Err(r.err).Msg("job failed")
 		m.jobHook(ctx, s, hookOnFailure, r, log)
 	}
+	return r
+}
+
+// skipJob fails a job without running it, because the job it requires failed; only its
+// on_failure hook runs.
+func (m *Manager) skipJob(ctx context.Context, s JobSettings, required string) result {
+	log := m.d.Log.With().Str("job", s.Name).Logger()
+	r := result{outcome: outcomeFailed, err: fmt.Errorf("backup: %s: %w: %s", s.Name,
+		ErrRequiredJobFailed, required)}
+	log.Error().Err(r.err).Msg("job skipped")
+	m.jobHook(ctx, s, hookOnFailure, r, log)
 	return r
 }
 

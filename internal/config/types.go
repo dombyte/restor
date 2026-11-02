@@ -118,6 +118,8 @@ type JobConfig struct {
 	StdinFilename string   `yaml:"stdin_filename"`
 	Before        []string `yaml:"before"`
 	After         []string `yaml:"after"`
+	// Requires are jobs that must succeed for this one to run; it also runs after them.
+	Requires []string `yaml:"requires"`
 }
 
 // Keep is a retention policy; the zero value keeps every snapshot (no forget).

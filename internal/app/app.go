@@ -250,10 +250,11 @@ func (a *App) Describe(w io.Writer) error {
 		_, _ = fmt.Fprintln(tw, "\nno jobs configured: restor run has nothing to back up")
 		return tw.Flush()
 	}
-	_, _ = fmt.Fprintln(tw, "\nJOB\tTYPE\tAFTER\tSTOP\tSTART ALL\tKEEP\tSOURCES")
+	_, _ = fmt.Fprintln(tw, "\nJOB\tTYPE\tAFTER\tREQUIRES\tSTOP\tSTART ALL\tKEEP\tSOURCES")
 	for _, j := range jobs {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%t\t%t\t%s\t%s\n", j.Name, or(j.Type, "files"),
-			or(strings.Join(j.After, ","), "-"), j.StopsServices(), j.StartsAll(),
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%t\t%t\t%s\t%s\n", j.Name,
+			or(j.Type, "files"), or(strings.Join(j.After, ","), "-"),
+			or(strings.Join(j.Requires, ","), "-"), j.StopsServices(), j.StartsAll(),
 			labels[j.Name], sourcesLabel(j))
 	}
 	_, _ = fmt.Fprintln(tw, "\nKEEP")
@@ -428,7 +429,8 @@ func CreateServiceManager(j config.Job, d servicemanager.Deps) (backup.Services,
 
 func jobSettings(j config.Job) backup.JobSettings {
 	return backup.JobSettings{
-		Name: j.Name, After: j.After, Services: j.Services, Sources: backupSources(j),
+		Name: j.Name, After: j.After, Requires: j.Requires, Services: j.Services,
+		Sources:      backupSources(j),
 		StopServices: j.StopsServices(), StartAll: j.StartsAll(), StopTimeout: j.StopTimeout,
 		StartTimeout: j.StartTimeout, BackupTimeout: j.BackupTimeout,
 		BackupArgs: backupFlags(j).Args(), ForgetArgs: keep(j.Keep).Args(),
@@ -507,7 +509,7 @@ func logJobs(log zerolog.Logger, jobs []config.Job) {
 		} else {
 			e = e.Strs("sources", j.Sources)
 		}
-		e.Strs("after", j.After).
+		e.Strs("after", j.After).Strs("requires", j.Requires).
 			Bool("stop", j.StopsServices()).Bool("start_all", j.StartsAll()).
 			Msg("job configured")
 	}

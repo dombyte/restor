@@ -276,6 +276,48 @@ func TestManager_RunAfterFailedJob(t *testing.T) {
 		"after only orders: b runs although a failed")
 }
 
+// requires makes j require names, which it then also runs after (as config does).
+func requires(j Job, names ...string) Job {
+	j.Settings.Requires = names
+	j.Settings.After = append(j.Settings.After, names...)
+	return j
+}
+
+func TestManager_RunRequires(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	for _, name := range []string{"a", "b", "e", "f", "ok"} {
+		f.expectLock(name)
+	}
+	f.expectBackup("a", assert.AnError)
+	f.expectBackup("b", fmt.Errorf("w: %w", incompleteError{}))
+	for _, name := range []string{"e", "f", "ok"} {
+		f.expectBackup(name, nil)
+	}
+	f.hooks.EXPECT().RunEnv(mock.Anything, []string{
+		"RESTOR_JOB=c", "RESTOR_HOOK=on_failure", "RESTOR_STATUS=failed",
+		"RESTOR_SNAPSHOT_ID=", "RESTOR_ERROR=backup: c: skipped, required job failed: a",
+	}, "/bin/c-failed").Return(nil, nil).Once()
+	c := requires(fileJob(f, t, "c", ""), "a", "b")
+	c.Settings.Pre, c.Settings.OnFailure = "/bin/never", "/bin/c-failed"
+	m := f.manager(t, Settings{},
+		fileJob(f, t, "a", ""), fileJob(f, t, "b", ""), c,
+		requires(fileJob(f, t, "d", ""), "c"),       // transitively: c counts as failed
+		requires(fileJob(f, t, "e", ""), "b"),       // an incomplete snapshot is a backup
+		requires(fileJob(f, t, "f", ""), "missing"), // not in the run: ignored
+		requires(fileJob(f, t, "ok", ""), "e", "f"))
+
+	err := m.Run(context.Background())
+
+	require.ErrorIs(t, err, ErrJobsFailed)
+	assert.Contains(t, err.Error(), "3 of 7", "a, and the skipped c and d")
+	assert.ElementsMatch(t, []string{
+		"backup a", "backup b", "backup e", "backup f",
+		"backup ok",
+	}, backups(f.rec.list()), "c and d are neither locked nor backed up")
+	assert.NotContains(t, f.rec.list(), "lock c")
+}
+
 func TestManager_RunFailureHooks(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
