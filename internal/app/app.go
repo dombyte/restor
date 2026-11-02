@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -232,10 +233,9 @@ func restoreFlags(o RestoreOptions) (restic.RestoreFlags, error) {
 }
 
 // Describe writes the validated plan to w: the job files it includes, the jobs in the
-// order they start with
-// concurrency 1, with their type, what they wait for and what they back up, then each
-// distinct retention policy once, labelled in the table. The repository URL is left out,
-// it may hold credentials.
+// order they start with concurrency 1, with their type, what they wait for and what they
+// back up, then each distinct retention policy once, labelled in the table. The
+// repository URL is left out, it may hold credentials.
 func (a *App) Describe(w io.Writer) error {
 	jobs := a.orderedJobs()
 	labels, groups := keepGroups(jobs)
@@ -279,9 +279,22 @@ func checkLabel(r config.Repository) string {
 // sourcesLabel is what a job backs up: its sources, or the command whose output it saves.
 func sourcesLabel(j config.Job) string {
 	if j.FromStdin() {
-		return "stdin: " + strings.Join(j.StdinCommand, " ")
+		return "stdin: " + commandLabel(j.StdinCommand)
 	}
 	return strings.Join(j.Sources, " ")
+}
+
+// commandLabel joins the arguments of a command, quoting those that contain spaces or
+// quotes, so that each argument stays recognisable.
+func commandLabel(args []string) string {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = a
+		if strings.ContainsAny(a, " \t\n\"'") {
+			quoted[i] = strconv.Quote(a)
+		}
+	}
+	return strings.Join(quoted, " ")
 }
 
 // orderedJobs returns the jobs in the order they start with concurrency 1.
