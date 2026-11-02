@@ -308,6 +308,7 @@ of the packages) has scripts to copy and adapt; each one explains its use at the
 | `notifyapp.sh` | top-level `post`, or job `pre`/`post` | the same messages to the [Notify](https://getnotifyapp.com) iPhone app, one thread per host |
 | `mail.sh` | top-level `post`, or job `post` | a mail through the local `sendmail` with the results and every `RESTOR_*` variable |
 | `healthchecks.sh` | job `pre` + `post`, or top-level `post` | reports each job (or the whole run) to [Healthchecks](https://healthchecks.io): start, success, or failure with the error |
+| `prometheus.sh` | top-level `post` | writes metrics for node_exporter's textfile collector: the run's and each job's result, and when each job last backed up (completely), for alerts on failed or missing backups |
 
 The notification scripts report whatever hook they run as, so the hooks pick the events,
 and `NOTIFY_LEVEL` in `hooks.conf` drops the less important ones (`warning`: only runs
