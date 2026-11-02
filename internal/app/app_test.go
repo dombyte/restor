@@ -389,3 +389,11 @@ func TestKeepLabel(t *testing.T) {
 		assert.Equal(t, want, keepLabel(n), n)
 	}
 }
+
+func TestSourcesLabel(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "/a /b", sourcesLabel(config.Job{Sources: []string{"/a", "/b"}}))
+	assert.Equal(t, `stdin: sh -c "echo 'a'; date"`, sourcesLabel(config.Job{
+		StdinCommand: []string{"sh", "-c", "echo 'a'; date"},
+	}), "an argument with spaces stays one")
+}
