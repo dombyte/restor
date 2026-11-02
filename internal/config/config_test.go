@@ -641,3 +641,80 @@ func TestLoad_SafetyChecks(t *testing.T) {
 		"jobs: {a: {sources: [/a], tags: [y]}}", nil)
 	require.NoError(t, err, "a job that replaces the default tags")
 }
+
+func TestLoad_Include(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "jobs.d", "sub"), 0o700))
+	writeFile(t, dir, "jobs.d/web.yaml", `x-common: &common {keep: {daily: 3}}
+jobs:
+  Web:
+    <<: *common
+    type: docker-compose
+    compose_file: app/compose.yml
+    sources: [data, /abs]
+    after: [etc]
+`)
+	writeFile(t, dir, "jobs.d/db.yml", "jobs: {db: {sources: ['${DATA}/db'], before: [web]}}\n")
+	writeFile(t, dir, "jobs.d/notes.txt", "not matched")
+	writeFile(t, dir, "jobs.d/sub/deep.yaml", "jobs: {deep: {sources: [/d]}}\n")
+	extra := writeFile(t, dir, "extra.yaml", "jobs: {}\n")
+	path := writeFile(t, dir, "config.yaml", `version: 2
+include: [jobs.d/*.y*ml, "`+extra+`", "*.yaml", jobs.d/web.yaml, empty.d/*.yaml]
+jobs:
+  etc: {sources: [/etc]}
+`)
+
+	plan, err := Load(path, getenv(map[string]string{"DATA": "/srv"}))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		filepath.Join(dir, "jobs.d/db.yml"), filepath.Join(dir, "jobs.d/web.yaml"), extra,
+	}, plan.Included, "each file once, without config.yaml itself; no match is fine")
+	require.Len(t, plan.Jobs, 3)
+	db, web := plan.Jobs[0], plan.Jobs[2]
+	assert.Equal(t, []string{"/srv/db"}, db.Sources, "expanded")
+	assert.Equal(t, "web", web.Name)
+	assert.Equal(t, []string{"db", "etc"}, web.After, "ordering across files")
+	assert.Equal(t, Keep{Daily: 3}, web.Keep, "anchors within the job file")
+	assert.Equal(t, filepath.Join(dir, "jobs.d/app/compose.yml"), web.ComposeFile,
+		"relative to the job file")
+	assert.Equal(t, []string{filepath.Join(dir, "jobs.d/data"), "/abs"}, web.Sources)
+}
+
+func TestLoad_IncludeErrors(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	web := writeFile(t, dir, "web.yaml", "jobs: {web: {sources: [/w]}}\n")
+	bad := writeFile(t, dir, "bad.yaml", `version: 2
+repository: {url: /r}
+jobs:
+  ETC: {sources: [/e]}
+  db: {sources: [~/db], stop_service: true}
+`)
+	typed := writeFile(t, dir, "typed.yaml", "jobs: {x: {sources: /x}}\n")
+	path := writeFile(t, dir, "config.yaml", `version: 2
+include: [web.yaml, bad.yaml, typed.yaml, missing.yaml, "", "[", web.yaml]
+jobs:
+  Web: {sources: [/other]}
+  etc: {sources: [/etc]}
+`)
+
+	_, err := Load(path, getenv(nil))
+
+	require.ErrorIs(t, err, ErrInvalid)
+	for _, want := range []string{
+		"jobs.web: defined in " + path + " and in " + web,
+		"jobs.etc: defined in " + path + " and in " + bad,
+		bad + ": version: unknown key (line 1): a job file holds only jobs",
+		bad + ": repository: unknown key (line 2): a job file holds only jobs",
+		bad + ": jobs.db.stop_service: unknown key (line 5)",
+		bad + `: jobs.db.sources: "~/db": ~ is not expanded`,
+		typed + ": jobs.x.sources: cannot construct !!str `/x` into []string (line 1)",
+		"include: stat " + filepath.Join(dir, "missing.yaml") + ": no such file",
+		"include: must not contain empty entries",
+		"include: \"" + filepath.Join(dir, "[") + "\": syntax error in pattern",
+	} {
+		assert.Contains(t, err.Error(), want)
+	}
+}

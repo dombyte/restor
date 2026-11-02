@@ -165,6 +165,18 @@ defaults:
   # on_failure: /usr/local/bin/cleanup-after-failure.sh
 
 # ------------------------------------------------------------------------------
+# Job files: more jobs from other files, e.g. one file per service written by config
+# management. Each entry is a path or a glob pattern, relative to this file's directory;
+# a pattern that matches nothing is fine, a path without one must exist. This file itself
+# is never included. A job file holds only a jobs section (and x- keys for anchors, which
+# do not reach into other files):
+#   jobs:
+#     nextcloud: {type: docker-compose, compose_file: /srv/nextcloud/compose.yml, ...}
+# Its relative paths are resolved against its own directory; every job name must be
+# unique across all files, and before/after work across files. Default: none.
+include: [jobs.d/*.yaml]
+
+# ------------------------------------------------------------------------------
 # Jobs. The name is case-insensitive and its lowercase form is the restic tag; it must not
 # start with "-" or contain "," or whitespace.
 #

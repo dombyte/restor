@@ -154,7 +154,18 @@ so typos never go unnoticed. Durations are strings such as `30s`, `5m` or `4h`.
 environment; `$$` is a literal `$`. Relative `env_file`, `compose_file`, `sources` and
 `exclude_file` paths are resolved against the directory of the config file; `~` is not
 expanded (use `$HOME`). YAML anchors and merge keys work: keep shared blocks under a
-top-level key starting with `x-` and merge them with `<<: *name`. A file with only
+top-level key starting with `x-` and merge them with `<<: *name`.
+
+**Job files:** `include: [jobs.d/*.yaml]` adds the jobs of other files, for hosts with
+many jobs or a configuration management that writes one file per service. Each entry is
+a path or a glob pattern relative to the config file; a pattern that matches nothing is
+fine, a plain path must exist, and the config file itself is never included. A job file
+holds only `jobs:` (plus `x-` keys for anchors, which work within that file only); its
+relative paths are resolved against its own directory. It is checked as strictly as the
+config file, every job name must be unique across the files, and `before`/`after` work
+across them. `restor validate` lists the files it read.
+
+A file with only
 `version` and `repository` is valid: `restor snapshots`, `restor restore` and
 `restor restic` work with it, for example on a new host whose real configuration is still
 in the backup; `restor run` then fails with "no jobs configured".

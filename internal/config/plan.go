@@ -26,6 +26,8 @@ type Plan struct {
 	OnFailure string
 	// Jobs are sorted by name.
 	Jobs []Job
+	// Included are the job files that include named, absolute and in the order read.
+	Included []string
 }
 
 // Repository is the restic repository and the settings of every restic call.
