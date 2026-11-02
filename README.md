@@ -9,6 +9,7 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
   systemd)
 - Job order with `before`/`after`, and as many jobs at once as `concurrency` allows;
   jobs that share services never run at the same time
+- Database dumps streamed straight into the repository (`stdin_command`), no temp files
 - Typed, validated restic options (excludes, tags, limits, ...) and retention policies
   (`keep`) with a single prune for the whole repository
 - Hooks before and after each job and on failure, with the job's result in their
@@ -174,7 +175,8 @@ not start with `-` or contain `,` or whitespace.
 | Key | Meaning |
 |---|---|
 | `type` | `docker-compose`, `podman-compose` or `systemd`; leave it out for files only |
-| `sources` | paths to back up (required) |
+| `sources` | paths to back up (required, unless `stdin_command`) |
+| `stdin_command`, `stdin_filename` | back up the output of this command instead of `sources`, saved as `stdin_filename` (default `stdin`); see below |
 | `compose_file` | the compose file (compose types, required); for `compose.yaml`, `compose.yml`, `docker-compose.yml` or `docker-compose.yaml` the override file next to it (`compose.override.yml`, …) is used too, as `docker compose` without `-f` does |
 | `units`, `scope` | the systemd units (required) and `system` (default) or `user` |
 | `services` | services to stop; default: all of the compose file / all `units` |
@@ -189,9 +191,33 @@ not start with `-` or contain `,` or whitespace.
 | `tags` | extra snapshot tags (not the name of a job) |
 | `pre`, `post`, `on_failure` | hooks, see below |
 
-Every key except `type`, `sources`, `compose_file`, `units`, `scope`, `services`,
-`before` and `after` can also be set under `defaults`. A job's own value replaces the
+Every key except `type`, `sources`, `stdin_command`, `stdin_filename`, `compose_file`,
+`units`, `scope`, `services`, `before` and `after` can also be set under `defaults`. A job's own value replaces the
 default; lists are replaced, not merged.
+
+**Database dumps:** a job with `stdin_command` backs up what the command writes to
+stdout, as one file named `stdin_filename`, with restic's `--stdin-from-command`: no dump
+on disk, no pre hook to write it and no post hook to remove it. The command is a list,
+run without a shell (use a script for pipes). When it exits with an error, restic saves
+no snapshot and the job fails.
+
+```yaml
+jobs:
+  pg:
+    type: docker-compose
+    compose_file: /srv/app/compose.yml
+    stop: false                 # the database must run to be dumped
+    stdin_command: [docker, compose, -f, /srv/app/compose.yml, exec, -T, db,
+                    pg_dumpall, -U, postgres]
+    stdin_filename: pg.sql
+    before: [files]             # dump first, then back up the files next to it
+```
+
+Such a job reads no files: `exclude`, `exclude_file`, `one_file_system` and the other
+file selection keys are errors in the job itself and ignored when they come from
+`defaults`. Restore the dump with `restor restic dump <snapshot-ID> /pg.sql`. restic runs
+the command, so it gets restic's environment, **including the env file**: unlike a hook it
+can read the repository password. Use it only for commands you trust.
 
 **Order and concurrency:** `concurrency` (default `1`) is how many jobs run at once; `0`
 runs all at once. A job starts once the jobs it runs after have finished, whether they
