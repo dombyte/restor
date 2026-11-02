@@ -88,7 +88,9 @@ func TestRun_UnknownJob(t *testing.T) {
 
 func TestRun_Validate(t *testing.T) {
 	t.Parallel()
+	jobFile := writeConfig(t, "jobs: {tmp: {sources: [/tmp/x], keep: {}}}\n")
 	path := writeConfig(t, `version: 2
+include: [`+jobFile+`]
 repository: {url: /repo, prune: true, check: true, check_read_data_subset: 5%}
 defaults:
   keep: {daily: 7, weekly: 4}
@@ -96,7 +98,6 @@ jobs:
   web: {type: docker-compose, compose_file: /c.yml, sources: [/w], keep: {last: 2}}
   db: {type: docker-compose, compose_file: /c.yml, sources: [/d], before: [web]}
   etc: {sources: [/etc]}
-  tmp: {sources: [/tmp/x], keep: {}}
 `)
 	var stdout, stderr bytes.Buffer
 
@@ -105,6 +106,7 @@ jobs:
 	assert.Contains(t, out, path+" is valid")
 	assert.Contains(t, out, "prune:        true")
 	assert.Contains(t, out, "check:        true (reads 5% of the data)")
+	assert.Contains(t, out, "included:     "+jobFile)
 	assert.Regexp(t, `(?s)JOB.*\n`+
 		`db +docker-compose +- +true +false +A +/d\n`+
 		`etc +files +- +false +false +A +/etc\n`+

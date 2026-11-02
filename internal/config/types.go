@@ -54,6 +54,14 @@ type File struct {
 	Defaults Defaults `yaml:"defaults"`
 	// Jobs maps the job name (also the restic tag) to its settings.
 	Jobs map[string]JobConfig `yaml:"jobs"`
+	// Include names job files (glob patterns allowed) whose jobs are added to Jobs.
+	Include []string `yaml:"include"`
+}
+
+// includeFile is a job file that File.Include names: jobs only, plus "x-" keys for
+// anchors.
+type includeFile struct {
+	Jobs map[string]JobConfig `yaml:"jobs"`
 }
 
 // RepositoryConfig is the repository section.

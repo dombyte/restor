@@ -129,8 +129,8 @@ internal/app/              composition root: config Plan → Settings, CreateSer
                            restic flags, wiring, restic version check, startup warnings,
                            Describe (validate), snapshots, restore and the restic
                            passthrough
-internal/config/           YAML file (version 2) decoded strictly, ${VAR} expansion, paths,
-                           repository env file, defaults → validated read-only Plan
+internal/config/           YAML file (version 2) and its job files decoded strictly, ${VAR}
+                           expansion, paths, env file, defaults → validated read-only Plan
 internal/backup/           orchestration: Manager (schedule, per-job run, hooks,
                            forget/prune/unlock/check); declares Restic, Services, Locker, Runner
 internal/restic/           restic CLI client: typed flags, backup, forget, prune, check,
@@ -329,7 +329,16 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 ### Configuration
 - One YAML file (`.yaml`/`.yml`) with `version: 2`; other extensions are an error.
   Template with every option: `example/config.yaml`. Top level: `version`,
-  `concurrency`, `repository`, `post`, `on_failure`, `defaults`, `jobs`.
+  `concurrency`, `repository`, `post`, `on_failure`, `defaults`, `jobs`, `include`.
+- `include` lists job files (paths or `filepath.Glob` patterns, relative to the config
+  file's directory), read in order, the matches of a pattern sorted, each file once and
+  never the config file itself (`config.include`). A pattern without match is fine, a
+  plain path must exist. A job file is decoded as strictly as the config file into
+  `config.includeFile` (`jobs` and `x-` keys only; other top-level keys get a hint),
+  with the same expansion; its relative paths resolve against its own directory. A job
+  name defined twice (in any case) is an error naming both files; errors from a job
+  file are prefixed with its path. Job files do not include others. The Plan lists the
+  files read (`Plan.Included`, printed by `validate`).
 - Decoding is strict: a key that matches no field is an error with its path and line
   (`config.unknownKeys` walks the YAML nodes against the struct tags); the keys of version
   1 (`projects`, `mode`, `global`, `service_manager`, `retention_policy`, …) name their
@@ -342,9 +351,10 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - `$VAR`, `${VAR}` and `${VAR:-default}` in scalar values (not keys) are expanded once at
   load time from the **process** environment; `$$` is a literal `$`. A plain scalar is
   re-typed after expansion, so `${LIMIT}` can fill a number.
-- Relative `repository.env_file`, `compose_file`, `sources` and `exclude_file` are
-  resolved against the directory of the config file (systemd runs restor in `/`); hooks
-  are not (they are commands).
+- Relative `repository.env_file`, `include`, `compose_file`, `sources` and
+  `exclude_file` are resolved against the directory of the config file, a job file's
+  against its own (systemd runs restor in `/`); hooks and `stdin_command` are not (they
+  are commands).
 - `defaults` holds every job key except `type`, `sources`, `stdin_command`,
   `stdin_filename`, `compose_file`, `units`, `scope`, `services`, `before` and `after`
   (`config.Defaults`, inlined into `config.JobConfig`). A job's own value replaces the default, lists included (an empty
@@ -386,7 +396,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   group or others can access (mode & 077), a hook whose program is a relative path
   (`./x.sh`), and binaries missing from `PATH`.
 - `example/config.yaml` stays complete, commented and valid (`TestLoad_ExampleConfig`);
-  every new option is added there in the same change.
+  its `include: [jobs.d/*.yaml]` matches nothing in `example/`; every new option is
+  added there in the same change.
 - Secrets (restic password, S3 keys) come from the env file or the process env, never from
   `example/`; the real `config.yaml` and env files are gitignored.
 
@@ -554,6 +565,10 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   schedule under `repository`) and reload by loading again; the oneshot path stays as is.
 - **Shell out to the CLIs instead of using libraries/APIs:** restic has no stable Go API,
   and the compose/systemctl CLIs behave the same for Docker, Podman and systemd scopes.
+- **`include` for jobs only, not a merge of whole files:** the repository, defaults and
+  run-level hooks stay in one file, so there is one place that says where the backups
+  go and how they are kept; a job file can add jobs but never change that, and no merge
+  order has to be explained. Not nested, for the same reason.
 - **YAML only, versioned and strict:** one format keeps the code and the docs small; the
   file is decoded with go-yaml directly (no viper: it lowercased map keys) and checked
   against the struct tags, so a typo is an error, not a silently ignored key. `version`

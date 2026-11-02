@@ -231,7 +231,8 @@ func restoreFlags(o RestoreOptions) (restic.RestoreFlags, error) {
 	return f, f.Validate()
 }
 
-// Describe writes the validated plan to w: the jobs in the order they start with
+// Describe writes the validated plan to w: the job files it includes, the jobs in the
+// order they start with
 // concurrency 1, with their type, what they wait for and what they back up, then each
 // distinct retention policy once, labelled in the table. The repository URL is left out,
 // it may hold credentials.
@@ -242,6 +243,9 @@ func (a *App) Describe(w io.Writer) error {
 	_, _ = fmt.Fprintf(tw, "concurrency:\t%d (0 = all at once)\n", a.plan.Concurrency)
 	_, _ = fmt.Fprintf(tw, "prune:\t%t\n", a.plan.Repository.Prune)
 	_, _ = fmt.Fprintf(tw, "check:\t%s\n", checkLabel(a.plan.Repository))
+	for _, file := range a.plan.Included {
+		_, _ = fmt.Fprintf(tw, "included:\t%s\n", file)
+	}
 	if len(jobs) == 0 {
 		_, _ = fmt.Fprintln(tw, "\nno jobs configured: restor run has nothing to back up")
 		return tw.Flush()
