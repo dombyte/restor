@@ -159,7 +159,8 @@ top-level key starting with `x-` and merge them with `<<: *name`.
 **Job files:** `include: [jobs.d/*.yaml]` adds the jobs of other files, for hosts with
 many jobs or a configuration management that writes one file per service. Each entry is
 a path or a glob pattern relative to the config file; a pattern that matches nothing is
-fine, a plain path must exist, and the config file itself is never included. A job file
+fine, a plain path must exist, an empty job file adds no jobs, and the config file
+itself is never included. A job file
 holds only `jobs:` (plus `x-` keys for anchors, which work within that file only); its
 relative paths are resolved against its own directory. It is checked as strictly as the
 config file, every job name must be unique across the files, and `before`/`after` work

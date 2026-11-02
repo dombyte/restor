@@ -333,14 +333,15 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   Template with every option: `example/config.yaml`. Top level: `version`,
   `concurrency`, `repository`, `post`, `on_failure`, `defaults`, `jobs`, `include`.
 - `include` lists job files (paths or `filepath.Glob` patterns, relative to the config
-  file's directory), read in order, the matches of a pattern sorted, each file once and
-  never the config file itself (`config.include`). A pattern without match is fine, a
-  plain path must exist. A job file is decoded as strictly as the config file into
+  file's directory), read in order, the matches of a pattern sorted, each (cleaned) path
+  once and never the config file itself, however it is spelled or linked (`os.SameFile`;
+  `config.include`). A pattern without match is fine, a plain path must exist, an empty
+  job file has no jobs. A job file is decoded as strictly as the config file into
   `config.includeFile` (`jobs` and `x-` keys only; other top-level keys get a hint),
   with the same expansion; its relative paths resolve against its own directory. A job
-  name defined twice (in any case) is an error naming both files; errors from a job
-  file are prefixed with its path. Job files do not include others. The Plan lists the
-  files read (`Plan.Included`, printed by `validate`).
+  name defined twice (in any case) is an error naming both files (or the one file);
+  errors from a job file are prefixed with its path. Job files do not include others.
+  The Plan lists the files read (`Plan.Included`, printed by `validate`).
 - Decoding is strict: a key that matches no field is an error with its path and line
   (`config.unknownKeys` walks the YAML nodes against the struct tags); the keys of version
   1 (`projects`, `mode`, `global`, `service_manager`, `retention_policy`, …) name their

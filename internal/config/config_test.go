@@ -743,3 +743,33 @@ jobs:
 		assert.Contains(t, err.Error(), want)
 	}
 }
+
+func TestLoad_IncludeSelfAndEmpty(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, dir, "empty.yaml", "# every job commented out\n")
+	path := writeFile(t, dir, "config.yaml", "version: 2\ninclude: [\""+dir+
+		"//config.yaml\", \"./link.yaml\", \"empty.yaml\", \"./empty.yaml\"]\n"+
+		"jobs: {a: {sources: [/a]}}\n")
+	require.NoError(t, os.Symlink(path, filepath.Join(dir, "link.yaml")))
+
+	plan, err := Load(path, getenv(nil))
+
+	require.NoError(t, err, "the config file is never included, however it is spelled")
+	assert.Equal(t, []string{filepath.Join(dir, "empty.yaml")}, plan.Included,
+		"read once, and an empty job file has no jobs")
+	assert.Len(t, plan.Jobs, 1)
+}
+
+func TestLoad_IncludeDuplicateInOneFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dup := writeFile(t, dir, "dup.yaml", "jobs: {Ab: {sources: [/a]}, aB: {sources: [/b]}}\n")
+	writeFile(t, dir, "config.yaml", "version: 2\ninclude: [dup.yaml]\n")
+
+	_, err := Load(filepath.Join(dir, "config.yaml"), getenv(nil))
+
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "jobs.ab: duplicate job name in "+dup+
+		" (names are case-insensitive)")
+}
