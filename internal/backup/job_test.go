@@ -148,6 +148,25 @@ func TestNewManager_MissingDependencies(t *testing.T) {
 	assert.Contains(t, err.Error(), "Jobs[x].Services")
 }
 
+func TestNewManager_RequiresNotAfter(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	deps := Deps{Restic: f.restic, Locker: f.locker, Hooks: f.hooks}
+	job := func(after ...string) []Job {
+		return []Job{{
+			Settings: JobSettings{Name: "web", After: after, Requires: []string{"db"}},
+			Services: mocks.NewMockServices(t),
+		}}
+	}
+
+	_, err := NewManager(Settings{}, job(), deps)
+	require.ErrorIs(t, err, ErrRequiresNotAfter)
+	assert.ErrorContains(t, err, "web requires db")
+
+	_, err = NewManager(Settings{}, job("db", "x"), deps)
+	require.NoError(t, err)
+}
+
 func TestRunJob_Sequence(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)

@@ -1,15 +1,16 @@
 // Package backup orchestrates one backup run: per job lock, pre hook, stop services,
 // restic backup, start services, post and on_failure hooks; the jobs run in the order
-// and with the concurrency the schedule allows. Then forget per job, one
-// repository-wide prune and unlock, check, and the run-level post and on_failure hooks. It
-// talks to restic, the service managers, the locker and the hook runner only through
-// the interfaces declared here.
+// and with the concurrency the schedule allows. Then forget per job, one repository-wide
+// prune and unlock, check, and the run-level post and on_failure hooks. It talks to
+// restic, the service managers, the locker and the hook runner only through the
+// interfaces declared here.
 package backup
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,6 +31,9 @@ var (
 	// ErrRequiredJobFailed is the error of a job that was skipped because a job it
 	// requires failed.
 	ErrRequiredJobFailed = errors.New("skipped, required job failed")
+	// ErrRequiresNotAfter is returned by NewManager for a job that requires a job it does
+	// not run after: the schedule would not wait for the result it checks.
+	ErrRequiresNotAfter = errors.New("backup: a required job is not in after")
 )
 
 // Restic runs restic commands against the repository.
@@ -117,14 +121,23 @@ func NewManager(s Settings, jobs []Job, d Deps) (*Manager, error) {
 	if err := util.RequireAll(ErrMissingDependency, reqs...); err != nil {
 		return nil, err
 	}
+	for _, j := range jobs {
+		for _, r := range j.Settings.Requires {
+			if !slices.Contains(j.Settings.After, r) {
+				return nil, fmt.Errorf("%w: %s requires %s", ErrRequiresNotAfter,
+					j.Settings.Name, r)
+			}
+		}
+	}
 	return &Manager{s: s, jobs: jobs, d: d}, nil
 }
 
-// Run backs up every job. Then it runs forget for the jobs with a retention policy and a
-// complete snapshot, and with Prune, prune and unlock when every snapshot is complete. A
-// cancelled run does no maintenance. Job failures are logged here and summarized in the
-// returned ErrJobsFailed; forget, prune and unlock failures are only logged. Then the
-// Post hook runs, and when anything failed, the OnFailure hook.
+// Run backs up every job; a job whose required job failed is skipped and fails. Then it
+// runs forget for the jobs with a retention policy and a complete snapshot, with Prune,
+// prune and unlock when every snapshot is complete, and with Check, check. A cancelled
+// run does no maintenance. Job failures are logged here and summarized in the returned
+// ErrJobsFailed; forget, prune, unlock and check failures are only logged. Then the Post
+// hook runs, and when anything failed, the OnFailure hook.
 func (m *Manager) Run(ctx context.Context) error {
 	m.d.Log.Info().Int("concurrency", m.s.Concurrency).Int("jobs", len(m.jobs)).
 		Stringer("shutdown_timeout", m.ShutdownTimeout()).Msg("starting backup run")
