@@ -214,10 +214,12 @@ func TestResticSettingsAndEnv(t *testing.T) {
 	r := config.Repository{
 		URL: "/repo", Env: []string{"RESTIC_PASSWORD=x"}, LimitUpload: 5,
 		BackendOptions: map[string]string{"s3.connections": "2"}, MaxUnused: "1%",
+		Check: true, CheckReadDataSubset: "2G",
 	}
 	s := resticSettings(r)
 	assert.Equal(t, []string{"--option=s3.connections=2", "--limit-upload=5"}, s.GlobalArgs)
 	assert.Equal(t, []string{"--max-unused=1%"}, s.PruneArgs)
+	assert.Equal(t, []string{"--read-data-subset=2G"}, s.CheckArgs)
 	assert.Equal(t, []string{"PATH=/bin", "RESTIC_PASSWORD=x", "RESTIC_REPOSITORY=/repo"},
 		resticEnv([]string{"PATH=/bin"}, r))
 	assert.Equal(t, []string{"PATH=/bin"}, resticEnv([]string{"PATH=/bin"}, config.Repository{}))

@@ -11,7 +11,8 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
   jobs that share services never run at the same time
 - Database dumps streamed straight into the repository (`stdin_command`), no temp files
 - Typed, validated restic options (excludes, tags, limits, ...) and retention policies
-  (`keep`) with a single prune for the whole repository
+  (`keep`) with a single prune for the whole repository, and an optional `restic check`
+  after it
 - Hooks before and after each job and on failure, with the job's result in their
   environment
 - `restor restore` restores a snapshot, as a dry run unless `--apply` is given
@@ -102,7 +103,7 @@ other: a normal user who wants the system configuration runs restor with `sudo`.
 journal: `journalctl -u restor` (or `journalctl --user -u restor`).
 
 `restor run` exits 0 when every job was backed up and 1 when the config is invalid, a job
-failed or the run was cancelled. A failed forget or prune is logged and runs the
+failed or the run was cancelled. A failed forget, prune or check is logged and runs the
 top-level `on_failure` hook; a failed `post` or `on_failure` hook is only logged. Neither
 changes the exit code. Before anything is stopped, it checks
 that `restic` is installed and supported (see below). `restor snapshots`,
@@ -160,7 +161,7 @@ in the backup; `restor run` then fails with "no jobs configured".
 
 **Repository:** `url` (or `RESTIC_REPOSITORY`/`RESTIC_REPOSITORY_FILE` in the env file),
 `env_file`, `backend_options` (`--option key=value`), `limit_upload`, `limit_download`
-(KiB/s), `retry_lock`, `prune`, `max_unused`. The repository is passed to restic as
+(KiB/s), `retry_lock`, `prune`, `max_unused`, `check`, `check_read_data_subset`. The repository is passed to restic as
 `RESTIC_REPOSITORY`, so it never shows up in command lines or logs.
 
 **The env file** holds the variables of restic only: the repository password and the
@@ -264,8 +265,8 @@ for output that is still open and then warns.
 | `pre` | before the services are stopped; if it fails, the job fails and nothing else runs | `RESTOR_JOB`, `RESTOR_HOOK=pre` |
 | `post` | after the services are started again, whenever `pre` succeeded | also `RESTOR_STATUS` (`success`, `incomplete`, `failed`), `RESTOR_SNAPSHOT_ID`, `RESTOR_ERROR` |
 | job `on_failure` | after `post`, when the job failed | as `post` |
-| top-level `post` | once after every run, after forget and prune | the run summary below |
-| top-level `on_failure` | after the top-level `post`, when a job, forget or prune failed | the run summary below |
+| top-level `post` | once after every run, after forget, prune and check | the run summary below |
+| top-level `on_failure` | after the top-level `post`, when a job, forget, prune or check failed | the run summary below |
 
 The top-level hooks get a summary of the whole run: `RESTOR_HOOK`, `RESTOR_STATUS`
 (`failed` when anything failed, `incomplete` when a snapshot is incomplete, else
@@ -316,6 +317,13 @@ group, also when its `sources` or `tags` change. With `repository.prune`, one `p
 failed, or whose snapshot is incomplete (restic could not read some files), keeps its
 history and prune waits for a better run. A run that `skip_if_unchanged` skipped counts as
 complete.
+
+**Check:** with `repository.check: true`, every run ends its maintenance with one
+`restic check`, also after failed jobs, so damage to the repository is found before a
+restore needs it. `check_read_data_subset` also reads back part of the data (`5%`,
+`1/10`, `2G`); without it, only the structure is checked. A failed check counts like a
+failed prune: it is logged, the run summary says `failed` and the top-level `on_failure`
+hook runs, but the exit code stays 0 when every job backed up.
 
 ## Restore
 

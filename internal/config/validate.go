@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -14,7 +15,12 @@ const (
 	maxUnusedPattern = `^(unlimited|[0-9]+(\.[0-9]+)?%|[0-9]+[kKmMgGtT]?)$`
 	withinPattern    = `^([0-9]+[ymdh])+$`
 	backendPattern   = `^[a-z0-9]+\.[a-z0-9_.-]+$`
+	// subsetPattern is restic check's --read-data-subset: n/t, a percentage or a size.
+	subsetPattern = `^(([0-9]+)/([0-9]+)|([0-9]+(\.[0-9]+)?)%|[0-9]+[kKmMgGtT]?)$`
 )
+
+// maxPercent is the largest percentage of the data check can read.
+const maxPercent = 100
 
 // validate checks every field of f (after lowerJobNames) and returns all problems.
 func (f *File) validate() []error {
@@ -89,6 +95,36 @@ func (v *validator) repository(r RepositoryConfig) {
 		rv.matches(maxUnusedPattern, r.MaxUnused, "max_unused",
 			`a limit such as "5%", "1G" or "unlimited"`)
 	}
+	if r.CheckReadDataSubset != "" {
+		rv.check(r.Check, "check_read_data_subset", "only with check: true")
+		rv.check(validSubset(r.CheckReadDataSubset), "check_read_data_subset", fmt.Sprintf(
+			`%q is not a subset such as "5%%", "1/10" or "2G"`, r.CheckReadDataSubset))
+	}
+}
+
+// validSubset reports whether s is a --read-data-subset restic accepts: n/t with
+// 1 <= n <= t, a percentage above 0 and up to 100, or a size above 0.
+func validSubset(s string) bool {
+	m := regexp.MustCompile(subsetPattern).FindStringSubmatch(s)
+	switch {
+	case m == nil:
+		return false
+	case m[2] != "":
+		return validFraction(m[2], m[3])
+	case m[4] != "":
+		p, err := strconv.ParseFloat(m[4], 64)
+		return err == nil && p > 0 && p <= maxPercent
+	default:
+		size, err := strconv.Atoi(strings.TrimRight(s, "kKmMgGtT"))
+		return err == nil && size > 0
+	}
+}
+
+// validFraction reports whether n/t selects one of t parts: 1 <= n <= t.
+func validFraction(n, t string) bool {
+	part, errN := strconv.Atoi(n)
+	parts, errT := strconv.Atoi(t)
+	return errN == nil && errT == nil && part >= 1 && part <= parts
 }
 
 // common checks the fields a job shares with the defaults section; f gives the job

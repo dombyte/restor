@@ -66,6 +66,12 @@ func TestPruneFlags_Args(t *testing.T) {
 	assert.Empty(t, PruneFlags{}.Args())
 }
 
+func TestCheckFlags_Args(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, []string{"--read-data-subset=1/10"}, CheckFlags{ReadDataSubset: "1/10"}.Args())
+	assert.Empty(t, CheckFlags{}.Args())
+}
+
 func TestSnapshotsFlags_Args(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, []string{"--tag=db", "--tag=web"},

@@ -1,7 +1,8 @@
-// Package restic wraps the restic CLI: backup, forget, prune, unlock and version. The
+// Package restic wraps the restic CLI: backup, forget, prune, check, unlock and version. The
 // repository and its credentials come from the runner's environment (RESTIC_REPOSITORY,
 // RESTIC_PASSWORD_FILE, …), so they never appear in arguments or logs. The restic flags
-// are built here from typed settings (Repository, BackupFlags, Keep, PruneFlags); no
+// are built here from typed settings (Repository, BackupFlags, Keep, PruneFlags,
+// CheckFlags); no
 // caller passes raw restic arguments.
 package restic
 
@@ -99,6 +100,8 @@ type Settings struct {
 	GlobalArgs []string
 	// PruneArgs are the options of prune (PruneFlags.Args).
 	PruneArgs []string
+	// CheckArgs are the options of check (CheckFlags.Args).
+	CheckArgs []string
 }
 
 // Client runs restic commands against one repository.
@@ -265,6 +268,15 @@ func (c *Client) Forget(ctx context.Context, tag string, args []string) error {
 func (c *Client) Prune(ctx context.Context) error {
 	if _, err := c.run(ctx, "prune", c.s.PruneArgs...); err != nil {
 		return failed("prune", err)
+	}
+	return nil
+}
+
+// Check runs `restic check [check args]`: it verifies the repository's structure and,
+// with --read-data-subset, reads back part of the data.
+func (c *Client) Check(ctx context.Context) error {
+	if _, err := c.run(ctx, "check", c.s.CheckArgs...); err != nil {
+		return failed("check", err)
 	}
 	return nil
 }

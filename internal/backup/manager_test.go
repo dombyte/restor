@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -112,6 +113,42 @@ func TestManager_MaintenanceSkipped(t *testing.T) {
 	}
 }
 
+func TestManager_CheckAfterPrune(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expectLock("a")
+	f.expectBackup("a", nil)
+	mock.InOrder(
+		f.restic.EXPECT().Forget(mock.Anything, "a", mock.Anything).Return(nil).Once(),
+		f.restic.EXPECT().Prune(mock.Anything).Return(nil).Once(),
+		f.restic.EXPECT().Unlock(mock.Anything).Return(nil).Once(),
+		f.restic.EXPECT().Check(mock.Anything).Return(nil).Once(),
+	)
+	m := f.manager(t, Settings{Prune: true, Check: true}, fileJob(f, t, "a", "--keep-last 1"))
+
+	require.NoError(t, m.Run(context.Background()))
+}
+
+func TestManager_CheckAfterFailedJob(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expectLock("a")
+	f.expectBackup("a", assert.AnError)
+	checkErr := fmt.Errorf("restic: check: %w", assert.AnError)
+	f.restic.EXPECT().Check(mock.Anything).Return(checkErr).Once()
+	f.hooks.EXPECT().RunEnv(mock.Anything, mock.MatchedBy(func(env []string) bool {
+		return slices.Contains(env, "RESTOR_ERROR="+checkErr.Error()+"; backup: a: "+
+			assert.AnError.Error())
+	}), "/bin/run-failed").Return(nil, nil).Once()
+	m := f.manager(t, Settings{Prune: true, Check: true, OnFailure: "/bin/run-failed"},
+		fileJob(f, t, "a", "--keep-last 1"))
+
+	err := m.Run(context.Background())
+
+	require.ErrorIs(t, err, ErrJobsFailed, "the job fails the run, the check only reports")
+	// No forget or prune after the failed job, but the check still runs.
+}
+
 func TestManager_RunCancelled(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -122,7 +159,7 @@ func TestManager_RunCancelled(t *testing.T) {
 			cancel()
 			return "id", nil
 		})
-	m := f.manager(t, Settings{Concurrency: 1, Prune: true},
+	m := f.manager(t, Settings{Concurrency: 1, Prune: true, Check: true},
 		fileJob(f, t, "a", "--keep-last 1"), fileJob(f, t, "b", "--keep-last 1"))
 
 	err := m.Run(ctx)

@@ -1,7 +1,7 @@
 // Package backup orchestrates one backup run: per job lock, pre hook, stop services,
 // restic backup, start services, post and on_failure hooks; the jobs run in the order
 // and with the concurrency the schedule allows. Then forget per job, one
-// repository-wide prune and unlock, and the run-level post and on_failure hooks. It
+// repository-wide prune and unlock, check, and the run-level post and on_failure hooks. It
 // talks to restic, the service managers, the locker and the hook runner only through
 // the interfaces declared here.
 package backup
@@ -34,6 +34,7 @@ type Restic interface {
 	Backup(ctx context.Context, tag string, sources, args []string) (string, error)
 	Forget(ctx context.Context, tag string, args []string) error
 	Prune(ctx context.Context) error
+	Check(ctx context.Context) error
 	Unlock(ctx context.Context) error
 }
 
@@ -68,6 +69,8 @@ type Settings struct {
 	Concurrency int
 	// Prune runs prune and unlock after the run when every job has a complete snapshot.
 	Prune bool
+	// Check runs check after forget and prune, whatever the jobs' results.
+	Check bool
 	// Post is the hook that runs once after every run, with a summary of it.
 	Post string
 	// OnFailure is the hook that runs once after a run in which something failed.
@@ -195,21 +198,41 @@ func (m *Manager) runJobs(ctx context.Context) []result {
 }
 
 // maintain runs forget for the jobs with a retention policy and a complete snapshot,
-// then one prune and unlock when every job has one. They run after all backups because
-// they need exclusive repository locks. A failed or incomplete backup keeps its job's
-// history and skips prune, so a broken run never removes data. It returns what failed.
+// then one prune and unlock when every job has one, then check. They run after all
+// backups because they need exclusive repository locks. A failed or incomplete backup
+// keeps its job's history and skips prune, so a broken run never removes data. It
+// returns what failed.
 func (m *Manager) maintain(ctx context.Context, results []result) []string {
 	forgot, failures := m.forgetAll(ctx, results)
-	if !m.s.Prune || !forgot {
-		return failures
+	if m.s.Prune && forgot {
+		failures = append(failures, m.pruneIfComplete(ctx, results)...)
 	}
+	if m.s.Check {
+		failures = append(failures, m.check(ctx)...)
+	}
+	return failures
+}
+
+// pruneIfComplete runs prune and unlock when every job has a complete snapshot.
+func (m *Manager) pruneIfComplete(ctx context.Context, results []result) []string {
 	for _, r := range results {
 		if r.outcome != outcomeComplete {
 			m.d.Log.Warn().Msg("prune skipped because a job failed or is incomplete")
-			return failures
+			return nil
 		}
 	}
-	return append(failures, m.prune(ctx)...)
+	return m.prune(ctx)
+}
+
+// check verifies the repository; a failure is logged and returned. It runs also after
+// failed jobs: what it checks is the data that is already there.
+func (m *Manager) check(ctx context.Context) []string {
+	if err := m.d.Restic.Check(ctx); err != nil {
+		m.d.Log.Error().Err(err).Msg("check failed")
+		return []string{err.Error()}
+	}
+	m.d.Log.Info().Msg("check completed")
+	return nil
 }
 
 // forgetAll runs forget for the jobs with a retention policy and a complete snapshot. It

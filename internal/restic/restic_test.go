@@ -231,6 +231,24 @@ func TestClient_PruneFails(t *testing.T) {
 	require.NoError(t, c.Unlock(context.Background()))
 }
 
+func TestClient_Check(t *testing.T) {
+	t.Parallel()
+	r := mocks.NewMockRunner(t)
+	c, err := New(Settings{
+		GlobalArgs: []string{"--retry-lock=1m0s"}, CheckArgs: []string{"--read-data-subset=5%"},
+	}, Deps{Runner: r})
+	require.NoError(t, err)
+	r.EXPECT().Run(mock.Anything, "restic", "--retry-lock=1m0s", "check",
+		"--read-data-subset=5%").Return(nil, nil).Once()
+	require.NoError(t, c.Check(context.Background()))
+
+	r.EXPECT().Run(mock.Anything, "restic", "--retry-lock=1m0s", "check",
+		"--read-data-subset=5%").Return(nil, assert.AnError).Once()
+	err = c.Check(context.Background())
+	require.ErrorIs(t, err, assert.AnError)
+	assert.ErrorContains(t, err, "restic: check: ")
+}
+
 func TestClient_Version(t *testing.T) {
 	t.Parallel()
 	c, r := newClient(t)

@@ -41,6 +41,10 @@ type Repository struct {
 	RetryLock      time.Duration
 	Prune          bool
 	MaxUnused      string
+	// Check runs restic check after forget and prune, reading CheckReadDataSubset of the
+	// data ("" reads none).
+	Check               bool
+	CheckReadDataSubset string
 }
 
 // Job is one job with the defaults applied.
@@ -142,6 +146,7 @@ func (f *File) plan() (*Plan, []error) {
 			URL: r.URL, EnvFile: r.EnvFile, Env: env, BackendOptions: r.BackendOptions,
 			LimitUpload: r.LimitUpload, LimitDownload: r.LimitDownload,
 			RetryLock: time.Duration(r.RetryLock), Prune: r.Prune, MaxUnused: r.MaxUnused,
+			Check: r.Check, CheckReadDataSubset: r.CheckReadDataSubset,
 		},
 		Post:      f.Post,
 		OnFailure: f.OnFailure,
