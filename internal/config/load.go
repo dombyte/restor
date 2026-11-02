@@ -71,7 +71,7 @@ func readFile(path string) (*yaml.Node, error) {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+		return nil, err // an *fs.PathError: it names the operation and the file
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
