@@ -530,6 +530,20 @@ func warnConfig(log zerolog.Logger, plan *config.Plan, resticEnv []string) {
 	}
 	warnEnvFileMode(log, plan.Repository.EnvFile)
 	warnRelativeHooks(log, plan)
+	warnStoppedDumps(log, plan.Jobs)
+}
+
+// warnStoppedDumps warns about stdin_command jobs that stop all of their services: the
+// command runs while they are down, so a dump through `compose exec` or from a stopped
+// database fails. Stopping some of them (services) is a deliberate choice and fine.
+func warnStoppedDumps(log zerolog.Logger, jobs []config.Job) {
+	for _, j := range jobs {
+		if j.FromStdin() && j.StopsServices() && len(j.Services) == 0 {
+			log.Warn().Str("field", "jobs."+j.Name+".stdin_command").
+				Msg("the command runs while all services of the job are stopped; set " +
+					"stop: false if it needs them, or name the ones to stop in services")
+		}
+	}
 }
 
 // warnRelativeHooks warns about hooks (and stdin commands) whose program is a relative

@@ -287,6 +287,28 @@ func TestWarnRelativeHooks(t *testing.T) {
 	assert.NotContains(t, out, `"job":`)
 }
 
+func TestWarnStoppedDumps(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	dump := []string{"docker", "compose", "exec", "db", "pg_dumpall"}
+	jobs := []config.Job{
+		{Name: "all", Type: config.TypeDockerCompose, Stop: true, StdinCommand: dump},
+		{Name: "running", Type: config.TypeDockerCompose, StdinCommand: dump},
+		{
+			Name: "some", Type: config.TypeDockerCompose, Stop: true, Services: []string{"app"},
+			StdinCommand: dump,
+		},
+		{Name: "files", Stop: true, StdinCommand: dump},
+		{Name: "sources", Type: config.TypeSystemd, Stop: true, Sources: []string{"/s"}},
+	}
+
+	warnStoppedDumps(zerolog.New(&buf), jobs)
+
+	out := buf.String()
+	assert.Contains(t, out, `"field":"jobs.all.stdin_command"`)
+	assert.Equal(t, 1, strings.Count(out, "\n"), "stop: false, services and no services")
+}
+
 func TestWarnEnvFileMode(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
