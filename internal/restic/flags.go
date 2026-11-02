@@ -144,6 +144,21 @@ func (f PruneFlags) Args() []string {
 	return []string{"--max-unused=" + f.MaxUnused}
 }
 
+// CheckFlags are the options of check.
+type CheckFlags struct {
+	// ReadDataSubset also reads this part of the data: "5%", "1/10" or a size such as
+	// "2G"; empty checks only the structure.
+	ReadDataSubset string
+}
+
+// Args returns the restic check flags of f.
+func (f CheckFlags) Args() []string {
+	if f.ReadDataSubset == "" {
+		return nil
+	}
+	return []string{"--read-data-subset=" + f.ReadDataSubset}
+}
+
 // SnapshotsFlags are the options of snapshots.
 type SnapshotsFlags struct {
 	// Tags select the snapshots that have any of them; empty selects all.

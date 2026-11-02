@@ -243,6 +243,26 @@ func TestLoad_Validation(t *testing.T) {
 		{"limit", "repository: {limit_upload: -1}", "repository.limit_upload: must be >= 0"},
 		{"retry lock", "repository: {retry_lock: -1s}", "repository.retry_lock: must be >= 0"},
 		{"max unused", "repository: {max_unused: lots}", `repository.max_unused: "lots" is not`},
+		{
+			"subset without check", "repository: {check_read_data_subset: 5%}",
+			"repository.check_read_data_subset: only with check: true",
+		},
+		{
+			"subset", "repository: {check: true, check_read_data_subset: half}",
+			`repository.check_read_data_subset: "half" is not a subset such as "5%"`,
+		},
+		{
+			"subset fraction", "repository: {check: true, check_read_data_subset: 3/2}",
+			`repository.check_read_data_subset: "3/2" is not`,
+		},
+		{
+			"subset percent", "repository: {check: true, check_read_data_subset: 101%}",
+			`repository.check_read_data_subset: "101%" is not`,
+		},
+		{
+			"subset size", "repository: {check: true, check_read_data_subset: 0G}",
+			`repository.check_read_data_subset: "0G" is not`,
+		},
 		{"keep count", "defaults: {keep: {daily: -1}}", "defaults.keep.daily: must be >= 0"},
 		{"keep within", "defaults: {keep: {within: 30x}}", `defaults.keep.within: "30x" is not`},
 		{"keep tag", "defaults: {keep: {tags: ['a,b']}}", `defaults.keep.tags: "a,b": a tag`},
@@ -387,6 +407,17 @@ jobs:
 	}, j.StdinCommand, "not resolved: it is a command")
 	assert.Equal(t, "pg.sql", j.StdinFilename)
 	assert.Empty(t, j.Sources)
+}
+
+func TestLoad_Check(t *testing.T) {
+	t.Parallel()
+	for _, subset := range []string{"", "1/10", "10/10", "2.5%", "100%", "500M", "1"} {
+		plan, err := load(t, "version: 2\nrepository: {check: true, check_read_data_subset: '"+
+			subset+"'}\n", nil)
+		require.NoError(t, err, subset)
+		assert.True(t, plan.Repository.Check)
+		assert.Equal(t, subset, plan.Repository.CheckReadDataSubset)
+	}
 }
 
 func TestLoad_RepositoryOnly(t *testing.T) {

@@ -108,7 +108,7 @@ func TestIntegration(t *testing.T) {
 
 	t.Run("version", testVersion)
 	t.Run("backup flags", testBackupFlags)
-	t.Run("global flags, prune and unlock", testGlobalFlags)
+	t.Run("global flags, prune, unlock and check", testGlobalFlags)
 	t.Run("skip if unchanged", testSkipIfUnchanged)
 	t.Run("stdin from command", testStdinCommand)
 	t.Run("forget", testForget)
@@ -180,6 +180,13 @@ func testGlobalFlags(t *testing.T) {
 	require.NoError(t, c.Forget(ctx, "web", restic.Keep{Last: 1}.Args()))
 	require.NoError(t, c.Prune(ctx))
 	require.NoError(t, c.Unlock(ctx))
+	require.NoError(t, c.Check(ctx), "structure only")
+	for _, subset := range []string{"1/2", "50%", "1M"} {
+		checker := r.client(t, restic.Settings{
+			CheckArgs: restic.CheckFlags{ReadDataSubset: subset}.Args(),
+		})
+		require.NoError(t, checker.Check(ctx), subset)
+	}
 }
 
 // staticSource returns testdata/static. restic also records the directories above a
@@ -380,6 +387,8 @@ repository:
   retry_lock: 1m
   prune: true
   max_unused: 10%
+  check: true
+  check_read_data_subset: 10%
 defaults:
   keep: {last: 2, within: 1d}
   exclude: ["*.tmp"]

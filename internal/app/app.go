@@ -241,6 +241,7 @@ func (a *App) Describe(w io.Writer) error {
 	tw := tabwriter.NewWriter(w, 0, 0, columnPadding, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "concurrency:\t%d (0 = all at once)\n", a.plan.Concurrency)
 	_, _ = fmt.Fprintf(tw, "prune:\t%t\n", a.plan.Repository.Prune)
+	_, _ = fmt.Fprintf(tw, "check:\t%s\n", checkLabel(a.plan.Repository))
 	if len(jobs) == 0 {
 		_, _ = fmt.Fprintln(tw, "\nno jobs configured: restor run has nothing to back up")
 		return tw.Flush()
@@ -256,6 +257,18 @@ func (a *App) Describe(w io.Writer) error {
 		_, _ = fmt.Fprintf(tw, "  %s\t%s\t(%s)\n", g.label, g.policy, strings.Join(g.jobs, ", "))
 	}
 	return tw.Flush()
+}
+
+// checkLabel says whether the run ends with restic check, and how much data it reads.
+func checkLabel(r config.Repository) string {
+	switch {
+	case !r.Check:
+		return "false"
+	case r.CheckReadDataSubset == "":
+		return "true (structure only)"
+	default:
+		return "true (reads " + r.CheckReadDataSubset + " of the data)"
+	}
 }
 
 // sourcesLabel is what a job backs up: its sources, or the command whose output it saves.
@@ -381,7 +394,7 @@ func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
 	}
 	return backup.NewManager(backup.Settings{
 		Concurrency: plan.Concurrency, Prune: plan.Repository.Prune,
-		Post: plan.Post, OnFailure: plan.OnFailure,
+		Check: plan.Repository.Check, Post: plan.Post, OnFailure: plan.OnFailure,
 	}, jobs, backup.Deps{
 		Restic: d.restic, Locker: locker, Hooks: d.runner, Log: component(d.log, "backup"),
 	})
@@ -460,6 +473,7 @@ func resticSettings(r config.Repository) restic.Settings {
 			LimitDownload: r.LimitDownload, RetryLock: r.RetryLock,
 		}.Args(),
 		PruneArgs: restic.PruneFlags{MaxUnused: r.MaxUnused}.Args(),
+		CheckArgs: restic.CheckFlags{ReadDataSubset: r.CheckReadDataSubset}.Args(),
 	}
 }
 

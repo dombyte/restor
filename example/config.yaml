@@ -71,9 +71,20 @@ repository:
   # a size such as "2G", or "unlimited" (fastest prune).
   max_unused: 5%
 
-# Run-level hooks: commands that run once after the run (after forget and prune).
+  # Run "restic check" once after forget and prune, also when a job failed: it verifies
+  # that the repository is intact. A failed check is logged, makes RESTOR_STATUS "failed"
+  # and runs the top-level on_failure hook, but does not change the exit code.
+  # Default: false.
+  check: true
+  # Also read back this part of the data, to find damaged pack files: "5%", "1/10" (a
+  # different tenth on each of ten runs, when the number changes each time) or a size
+  # such as "2G". It downloads that much from the repository on every run.
+  # Default: none (structure only).
+  check_read_data_subset: 2%
+
+# Run-level hooks: commands that run once after the run (after forget, prune and check).
 #   post:       after every run
-#   on_failure: after post, when a job, forget, prune or unlock failed
+#   on_failure: after post, when a job, forget, prune, unlock or check failed
 # Both get a summary of the run in their environment:
 #   RESTOR_HOOK (post or on_failure); RESTOR_STATUS: failed when anything failed,
 #   incomplete when a snapshot is incomplete, else success; the comma-separated job names

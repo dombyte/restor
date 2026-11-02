@@ -89,7 +89,7 @@ func TestRun_UnknownJob(t *testing.T) {
 func TestRun_Validate(t *testing.T) {
 	t.Parallel()
 	path := writeConfig(t, `version: 2
-repository: {url: /repo, prune: true}
+repository: {url: /repo, prune: true, check: true, check_read_data_subset: 5%}
 defaults:
   keep: {daily: 7, weekly: 4}
 jobs:
@@ -104,6 +104,7 @@ jobs:
 	out := stdout.String()
 	assert.Contains(t, out, path+" is valid")
 	assert.Contains(t, out, "prune:        true")
+	assert.Contains(t, out, "check:        true (reads 5% of the data)")
 	assert.Regexp(t, `(?s)JOB.*\n`+
 		`db +docker-compose +- +true +false +A +/d\n`+
 		`etc +files +- +false +false +A +/etc\n`+

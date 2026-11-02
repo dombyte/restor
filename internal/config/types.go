@@ -66,6 +66,10 @@ type RepositoryConfig struct {
 	RetryLock      Duration          `yaml:"retry_lock"`
 	Prune          bool              `yaml:"prune"`
 	MaxUnused      string            `yaml:"max_unused"`
+	// Check runs restic check after the maintenance; CheckReadDataSubset also reads that
+	// part of the data ("5%", "1/10", "2G").
+	Check               bool   `yaml:"check"`
+	CheckReadDataSubset string `yaml:"check_read_data_subset"`
 }
 
 // Defaults are the job settings that the defaults section can set. Pointers and nil
