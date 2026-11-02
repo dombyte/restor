@@ -227,6 +227,11 @@ jobs:
     before: [files]             # dump first, then back up the files next to it
 ```
 
+With a compose or systemd `type`, the job stops its services during the backup as
+usual, so the command runs while they are down: set `stop: false` when it needs them (as
+above), or list in `services` only the ones to stop (stop `app`, dump `db`). restor warns
+at startup about a dump job that stops all of its services.
+
 Such a job reads no files: `exclude`, `exclude_file`, `one_file_system` and the other
 file selection keys are errors in the job itself and ignored when they come from
 `defaults`. Restore the dump with `restor restic dump <snapshot-ID> /pg.sql`. restic runs

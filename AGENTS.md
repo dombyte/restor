@@ -398,8 +398,10 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   own `tags` (every snapshot has it, so forget would remove none); no path starting with
   `~` (YAML does not expand it). Startup warns about a missing repository
   (`repository.url`, `RESTIC_REPOSITORY`, `RESTIC_REPOSITORY_FILE`), an env file that
-  group or others can access (mode & 077), a hook whose program is a relative path
-  (`./x.sh`), and binaries missing from `PATH`.
+  group or others can access (mode & 077), a hook or `stdin_command` whose program is a
+  relative path (`./x.sh`), a `stdin_command` job that stops all of its services (the
+  command runs while they are down; `stop: false` or `services` silence it), and
+  binaries missing from `PATH`.
 - `example/config.yaml` stays complete, commented and valid (`TestLoad_ExampleConfig`);
   its `include: [jobs.d/*.yaml]` matches nothing in `example/`; every new option is
   added there in the same change.
