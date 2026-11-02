@@ -76,9 +76,9 @@ repository:
   # and runs the top-level on_failure hook, but does not change the exit code.
   # Default: false.
   check: true
-  # Also read back this part of the data, to find damaged pack files: "5%", "1/10" (a
-  # different tenth on each of ten runs, when the number changes each time) or a size
-  # such as "2G". It downloads that much from the repository on every run.
+  # Also read back part of the data, to find damaged pack files: a percentage such as
+  # "5%" or a size such as "2G" (a random part on every run), or "n/t" (always the n-th
+  # of t parts). It downloads that much from the repository on every run.
   # Default: none (structure only).
   check_read_data_subset: 2%
 
@@ -92,7 +92,8 @@ repository:
 #   RESTOR_SNAPSHOT_IDS (job=ID, comma-separated) and, when anything failed,
 #   RESTOR_ERROR (all failures, "; "-separated).
 # E.g. one notification per run with every job's result (example/hooks/: ntfy.sh,
-# notifyapp.sh, mail.sh, healthchecks.sh). Default: none.
+# notifyapp.sh, mail.sh, healthchecks.sh), or metrics for Prometheus (prometheus.sh).
+# Default: none.
 # post: /etc/restor/hooks/ntfy.sh
 # on_failure: /usr/local/bin/page-oncall
 
