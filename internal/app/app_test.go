@@ -201,6 +201,12 @@ func TestJobSettings(t *testing.T) {
 
 	j.Type = config.TypeFiles
 	assert.False(t, jobSettings(j).StopServices, "file jobs stop nothing")
+
+	j.Sources, j.StdinCommand, j.StdinFilename = nil, []string{"pg_dumpall", "-c"}, "pg.sql"
+	s = jobSettings(j)
+	assert.Equal(t, []string{"pg_dumpall", "-c"}, s.Sources, "the command is backed up")
+	assert.Equal(t, []string{"--stdin-from-command", "--stdin-filename=pg.sql", "--tag=prod"},
+		s.BackupArgs, "without the file selection")
 }
 
 func TestResticSettingsAndEnv(t *testing.T) {
@@ -234,9 +240,10 @@ func TestWarnMissingBinaries(t *testing.T) {
 		{Type: config.TypeDockerCompose},
 		{Type: config.TypeSystemd},
 		{Type: config.TypeFiles},
+		{StdinCommand: []string{"pg_dumpall", "-c"}},
 	}, lookPath)
 
-	assert.Equal(t, []string{"docker", "podman", "restic", "systemctl"}, looked)
+	assert.Equal(t, []string{"docker", "pg_dumpall", "podman", "restic", "systemctl"}, looked)
 	assert.Contains(t, buf.String(), `"binary":"podman"`)
 	assert.NotContains(t, buf.String(), `"binary":"docker"`)
 }
@@ -259,7 +266,11 @@ func TestWarnRelativeHooks(t *testing.T) {
 	var buf bytes.Buffer
 	plan := &config.Plan{Post: "hooks/summary", OnFailure: "notify/x", Jobs: []config.Job{
 		{Name: "rel", Pre: "./hooks/pre.sh --flag", Post: "bin/post"},
-		{Name: "ok", Pre: "/usr/local/bin/pre.sh ./arg", Post: "pg_dump", OnFailure: "/x"},
+		{
+			Name: "ok", Pre: "/usr/local/bin/pre.sh ./arg", Post: "pg_dump", OnFailure: "/x",
+			StdinCommand: []string{"pg_dump"},
+		},
+		{Name: "dump", StdinCommand: []string{"./dump.sh", "-x"}},
 	}}
 
 	warnRelativeHooks(zerolog.New(&buf), plan)
@@ -269,6 +280,7 @@ func TestWarnRelativeHooks(t *testing.T) {
 	assert.Contains(t, out, `"field":"on_failure","hook":"notify/x"`)
 	assert.Contains(t, out, `"field":"jobs.rel.pre","hook":"./hooks/pre.sh"`)
 	assert.Contains(t, out, `"field":"jobs.rel.post","hook":"bin/post"`)
+	assert.Contains(t, out, `"field":"jobs.dump.stdin_command","hook":"./dump.sh"`)
 	assert.NotContains(t, out, `jobs.ok`, "absolute paths and PATH lookups are fine")
 	assert.NotContains(t, out, `"job":`)
 }

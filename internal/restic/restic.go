@@ -125,7 +125,8 @@ func (c *Client) run(ctx context.Context, command string, args ...string) ([]byt
 
 // Backup runs `restic backup --json --group-by=host,tags [args] --tag=<tag> -- <sources>`
 // and returns the short ID of the new snapshot, or "" when restic reports none. args come
-// from BackupFlags.Args. An incomplete snapshot returns its ID together with an
+// from BackupFlags.Args; with its StdinFromCommand, sources are the command and its
+// arguments. An incomplete snapshot returns its ID together with an
 // *IncompleteError, a snapshot that --skip-if-unchanged skipped an *UnchangedError.
 func (c *Client) Backup(ctx context.Context, tag string, sources, args []string) (
 	string, error,

@@ -36,6 +36,12 @@ func TestBackupFlags_Args(t *testing.T) {
 		"--one-file-system", "--skip-if-unchanged", "--tag=prod",
 	}, f.Args())
 	assert.Empty(t, BackupFlags{}.Args())
+
+	f.StdinFromCommand, f.StdinFilename = true, "db.sql"
+	assert.Equal(t, []string{
+		"--stdin-from-command", "--stdin-filename=db.sql", "--skip-if-unchanged", "--tag=prod",
+	}, f.Args(), "no file selection for a command's output")
+	assert.Equal(t, []string{"--stdin-from-command"}, BackupFlags{StdinFromCommand: true}.Args())
 }
 
 func TestKeep_Args(t *testing.T) {

@@ -158,7 +158,12 @@ defaults:
 # start with "-" or contain "," or whitespace.
 #
 #   type:      docker-compose, podman-compose or systemd; leave it out for files only
-#   sources:   paths to back up (required)
+#   sources:   paths to back up (required, unless stdin_command)
+#   stdin_command: back up what this command writes to stdout instead of sources; a list,
+#              run without a shell. restic runs it, so it sees restic's environment,
+#              the env file included. The file selection keys (exclude, …,
+#              one_file_system) do not apply; from defaults they are ignored.
+#   stdin_filename: the file name of that output in the snapshot. Default: stdin.
 #   before / after: names of jobs that must run after / before this one. A job waits
 #              until those have finished, whether they succeeded or not.
 #   plus every key of the defaults section.
@@ -202,6 +207,18 @@ jobs:
     # Make sure the wiki is up after each backup, also when it was down before.
     start_all: true
     sources: [/srv/wiki/data]
+
+  # A database dump streamed into the repository: no dump on disk. The database keeps
+  # running (it must, to be dumped); a failing command saves no snapshot and fails the
+  # job. Restore it with: restor restic dump <snapshot-ID> /wiki.sql
+  wiki-db:
+    type: podman-compose
+    compose_file: /srv/wiki/compose.yml
+    stop: false
+    stdin_command: [podman, compose, -f, /srv/wiki/compose.yml, exec, -T, db,
+                    pg_dumpall, -U, postgres]
+    stdin_filename: wiki.sql
+    before: [wiki]
 
   # systemd units of the system (scope: system is the default), with shared settings
   # merged from the x-quick-units anchor below.

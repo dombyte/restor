@@ -18,7 +18,8 @@ follow it; there is no external document to consult.
 
 restor orchestrates **restic** backups of several **jobs** on one host.
 
-- **Job:** a named set of `sources` (paths) plus, depending on its `type`, the services that
+- **Job:** a named set of `sources` (paths), or a `stdin_command` whose output is backed
+  up, plus, depending on its `type`, the services that
   must be stopped while they are backed up: `docker-compose`, `podman-compose`, `systemd`
   (system or user scope), or no type (files only, nothing to stop).
 - **Per job:** lock → pre hook → stop services → `restic backup --tag=<job>` → start
@@ -342,9 +343,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - Relative `repository.env_file`, `compose_file`, `sources` and `exclude_file` are
   resolved against the directory of the config file (systemd runs restor in `/`); hooks
   are not (they are commands).
-- `defaults` holds every job key except `type`, `sources`, `compose_file`, `units`,
-  `scope`, `services`, `before` and `after` (`config.Defaults`, inlined into
-  `config.JobConfig`). A job's own value replaces the default, lists included (an empty
+- `defaults` holds every job key except `type`, `sources`, `stdin_command`,
+  `stdin_filename`, `compose_file`, `units`, `scope`, `services`, `before` and `after`
+  (`config.Defaults`, inlined into `config.JobConfig`). A job's own value replaces the default, lists included (an empty
   list clears the default); `keep` is replaced as a whole. Unset: `stop` true,
   `start_all` false, `stop_timeout` 1m, `start_timeout` 2m, `concurrency` 1.
 - Job names are case-insensitive and used in lowercase (also as the restic tag and in
@@ -362,9 +363,13 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `type` is `docker-compose`, `podman-compose`, `systemd` or absent; `compose_file` for
   the compose types, `units` for systemd, `scope` is `system` or `user`, `services` of a
   systemd job are among its `units`; keys of another type are errors (`units` on a compose
-  job, `services`/`stop`/`start_all`/timeouts on a files-only job); `sources` required, no empty
-  entries; `before`/`after` name other existing jobs and form no cycle (the first cycle is
-  reported as `a → b → a`); durations ≥ 0, `stop_timeout` > 0 when services are
+  job, `services`/`stop`/`start_all`/timeouts on a files-only job); `sources` required
+  unless `stdin_command`, no empty entries; `stdin_command` not empty and without empty
+  entries, not with `sources` or the job's own file selection keys (`exclude`,
+  `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`,
+  `exclude_larger_than`, `one_file_system`; from `defaults` they are dropped),
+  `stdin_filename` only with it; `before`/`after` name other existing jobs and form no
+  cycle (the first cycle is reported as `a → b → a`); durations ≥ 0, `stop_timeout` > 0 when services are
   stopped and `start_timeout` > 0 when they are stopped or `start_all` is set; `keep` counts ≥ 0 and `within…` restic durations (`1y2m3d4h`); sizes
   (`exclude_larger_than`) like `500M`; `max_unused` a percentage, size or `unlimited`;
   `backend_options` keys like `s3.connections` with non-empty values; limits ≥ 0; env file
@@ -493,7 +498,11 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `--skip-if-unchanged` would then skip its snapshot); backup flags
   from `exclude`, `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`,
   `exclude_larger_than`, `one_file_system`, `skip_if_unchanged` and `tags` (extra
-  `--tag=`). The last JSON `summary` message gives the snapshot ID (logged as the
+  `--tag=`). A `stdin_command` job runs `restic [global] backup --json
+  --group-by=host,tags --stdin-from-command [--stdin-filename=…] [--skip-if-unchanged]
+  [--tag=…] --tag=<job> -- <command>`: the command takes the place of the sources and
+  the file selection flags are left out (`BackupFlags.StdinFromCommand`); a command that
+  fails makes restic fail without a snapshot. The last JSON `summary` message gives the snapshot ID (logged as the
   8-character short ID; none for a `dry_run` summary or a missing summary, which is a
   warning, not an error) and the counters logged at info (`files_new`, `bytes_added`,
   `duration`, …). Lines that are not JSON are skipped. Exit code 3 returns the ID with a
@@ -553,6 +562,12 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - **Flat jobs with a `type`:** the type picks the service manager and the keys it allows;
   a new type adds a value and its keys, existing configs stay valid. Defaults replace
   rather than merge, so a job's value is always the whole value.
+- **Dumps through `--stdin-from-command`, not a pipe of restor's own:** restic saves no
+  snapshot when the command fails, which a pipe from restor into `restic backup --stdin`
+  cannot guarantee (restic would save whatever arrived before the command died). The
+  price: restic starts the command with its own environment, so it sees the env file
+  (README says so). A list, not a string split on spaces like a hook: a dump command
+  often needs an argument with spaces (a query, a connection string).
 - **The env file belongs to restic:** it holds the repository credentials; hooks and
   compose files must not see them. Values are literal because expanding them broke
   passwords containing `$`.

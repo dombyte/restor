@@ -161,7 +161,12 @@ func (v *validator) keep(k Keep) {
 // job checks one job; f gives the defaults and the other job names.
 func (v *validator) job(f *File, name string, j JobConfig) {
 	v.common(f, j.Defaults)
-	v.check(len(j.Sources) > 0, "sources", "required")
+	if j.StdinCommand != nil {
+		v.stdin(j)
+	} else {
+		v.check(len(j.Sources) > 0, "sources", "required (or stdin_command)")
+		v.check(j.StdinFilename == "", "stdin_filename", "only with stdin_command")
+	}
 	v.check(!slices.Contains(j.Sources, ""), "sources", "must not contain empty entries")
 	v.references(f, name, "before", j.Before)
 	v.references(f, name, "after", j.After)
@@ -181,6 +186,23 @@ func (v *validator) job(f *File, name string, j JobConfig) {
 		v.timeouts(f.Defaults, j)
 	}
 	v.keepTags(f.Defaults, j)
+}
+
+// stdin checks a job that backs up the output of a command: it reads no files, so the
+// keys that select files do not apply. Set in defaults they are ignored for such a job.
+func (v *validator) stdin(j JobConfig) {
+	v.check(len(j.StdinCommand) > 0, "stdin_command", "must name a program")
+	v.check(!slices.Contains(j.StdinCommand, ""), "stdin_command",
+		"must not contain empty entries")
+	unset := map[string]bool{
+		"sources": j.Sources == nil, "exclude": j.Exclude == nil, "iexclude": j.IExclude == nil,
+		"exclude_file": j.ExcludeFile == nil, "exclude_if_present": j.ExcludeIfPresent == nil,
+		"exclude_caches": j.ExcludeCaches == nil, "one_file_system": j.OneFileSystem == nil,
+		"exclude_larger_than": j.ExcludeLargerThan == nil,
+	}
+	for _, field := range sortedKeys(unset) {
+		v.check(unset[field], field, "not with stdin_command, which reads no files")
+	}
 }
 
 // keepTags checks that the job's snapshots do not all carry a tag that keep.tags keeps:

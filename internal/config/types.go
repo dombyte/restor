@@ -100,8 +100,12 @@ type JobConfig struct {
 	Scope       string   `yaml:"scope"`
 	Services    []string `yaml:"services"`
 	Sources     []string `yaml:"sources"`
-	Before      []string `yaml:"before"`
-	After       []string `yaml:"after"`
+	// StdinCommand is backed up instead of sources: restic runs it and saves its output
+	// as StdinFilename.
+	StdinCommand  []string `yaml:"stdin_command"`
+	StdinFilename string   `yaml:"stdin_filename"`
+	Before        []string `yaml:"before"`
+	After         []string `yaml:"after"`
 }
 
 // Keep is a retention policy; the zero value keeps every snapshot (no forget).

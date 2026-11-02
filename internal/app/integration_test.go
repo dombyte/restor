@@ -110,6 +110,7 @@ func TestIntegration(t *testing.T) {
 	t.Run("backup flags", testBackupFlags)
 	t.Run("global flags, prune and unlock", testGlobalFlags)
 	t.Run("skip if unchanged", testSkipIfUnchanged)
+	t.Run("stdin from command", testStdinCommand)
 	t.Run("forget", testForget)
 	t.Run("incomplete snapshot", testIncomplete)
 	t.Run("missing source", testMissingSource)
@@ -226,6 +227,29 @@ func testSkipIfUnchanged(t *testing.T) {
 	})
 
 	assert.True(t, skipped, "a backup of unchanged files is skipped")
+}
+
+// testStdinCommand backs up the output of a command under a file name, and fails without
+// a snapshot when the command fails.
+func testStdinCommand(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	c := r.client(t, restic.Settings{})
+	ctx := context.Background()
+	args := restic.BackupFlags{StdinFromCommand: true, StdinFilename: "db.sql"}.Args()
+
+	id, err := c.Backup(ctx, "db", []string{"sh", "-c", "echo dump"}, args)
+
+	require.NoError(t, err)
+	require.Len(t, id, 8)
+	assert.Equal(t, []string{"db.sql"}, r.files(t, id, "/"))
+	out, err := r.runner.Run(ctx, "restic", "dump", id, "/db.sql")
+	require.NoError(t, err)
+	assert.Equal(t, "dump\n", string(out))
+
+	_, err = c.Backup(ctx, "db", []string{"sh", "-c", "echo partial; exit 1"}, args)
+	require.Error(t, err, "a failed command fails the backup")
+	assert.Len(t, r.snapshots(t, "db"), 1, "and saves no snapshot")
 }
 
 func testForget(t *testing.T) {

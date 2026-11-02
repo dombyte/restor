@@ -306,6 +306,23 @@ func TestLoad_Validation(t *testing.T) {
 			`jobs.web.before: "web" is not another job`,
 		},
 		{
+			"stdin and sources", "jobs: {db: {stdin_command: [dump], sources: [/a]}}",
+			"jobs.db.sources: not with stdin_command, which reads no files",
+		},
+		{
+			"stdin exclude", "jobs: {db: {stdin_command: [dump], exclude: ['*.x']}}",
+			"jobs.db.exclude: not with stdin_command",
+		},
+		{"stdin empty", "jobs: {db: {stdin_command: []}}", "jobs.db.stdin_command: must name"},
+		{
+			"stdin empty entry", "jobs: {db: {stdin_command: [dump, '']}}",
+			"jobs.db.stdin_command: must not contain empty entries",
+		},
+		{
+			"stdin filename", "jobs: {db: {stdin_filename: db.sql, sources: [/a]}}",
+			"jobs.db.stdin_filename: only with stdin_command",
+		},
+		{
 			"duplicate", "jobs: {web: {sources: [/a]}, WEB: {sources: [/b]}}",
 			"jobs.web: duplicate job name",
 		},
@@ -347,6 +364,29 @@ func TestLoad_StartAll(t *testing.T) {
 	assert.True(t, plan.Jobs[0].StartsAll(), "from defaults")
 	assert.False(t, plan.Jobs[1].StartsAll(), "the job's own value replaces the default")
 	assert.False(t, plan.Jobs[2].StartsAll(), "a files-only job has no services")
+}
+
+func TestLoad_StdinCommand(t *testing.T) {
+	t.Parallel()
+	plan, err := load(t, `version: 2
+defaults: {exclude: ["*.tmp"], one_file_system: true, tags: [db]}
+jobs:
+  pg:
+    type: docker-compose
+    compose_file: /srv/app/compose.yml
+    stop: false
+    stdin_command: [docker, compose, exec, -T, db, pg_dumpall, -U, postgres]
+    stdin_filename: pg.sql
+`, nil)
+
+	require.NoError(t, err, "the file selection of the defaults does not apply")
+	j := plan.Jobs[0]
+	assert.True(t, j.FromStdin())
+	assert.Equal(t, []string{
+		"docker", "compose", "exec", "-T", "db", "pg_dumpall", "-U", "postgres",
+	}, j.StdinCommand, "not resolved: it is a command")
+	assert.Equal(t, "pg.sql", j.StdinFilename)
+	assert.Empty(t, j.Sources)
 }
 
 func TestLoad_RepositoryOnly(t *testing.T) {

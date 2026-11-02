@@ -44,7 +44,8 @@ type JobSettings struct {
 	After []string
 	// Services limits the stopped services; empty means all of the service manager's.
 	Services []string
-	// Sources are the backed up paths.
+	// Sources are the positional arguments of the backup: the backed up paths, or the
+	// command whose output restic backs up (BackupArgs say which).
 	Sources []string
 	// StopServices stops the services during the backup.
 	StopServices bool

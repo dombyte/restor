@@ -57,6 +57,10 @@ type Job struct {
 	Scope    string
 	Services []string
 	Sources  []string
+	// StdinCommand replaces Sources: restic runs it and saves its output as
+	// StdinFilename ("" is restic's default name).
+	StdinCommand  []string
+	StdinFilename string
 	// After are the jobs this job waits for (its after plus the before of the others),
 	// sorted.
 	After             []string
@@ -82,6 +86,10 @@ type Job struct {
 
 // StopsServices reports whether the job stops services during its backup.
 func (j Job) StopsServices() bool { return j.Type != TypeFiles && j.Stop }
+
+// FromStdin reports whether the job backs up the output of its StdinCommand instead of
+// files.
+func (j Job) FromStdin() bool { return len(j.StdinCommand) > 0 }
 
 // StartsAll reports whether the job starts all of its services after its backup.
 func (j Job) StartsAll() bool { return j.Type != TypeFiles && j.StartAll }
@@ -188,6 +196,7 @@ func (f *File) job(name string, j JobConfig, after []string) Job {
 		Name: name, Type: j.Type, ComposeFile: j.ComposeFile,
 		ComposeFiles: composeFiles(j.ComposeFile), Units: j.Units,
 		Scope: or(j.Scope, ScopeSystem), Services: j.Services, Sources: j.Sources,
+		StdinCommand: j.StdinCommand, StdinFilename: j.StdinFilename,
 		After: after, Stop: pick(j.Stop, d.Stop, true),
 		StartAll:      pick(j.StartAll, d.StartAll, false),
 		StopTimeout:   duration(j.StopTimeout, d.StopTimeout, DefaultStopTimeout),
