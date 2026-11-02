@@ -24,8 +24,9 @@ restor orchestrates **restic** backups of several **jobs** on one host.
   (system or user scope), or no type (files only, nothing to stop).
 - **Per job:** lock → pre hook → stop services → `restic backup --tag=<job>` → start
   services → post hook (also after a failed backup) → on_failure hook (when it failed).
-- **Order:** a job starts once the jobs it runs `after` (or that name it in `before`) have
-  finished; at most `concurrency` jobs run at once (1 = one after another, 0 = all), and
+- **Order:** a job starts once the jobs it runs `after` (or that name it in `before`, or
+  that it `requires`) have finished, and is skipped as failed when a job it `requires`
+  failed; at most `concurrency` jobs run at once (1 = one after another, 0 = all), and
   jobs that share a compose file or systemd unit never run together.
 - **After all jobs:** `restic forget --group-by=host --tag=<job> <keep>` per job, then one
   repository-wide `restic prune` and `restic unlock` (only with `repository.prune`), then
@@ -278,6 +279,7 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   not running within `start_timeout` → warning only (a service that was down must not
   block forget and prune on every run).
 - A failed job runs its on_failure hook after the post hook.
+- A job whose `requires` job failed is skipped and fails (see Schedule).
 - Other jobs always continue, also those that run after the failed one; each failure is
   logged once by `Manager` with the job, and `main` logs the summary
   (`backup: jobs failed: N of M`).
@@ -356,13 +358,15 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   against its own (systemd runs restor in `/`); hooks and `stdin_command` are not (they
   are commands).
 - `defaults` holds every job key except `type`, `sources`, `stdin_command`,
-  `stdin_filename`, `compose_file`, `units`, `scope`, `services`, `before` and `after`
+  `stdin_filename`, `compose_file`, `units`, `scope`, `services`, `before`, `after` and
+  `requires`
   (`config.Defaults`, inlined into `config.JobConfig`). A job's own value replaces the default, lists included (an empty
   list clears the default); `keep` is replaced as a whole. Unset: `stop` true,
   `start_all` false, `stop_timeout` 1m, `start_timeout` 2m, `concurrency` 1.
 - Job names are case-insensitive and used in lowercase (also as the restic tag and in
-  `before`/`after`); names that differ only in case are an error. `before: [x]` on job a
-  is `after: [a]` on x; the Plan holds only the merged, sorted `After` lists.
+  `before`/`after`/`requires`); names that differ only in case are an error.
+  `before: [x]` on job a is `after: [a]` on x, and `requires` is also `after`; the Plan
+  holds the merged, sorted `After` lists and the sorted `Requires`.
 - **Environment:** restic gets the process env + `repository.env_file` +
   `RESTIC_REPOSITORY` (from `repository.url`, if set). The env file is `.env` only
   (`KEY=value` per line, `export ` prefix allowed, a line without `=` is an error,
@@ -380,8 +384,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   entries, not with `sources` or the job's own file selection keys (`exclude`,
   `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`,
   `exclude_larger_than`, `one_file_system`; from `defaults` they are dropped),
-  `stdin_filename` only with it; `before`/`after` name other existing jobs and form no
-  cycle (the first cycle is reported as `a → b → a`); durations ≥ 0, `stop_timeout` > 0 when services are
+  `stdin_filename` only with it; `before`/`after`/`requires` name other existing jobs
+  and form no cycle (the first cycle is reported as `a → b → a`); durations ≥ 0, `stop_timeout` > 0 when services are
   stopped and `start_timeout` > 0 when they are stopped or `start_all` is set; `keep` counts ≥ 0 and `within…` restic durations (`1y2m3d4h`); sizes
   (`exclude_larger_than`) like `500M`; `max_unused` a percentage, size or `unlimited`;
   `check_read_data_subset` only with `check`, `n/t` (1 ≤ n ≤ t), a percentage in (0, 100]
@@ -405,8 +409,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - `restor run [job...]`: one backup cycle of all or the named jobs (`Plan.Select`;
   unknown names are an error). Ordering against jobs that are not selected is dropped.
 - `restor validate`: loads and wires everything, then prints the jobs in the order they
-  start with concurrency 1 (`Manager.Order`), with type, after, stop, a keep label and
-  sources, and below them each distinct retention policy once with its label (A, B, … in
+  start with concurrency 1 (`Manager.Order`), with type, after, requires, stop, start
+  all, a keep label and sources (above them the concurrency, prune and check settings
+  and the job files read), and below them each distinct retention policy once with its label (A, B, … in
   order of first use; `-` = never forgotten) and its jobs; never the repository URL (it
   may hold credentials). Without jobs it says so instead of the tables.
 - `restor snapshots [job...]`: `restic <repository global flags> snapshots --tag=<job>…`
@@ -442,6 +447,11 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   its lock keys, and fewer than `concurrency` jobs run (0 = no limit). Among the jobs that
   may start, the earlier one in the list (sorted by name) starts first. After a cancel
   no job starts; jobs never started are neither failed nor complete.
+- `requires` jobs are part of `After` (config merges them). When a job starts and one of
+  its `Requires` that is part of the run failed (also by being skipped itself),
+  `Manager.skipJob` fails it without lock, hooks or backup (error
+  `backup: <job>: skipped, required job failed: <name>`, `backup.ErrRequiredJobFailed`)
+  and runs only its on_failure hook.
 
 ### Hooks
 - Split on whitespace and executed directly (no shell): no quoting, pipes or redirects.
@@ -614,9 +624,14 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   tested release once CI passes with it. Per-option version checks are not needed while
   the minimum covers every option; a future option that needs a newer restic raises the
   minimum or brings such a check back.
-- **Ordering only, not dependencies:** `before`/`after` say when a job may start, not
-  whether: a failed database dump must not cancel the backup of the files next to it. A
-  "requires" relation can be added later as its own key.
+- **Ordering by default, dependencies on request:** `before`/`after` say when a job may
+  start, not whether: a failed database dump must not cancel the backup of the files next
+  to it. `requires` is the separate, explicit key for the opposite case (no file backup
+  without its dump). It implies `after`, so the schedule needs no second graph, and a
+  skipped job counts as failed (exit code, on_failure hooks, `RESTOR_FAILED_JOBS`)
+  rather than getting a status of its own: no backup was made, which is what failed
+  means everywhere else. An incomplete snapshot of the required job is a backup and does
+  not skip. Against a job that is not part of the run it is dropped, like ordering.
 - **Shared services wait instead of failing:** the schedule knows each job's lock keys,
   so jobs of one compose file run one after another even with `concurrency: 0`; the
   `flock` locks still guard against a second restor process.

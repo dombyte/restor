@@ -95,7 +95,8 @@ repository: {url: /repo, prune: true, check: true, check_read_data_subset: 5%}
 defaults:
   keep: {daily: 7, weekly: 4}
 jobs:
-  web: {type: docker-compose, compose_file: /c.yml, sources: [/w], keep: {last: 2}}
+  web: {type: docker-compose, compose_file: /c.yml, sources: [/w], keep: {last: 2},
+        requires: [etc]}
   db: {type: docker-compose, compose_file: /c.yml, sources: [/d], before: [web]}
   etc: {sources: [/etc]}
 `)
@@ -108,10 +109,10 @@ jobs:
 	assert.Contains(t, out, "check:        true (reads 5% of the data)")
 	assert.Contains(t, out, "included:     "+jobFile)
 	assert.Regexp(t, `(?s)JOB.*\n`+
-		`db +docker-compose +- +true +false +A +/d\n`+
-		`etc +files +- +false +false +A +/etc\n`+
-		`tmp +files +- +false +false +- +/tmp/x\n`+
-		`web +docker-compose +db +true +false +B +/w\n`, out)
+		`db +docker-compose +- +- +true +false +A +/d\n`+
+		`etc +files +- +- +false +false +A +/etc\n`+
+		`tmp +files +- +- +false +false +- +/tmp/x\n`+
+		`web +docker-compose +db,etc +etc +true +false +B +/w\n`, out)
 	assert.Regexp(t, `(?s)\nKEEP\n`+
 		`  A +daily=7 weekly=4 +\(db, etc\)\n`+
 		`  - +never forgotten +\(tmp\)\n`+

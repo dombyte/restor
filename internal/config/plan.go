@@ -67,9 +67,11 @@ type Job struct {
 	// StdinFilename ("" is restic's default name).
 	StdinCommand  []string
 	StdinFilename string
-	// After are the jobs this job waits for (its after plus the before of the others),
-	// sorted.
-	After             []string
+	// After are the jobs this job waits for (its after and requires, plus the before of
+	// the others), sorted.
+	After []string
+	// Requires are the jobs whose failure skips this one, sorted.
+	Requires          []string
 	Stop              bool
 	StartAll          bool
 	StopTimeout       time.Duration
@@ -169,28 +171,38 @@ func (f *File) lowerJobNames() []error {
 			})
 		}
 		j := f.Jobs[name]
-		j.Before, j.After = lowerAll(j.Before), lowerAll(j.After)
+		j.Before, j.After, j.Requires = lowerAll(j.Before), lowerAll(j.After),
+			lowerAll(j.Requires)
 		lower[key] = j
 	}
 	f.Jobs = lower
 	return errs
 }
 
-// afterLists returns for each job the jobs it waits for: its own after, plus every job
-// that names it in before.
+// afterLists returns for each job the jobs it waits for: its own after and requires,
+// plus every job that names it in before.
 func (f *File) afterLists() map[string][]string {
 	after := map[string][]string{}
 	for name, j := range f.Jobs {
-		after[name] = append(after[name], j.After...)
+		after[name] = slices.Concat(after[name], j.After, j.Requires)
 		for _, b := range j.Before {
 			after[b] = append(after[b], name)
 		}
 	}
 	for name, list := range after {
-		slices.Sort(list)
-		after[name] = slices.Compact(list)
+		after[name] = sortedUnique(list)
 	}
 	return after
+}
+
+// sortedUnique returns list sorted, without duplicates; nil when it is empty.
+func sortedUnique(list []string) []string {
+	if len(list) == 0 {
+		return nil
+	}
+	out := slices.Clone(list)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // job applies the defaults to j.
@@ -204,7 +216,7 @@ func (f *File) job(name string, j JobConfig, after []string) Job {
 		ComposeFiles: composeFiles(j.ComposeFile), Units: j.Units,
 		Scope: or(j.Scope, ScopeSystem), Services: j.Services, Sources: j.Sources,
 		StdinCommand: j.StdinCommand, StdinFilename: j.StdinFilename,
-		After: after, Stop: pick(j.Stop, d.Stop, true),
+		After: after, Requires: sortedUnique(j.Requires), Stop: pick(j.Stop, d.Stop, true),
 		StartAll:      pick(j.StartAll, d.StartAll, false),
 		StopTimeout:   duration(j.StopTimeout, d.StopTimeout, DefaultStopTimeout),
 		StartTimeout:  duration(j.StartTimeout, d.StartTimeout, DefaultStartTimeout),

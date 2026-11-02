@@ -189,6 +189,9 @@ include: [jobs.d/*.yaml]
 #   stdin_filename: the file name of that output in the snapshot. Default: stdin.
 #   before / after: names of jobs that must run after / before this one. A job waits
 #              until those have finished, whether they succeeded or not.
+#   requires:  names of jobs that must succeed: the job runs after them, and is skipped
+#              (and counts as failed; only its on_failure hook runs) when one of them
+#              failed.
 #   plus every key of the defaults section.
 #
 # docker-compose / podman-compose:
@@ -242,6 +245,12 @@ jobs:
                     pg_dumpall, -U, postgres]
     stdin_filename: wiki.sql
     before: [wiki]
+
+  # The wiki's uploads, saved only when the dump above succeeded, so that both always
+  # belong together.
+  wiki-files:
+    sources: [/srv/wiki/files]
+    requires: [wiki-db]
 
   # systemd units of the system (scope: system is the default), with shared settings
   # merged from the x-quick-units anchor below.

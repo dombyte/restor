@@ -27,6 +27,9 @@ var (
 	ErrMissingDependency = errors.New("backup: missing dependency")
 	// ErrJobsFailed is returned by Run when at least one job failed.
 	ErrJobsFailed = errors.New("backup: jobs failed")
+	// ErrRequiredJobFailed is the error of a job that was skipped because a job it
+	// requires failed.
+	ErrRequiredJobFailed = errors.New("skipped, required job failed")
 )
 
 // Restic runs restic commands against the repository.
@@ -184,8 +187,14 @@ func (m *Manager) runJobs(ctx context.Context) []result {
 	for {
 		if ctx.Err() == nil {
 			for _, i := range s.next() {
+				// The required jobs have finished: they are in After.
+				required := m.failedRequirement(s, results, i)
 				go func() {
-					results[i] = m.runJob(ctx, m.jobs[i])
+					if required != "" {
+						results[i] = m.skipJob(ctx, m.jobs[i].Settings, required)
+					} else {
+						results[i] = m.runJob(ctx, m.jobs[i])
+					}
 					done <- i
 				}()
 			}
@@ -195,6 +204,17 @@ func (m *Manager) runJobs(ctx context.Context) []result {
 		}
 		s.finish(<-done)
 	}
+}
+
+// failedRequirement returns the first job that job i requires and that failed, or "".
+// Required jobs that are not part of the run are ignored, like their ordering.
+func (m *Manager) failedRequirement(s *schedule, results []result, i int) string {
+	for _, name := range m.jobs[i].Settings.Requires {
+		if j, ok := s.index[name]; ok && results[j].outcome == outcomeFailed {
+			return name
+		}
+	}
+	return ""
 }
 
 // maintain runs forget for the jobs with a retention policy and a complete snapshot,
