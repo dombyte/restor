@@ -50,14 +50,19 @@ function label(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
 function family(name, type, help) {
 	printf "# HELP %s %s\n# TYPE %s %s\n", name, help, name, type
 }
-# kept prints the lines of family name that the previous file had for other jobs.
-function kept(name) { if (name in keep) printf "%s", keep[name] }
+# add appends job to the job list once.
+function add(job) { if (!(job in seen)) { seen[job] = 1; all[++count] = job } }
+# timestamp prints the line of family name for a job of this run, when it has a value.
+function timestamp(name, job, values) {
+	if (job in values) printf "%s{job=\"%s\"} %s\n", name, label(job), values[job]
+}
 /^restor_job_/ && match($0, /job="([^"\\]|\\.)*"/) {
 	job = substr($0, RSTART + 5, RLENGTH - 6)
 	gsub(/\\"/, "\"", job); gsub(/\\\\/, "\\", job)
 	name = substr($0, 1, index($0, "{") - 1)
+	add(job)
 	if (!listed(job, ENVIRON["RESTOR_JOBS"])) {
-		keep[name] = keep[name] $0 "\n"
+		keep[name, job] = keep[name, job] $0 "\n"
 	} else if (name == "restor_job_last_backup_timestamp_seconds") {
 		backup[job] = $NF
 	} else if (name == "restor_job_last_success_timestamp_seconds") {
@@ -70,6 +75,7 @@ END {
 	n = split(ENVIRON["RESTOR_JOBS"], jobs, ",")
 	for (i = 1; i <= n; i++) {
 		job = jobs[i]
+		add(job)
 		if (listed(job, ENVIRON["RESTOR_SUCCEEDED_JOBS"])) {
 			state[job] = "success"; backup[job] = now; success[job] = now
 		} else if (listed(job, ENVIRON["RESTOR_INCOMPLETE_JOBS"])) {
@@ -80,6 +86,11 @@ END {
 			state[job] = "not_run"
 		}
 	}
+	# Sorted by name, so that every job keeps its place in the file from run to run.
+	for (i = 2; i <= count; i++)
+		for (j = i; j > 1 && all[j - 1] > all[j]; j--) {
+			t = all[j]; all[j] = all[j - 1]; all[j - 1] = t
+		}
 
 	family("restor_run_timestamp_seconds", "gauge", "When the last restor run ended.")
 	printf "restor_run_timestamp_seconds %d\n", now
@@ -88,25 +99,24 @@ END {
 		printf "restor_run_status{status=\"%s\"} %d\n", runStates[s],
 			runStates[s] == ENVIRON["RESTOR_STATUS"]
 	family("restor_job_status", "gauge", "Result of the last backup of each job.")
-	for (i = 1; i <= n; i++)
+	for (i = 1; i <= count; i++) {
+		job = all[i]
+		if (!(job in state)) { printf "%s", keep["restor_job_status", job]; continue }
 		for (s = 1; s <= 4; s++)
-			printf "restor_job_status{job=\"%s\",status=\"%s\"} %d\n", label(jobs[i]),
-				jobStates[s], jobStates[s] == state[jobs[i]]
-	kept("restor_job_status")
-	family("restor_job_last_backup_timestamp_seconds", "gauge",
+			printf "restor_job_status{job=\"%s\",status=\"%s\"} %d\n", label(job),
+				jobStates[s], jobStates[s] == state[job]
+	}
+	name = "restor_job_last_backup_timestamp_seconds"
+	family(name, "gauge",
 		"When a run last saved a snapshot of the job, complete or incomplete.")
-	for (i = 1; i <= n; i++)
-		if (jobs[i] in backup)
-			printf "restor_job_last_backup_timestamp_seconds{job=\"%s\"} %s\n",
-				label(jobs[i]), backup[jobs[i]]
-	kept("restor_job_last_backup_timestamp_seconds")
-	family("restor_job_last_success_timestamp_seconds", "gauge",
-		"When a run last saved a complete snapshot of the job.")
-	for (i = 1; i <= n; i++)
-		if (jobs[i] in success)
-			printf "restor_job_last_success_timestamp_seconds{job=\"%s\"} %s\n",
-				label(jobs[i]), success[jobs[i]]
-	kept("restor_job_last_success_timestamp_seconds")
+	for (i = 1; i <= count; i++)
+		if (all[i] in state) timestamp(name, all[i], backup)
+		else printf "%s", keep[name, all[i]]
+	name = "restor_job_last_success_timestamp_seconds"
+	family(name, "gauge", "When a run last saved a complete snapshot of the job.")
+	for (i = 1; i <= count; i++)
+		if (all[i] in state) timestamp(name, all[i], success)
+		else printf "%s", keep[name, all[i]]
 }
 ' "$previous" >"$tmp"
 chmod 0644 "$tmp"
