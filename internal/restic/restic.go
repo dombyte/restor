@@ -1,8 +1,8 @@
-// Package restic wraps the restic CLI: backup, forget, prune, unlock and version. The
-// repository and its credentials come from the runner's environment (RESTIC_REPOSITORY,
-// RESTIC_PASSWORD_FILE, …), so they never appear in arguments or logs. The restic flags
-// are built here from typed settings (Repository, BackupFlags, Keep, PruneFlags); no
-// caller passes raw restic arguments.
+// Package restic wraps the restic CLI: backup, forget, prune, check, unlock and version.
+// The repository and its credentials come from the runner's environment
+// (RESTIC_REPOSITORY, RESTIC_PASSWORD_FILE, …), so they never appear in arguments or
+// logs. The restic flags are built here from typed settings (Repository, BackupFlags,
+// Keep, PruneFlags, CheckFlags); no caller passes raw restic arguments.
 package restic
 
 import (
@@ -99,6 +99,8 @@ type Settings struct {
 	GlobalArgs []string
 	// PruneArgs are the options of prune (PruneFlags.Args).
 	PruneArgs []string
+	// CheckArgs are the options of check (CheckFlags.Args).
+	CheckArgs []string
 }
 
 // Client runs restic commands against one repository.
@@ -125,8 +127,9 @@ func (c *Client) run(ctx context.Context, command string, args ...string) ([]byt
 
 // Backup runs `restic backup --json --group-by=host,tags [args] --tag=<tag> -- <sources>`
 // and returns the short ID of the new snapshot, or "" when restic reports none. args come
-// from BackupFlags.Args. An incomplete snapshot returns its ID together with an
-// *IncompleteError, a snapshot that --skip-if-unchanged skipped an *UnchangedError.
+// from BackupFlags.Args; with its StdinFromCommand, sources are the command and its
+// arguments. An incomplete snapshot returns its ID together with an *IncompleteError, a
+// snapshot that --skip-if-unchanged skipped an *UnchangedError.
 func (c *Client) Backup(ctx context.Context, tag string, sources, args []string) (
 	string, error,
 ) {
@@ -264,6 +267,15 @@ func (c *Client) Forget(ctx context.Context, tag string, args []string) error {
 func (c *Client) Prune(ctx context.Context) error {
 	if _, err := c.run(ctx, "prune", c.s.PruneArgs...); err != nil {
 		return failed("prune", err)
+	}
+	return nil
+}
+
+// Check runs `restic check [check args]`: it verifies the repository's structure and,
+// with --read-data-subset, reads back part of the data.
+func (c *Client) Check(ctx context.Context) error {
+	if _, err := c.run(ctx, "check", c.s.CheckArgs...); err != nil {
+		return failed("check", err)
 	}
 	return nil
 }

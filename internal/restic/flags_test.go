@@ -36,6 +36,12 @@ func TestBackupFlags_Args(t *testing.T) {
 		"--one-file-system", "--skip-if-unchanged", "--tag=prod",
 	}, f.Args())
 	assert.Empty(t, BackupFlags{}.Args())
+
+	f.StdinFromCommand, f.StdinFilename = true, "db.sql"
+	assert.Equal(t, []string{
+		"--stdin-from-command", "--stdin-filename=db.sql", "--skip-if-unchanged", "--tag=prod",
+	}, f.Args(), "no file selection for a command's output")
+	assert.Equal(t, []string{"--stdin-from-command"}, BackupFlags{StdinFromCommand: true}.Args())
 }
 
 func TestKeep_Args(t *testing.T) {
@@ -58,6 +64,12 @@ func TestPruneFlags_Args(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, []string{"--max-unused=5%"}, PruneFlags{MaxUnused: "5%"}.Args())
 	assert.Empty(t, PruneFlags{}.Args())
+}
+
+func TestCheckFlags_Args(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, []string{"--read-data-subset=1/10"}, CheckFlags{ReadDataSubset: "1/10"}.Args())
+	assert.Empty(t, CheckFlags{}.Args())
 }
 
 func TestSnapshotsFlags_Args(t *testing.T) {

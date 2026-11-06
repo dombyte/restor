@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v4"
@@ -33,13 +34,14 @@ func (e *FieldError) Error() string { return e.Path + ": " + e.Problem }
 // Unwrap returns ErrInvalid.
 func (e *FieldError) Unwrap() error { return ErrInvalid }
 
-// Load reads the file at path and returns the validated Plan. ${VAR} references in values
-// are expanded with getenv, relative paths are resolved against the file's directory and
-// the repository's env file is read. All problems are returned together (errors.Join).
+// Load reads the file at path and the job files it includes, and returns the validated
+// Plan. ${VAR} references in values are expanded with getenv, relative paths are resolved
+// against the directory of the file they are in and the repository's env file is read.
+// All problems are returned together (errors.Join).
 func Load(path string, getenv func(string) string) (*Plan, error) {
 	root, err := readFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("config: %w", err)
 	}
 	keyErrs := unknownKeys(root, reflect.TypeFor[File](), "")
 	expandNode(root, getenv)
@@ -52,28 +54,31 @@ func Load(path string, getenv func(string) string) (*Plan, error) {
 	if err := f.resolvePaths(path); err != nil {
 		return nil, err
 	}
+	included, includeErrs := f.include(path, getenv)
 	plan, errs := f.plan()
-	if err := errors.Join(append(keyErrs, errs...)...); err != nil {
+	if err := errors.Join(slices.Concat(keyErrs, includeErrs, errs)...); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	plan.Included = included
 	return plan, nil
 }
 
-// readFile parses the YAML file at path and returns its top-level node.
+// readFile parses the YAML file at path and returns its top-level node; errors name the
+// file.
 func readFile(path string) (*yaml.Node, error) {
 	if ext := strings.ToLower(filepath.Ext(path)); ext != ".yaml" && ext != ".yml" {
-		return nil, fmt.Errorf("config: %s: %w", path, ErrFormat)
+		return nil, fmt.Errorf("%s: %w", path, ErrFormat)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("config: read %s: %w", path, err)
+		return nil, err // an *fs.PathError: it names the operation and the file
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("config: parse %s: %w", path, err)
+		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	if len(doc.Content) == 0 {
-		return nil, fmt.Errorf("config: %s: %w", path, ErrEmpty)
+		return nil, fmt.Errorf("%s: %w", path, ErrEmpty)
 	}
 	return doc.Content[0], nil
 }
@@ -297,13 +302,24 @@ func (f *File) homePaths() []error {
 	paths := map[string][]string{
 		"repository.env_file":   {f.Repository.EnvFile},
 		"defaults.exclude_file": f.Defaults.ExcludeFile,
+		"include":               f.Include,
 	}
-	for name, j := range f.Jobs {
+	addJobPaths(paths, f.Jobs)
+	return tildeErrors(paths)
+}
+
+// addJobPaths adds the paths of jobs to paths, by field.
+func addJobPaths(paths map[string][]string, jobs map[string]JobConfig) {
+	for name, j := range jobs {
 		job := keyPath("jobs", name)
 		paths[job+".compose_file"] = []string{j.ComposeFile}
 		paths[job+".sources"] = j.Sources
 		paths[job+".exclude_file"] = j.ExcludeFile
 	}
+}
+
+// tildeErrors reports the paths, by field, that start with "~".
+func tildeErrors(paths map[string][]string) []error {
 	var errs []error
 	for _, field := range sortedKeys(paths) {
 		for _, p := range paths[field] {
@@ -320,29 +336,50 @@ func (f *File) homePaths() []error {
 // relative to the directory of the configuration file at path: under systemd the working
 // directory is /.
 func (f *File) resolvePaths(path string) error {
+	dir, err := fileDir(path)
+	if err != nil {
+		return err
+	}
+	resolve := resolver(dir)
+	f.Repository.EnvFile = resolve(f.Repository.EnvFile)
+	resolveEach(resolve, f.Defaults.ExcludeFile)
+	resolveJobs(f.Jobs, dir)
+	return nil
+}
+
+// fileDir returns the absolute directory of the file at path.
+func fileDir(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return fmt.Errorf("config: %w", err)
+		return "", fmt.Errorf("config: %w", err)
 	}
-	dir := filepath.Dir(abs)
-	resolve := func(p string) string {
+	return filepath.Dir(abs), nil
+}
+
+// resolveJobs makes the compose file, sources and exclude files of jobs absolute,
+// relative to dir.
+func resolveJobs(jobs map[string]JobConfig, dir string) {
+	resolve := resolver(dir)
+	for name, j := range jobs {
+		j.ComposeFile = resolve(j.ComposeFile)
+		resolveEach(resolve, j.Sources)
+		resolveEach(resolve, j.ExcludeFile)
+		jobs[name] = j
+	}
+}
+
+// resolver returns a function that makes a relative path absolute below dir; "" stays.
+func resolver(dir string) func(string) string {
+	return func(p string) string {
 		if p == "" || filepath.IsAbs(p) {
 			return p
 		}
 		return filepath.Join(dir, p)
 	}
-	resolveAll := func(list []string) {
-		for i := range list {
-			list[i] = resolve(list[i])
-		}
+}
+
+func resolveEach(resolve func(string) string, list []string) {
+	for i := range list {
+		list[i] = resolve(list[i])
 	}
-	f.Repository.EnvFile = resolve(f.Repository.EnvFile)
-	resolveAll(f.Defaults.ExcludeFile)
-	for name, j := range f.Jobs {
-		j.ComposeFile = resolve(j.ComposeFile)
-		resolveAll(j.Sources)
-		resolveAll(j.ExcludeFile)
-		f.Jobs[name] = j
-	}
-	return nil
 }

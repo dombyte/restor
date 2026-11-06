@@ -71,9 +71,20 @@ repository:
   # a size such as "2G", or "unlimited" (fastest prune).
   max_unused: 5%
 
-# Run-level hooks: commands that run once after the run (after forget and prune).
+  # Run "restic check" once after forget and prune, also when a job failed: it verifies
+  # that the repository is intact. A failed check is logged, makes RESTOR_STATUS "failed"
+  # and runs the top-level on_failure hook, but does not change the exit code.
+  # Default: false.
+  check: true
+  # Also read back part of the data, to find damaged pack files: a percentage such as
+  # "5%" or a size such as "2G" (a random part on every run), or "n/t" (always the n-th
+  # of t parts). It downloads that much from the repository on every run.
+  # Default: none (structure only).
+  check_read_data_subset: 2%
+
+# Run-level hooks: commands that run once after the run (after forget, prune and check).
 #   post:       after every run
-#   on_failure: after post, when a job, forget, prune or unlock failed
+#   on_failure: after post, when a job, forget, prune, unlock or check failed
 # Both get a summary of the run in their environment:
 #   RESTOR_HOOK (post or on_failure); RESTOR_STATUS: failed when anything failed,
 #   incomplete when a snapshot is incomplete, else success; the comma-separated job names
@@ -81,7 +92,8 @@ repository:
 #   RESTOR_SNAPSHOT_IDS (job=ID, comma-separated) and, when anything failed,
 #   RESTOR_ERROR (all failures, "; "-separated).
 # E.g. one notification per run with every job's result (example/hooks/: ntfy.sh,
-# notifyapp.sh, mail.sh, healthchecks.sh). Default: none.
+# notifyapp.sh, mail.sh, healthchecks.sh), or metrics for Prometheus (prometheus.sh).
+# Default: none.
 # post: /etc/restor/hooks/ntfy.sh
 # on_failure: /usr/local/bin/page-oncall
 
@@ -154,13 +166,33 @@ defaults:
   # on_failure: /usr/local/bin/cleanup-after-failure.sh
 
 # ------------------------------------------------------------------------------
+# Job files: more jobs from other files, e.g. one file per service written by config
+# management. Each entry is a path or a glob pattern, relative to this file's directory;
+# a pattern that matches nothing is fine, a path without one must exist. This file itself
+# is never included. A job file holds only a jobs section (and x- keys for anchors, which
+# do not reach into other files):
+#   jobs:
+#     nextcloud: {type: docker-compose, compose_file: /srv/nextcloud/compose.yml, ...}
+# Its relative paths are resolved against its own directory; every job name must be
+# unique across all files, and before/after work across files. Default: none.
+include: [jobs.d/*.yaml]
+
+# ------------------------------------------------------------------------------
 # Jobs. The name is case-insensitive and its lowercase form is the restic tag; it must not
 # start with "-" or contain "," or whitespace.
 #
 #   type:      docker-compose, podman-compose or systemd; leave it out for files only
-#   sources:   paths to back up (required)
+#   sources:   paths to back up (required, unless stdin_command)
+#   stdin_command: back up what this command writes to stdout instead of sources; a list,
+#              run without a shell. restic runs it, so it sees restic's environment,
+#              the env file included. The file selection keys (exclude, …,
+#              one_file_system) do not apply; from defaults they are ignored.
+#   stdin_filename: the file name of that output in the snapshot. Default: stdin.
 #   before / after: names of jobs that must run after / before this one. A job waits
 #              until those have finished, whether they succeeded or not.
+#   requires:  names of jobs that must succeed: the job runs after them, and is skipped
+#              (and counts as failed; only its on_failure hook runs) when one of them
+#              failed.
 #   plus every key of the defaults section.
 #
 # docker-compose / podman-compose:
@@ -202,6 +234,24 @@ jobs:
     # Make sure the wiki is up after each backup, also when it was down before.
     start_all: true
     sources: [/srv/wiki/data]
+
+  # A database dump streamed into the repository: no dump on disk. The database keeps
+  # running (it must, to be dumped); a failing command saves no snapshot and fails the
+  # job. Restore it with: restor restic dump <snapshot-ID> /wiki.sql
+  wiki-db:
+    type: podman-compose
+    compose_file: /srv/wiki/compose.yml
+    stop: false
+    stdin_command: [podman, compose, -f, /srv/wiki/compose.yml, exec, -T, db,
+                    pg_dumpall, -U, postgres]
+    stdin_filename: wiki.sql
+    before: [wiki]
+
+  # The wiki's uploads, saved only when the dump above succeeded, so that both always
+  # belong together.
+  wiki-files:
+    sources: [/srv/wiki/files]
+    requires: [wiki-db]
 
   # systemd units of the system (scope: system is the default), with shared settings
   # merged from the x-quick-units anchor below.

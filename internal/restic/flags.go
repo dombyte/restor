@@ -56,11 +56,26 @@ type BackupFlags struct {
 	SkipIfUnchanged   bool
 	// Tags are added to the snapshot next to the job's own tag.
 	Tags []string
+	// StdinFromCommand backs up the output of a command instead of files: the
+	// positional arguments of the backup are the command. The file selection flags
+	// above do not apply then and are left out.
+	StdinFromCommand bool
+	// StdinFilename is the file name of the command's output in the snapshot; empty is
+	// restic's default ("stdin").
+	StdinFilename string
 }
 
 // Args returns the restic backup flags of f. Every value is passed as --flag=value, so
 // it can never be read as a flag of its own.
 func (f BackupFlags) Args() []string {
+	if f.StdinFromCommand {
+		args := []string{"--stdin-from-command"}
+		if f.StdinFilename != "" {
+			args = append(args, "--stdin-filename="+f.StdinFilename)
+		}
+		args = appendBool(args, skipIfUnchanged, f.SkipIfUnchanged)
+		return appendEach(args, "--tag", f.Tags)
+	}
 	var args []string
 	args = appendEach(args, "--exclude", f.Exclude)
 	args = appendEach(args, "--iexclude", f.IExclude)
@@ -127,6 +142,21 @@ func (f PruneFlags) Args() []string {
 		return nil
 	}
 	return []string{"--max-unused=" + f.MaxUnused}
+}
+
+// CheckFlags are the options of check.
+type CheckFlags struct {
+	// ReadDataSubset also reads this part of the data: "5%", "1/10" or a size such as
+	// "2G"; empty checks only the structure.
+	ReadDataSubset string
+}
+
+// Args returns the restic check flags of f.
+func (f CheckFlags) Args() []string {
+	if f.ReadDataSubset == "" {
+		return nil
+	}
+	return []string{"--read-data-subset=" + f.ReadDataSubset}
 }
 
 // SnapshotsFlags are the options of snapshots.

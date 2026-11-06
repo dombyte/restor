@@ -54,6 +54,14 @@ type File struct {
 	Defaults Defaults `yaml:"defaults"`
 	// Jobs maps the job name (also the restic tag) to its settings.
 	Jobs map[string]JobConfig `yaml:"jobs"`
+	// Include names job files (glob patterns allowed) whose jobs are added to Jobs.
+	Include []string `yaml:"include"`
+}
+
+// includeFile is a job file that File.Include names: jobs only, plus "x-" keys for
+// anchors.
+type includeFile struct {
+	Jobs map[string]JobConfig `yaml:"jobs"`
 }
 
 // RepositoryConfig is the repository section.
@@ -66,6 +74,10 @@ type RepositoryConfig struct {
 	RetryLock      Duration          `yaml:"retry_lock"`
 	Prune          bool              `yaml:"prune"`
 	MaxUnused      string            `yaml:"max_unused"`
+	// Check runs restic check after the maintenance; CheckReadDataSubset also reads that
+	// part of the data ("5%", "1/10", "2G").
+	Check               bool   `yaml:"check"`
+	CheckReadDataSubset string `yaml:"check_read_data_subset"`
 }
 
 // Defaults are the job settings that the defaults section can set. Pointers and nil
@@ -100,8 +112,14 @@ type JobConfig struct {
 	Scope       string   `yaml:"scope"`
 	Services    []string `yaml:"services"`
 	Sources     []string `yaml:"sources"`
-	Before      []string `yaml:"before"`
-	After       []string `yaml:"after"`
+	// StdinCommand is backed up instead of sources: restic runs it and saves its output
+	// as StdinFilename.
+	StdinCommand  []string `yaml:"stdin_command"`
+	StdinFilename string   `yaml:"stdin_filename"`
+	Before        []string `yaml:"before"`
+	After         []string `yaml:"after"`
+	// Requires are jobs that must succeed for this one to run; it also runs after them.
+	Requires []string `yaml:"requires"`
 }
 
 // Keep is a retention policy; the zero value keeps every snapshot (no forget).

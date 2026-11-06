@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -14,7 +15,12 @@ const (
 	maxUnusedPattern = `^(unlimited|[0-9]+(\.[0-9]+)?%|[0-9]+[kKmMgGtT]?)$`
 	withinPattern    = `^([0-9]+[ymdh])+$`
 	backendPattern   = `^[a-z0-9]+\.[a-z0-9_.-]+$`
+	// subsetPattern is restic check's --read-data-subset: n/t, a percentage or a size.
+	subsetPattern = `^(([0-9]+)/([0-9]+)|([0-9]+(\.[0-9]+)?)%|[0-9]+[kKmMgGtT]?)$`
 )
+
+// maxPercent is the largest percentage of the data check can read.
+const maxPercent = 100
 
 // validate checks every field of f (after lowerJobNames) and returns all problems.
 func (f *File) validate() []error {
@@ -89,6 +95,36 @@ func (v *validator) repository(r RepositoryConfig) {
 		rv.matches(maxUnusedPattern, r.MaxUnused, "max_unused",
 			`a limit such as "5%", "1G" or "unlimited"`)
 	}
+	if r.CheckReadDataSubset != "" {
+		rv.check(r.Check, "check_read_data_subset", "only with check: true")
+		rv.check(validSubset(r.CheckReadDataSubset), "check_read_data_subset", fmt.Sprintf(
+			`%q is not a subset such as "5%%", "1/10" or "2G"`, r.CheckReadDataSubset))
+	}
+}
+
+// validSubset reports whether s is a --read-data-subset restic accepts: n/t with
+// 1 <= n <= t, a percentage above 0 and up to 100, or a size above 0.
+func validSubset(s string) bool {
+	m := regexp.MustCompile(subsetPattern).FindStringSubmatch(s)
+	switch {
+	case m == nil:
+		return false
+	case m[2] != "":
+		return validFraction(m[2], m[3])
+	case m[4] != "":
+		p, err := strconv.ParseFloat(m[4], 64)
+		return err == nil && p > 0 && p <= maxPercent
+	default:
+		size, err := strconv.Atoi(strings.TrimRight(s, "kKmMgGtT"))
+		return err == nil && size > 0
+	}
+}
+
+// validFraction reports whether n/t selects one of t parts: 1 <= n <= t.
+func validFraction(n, t string) bool {
+	part, errN := strconv.Atoi(n)
+	parts, errT := strconv.Atoi(t)
+	return errN == nil && errT == nil && part >= 1 && part <= parts
 }
 
 // common checks the fields a job shares with the defaults section; f gives the job
@@ -161,10 +197,16 @@ func (v *validator) keep(k Keep) {
 // job checks one job; f gives the defaults and the other job names.
 func (v *validator) job(f *File, name string, j JobConfig) {
 	v.common(f, j.Defaults)
-	v.check(len(j.Sources) > 0, "sources", "required")
+	if j.StdinCommand != nil {
+		v.stdin(j)
+	} else {
+		v.check(len(j.Sources) > 0, "sources", "required (or stdin_command)")
+		v.check(j.StdinFilename == "", "stdin_filename", "only with stdin_command")
+	}
 	v.check(!slices.Contains(j.Sources, ""), "sources", "must not contain empty entries")
 	v.references(f, name, "before", j.Before)
 	v.references(f, name, "after", j.After)
+	v.references(f, name, "requires", j.Requires)
 	switch j.Type {
 	case TypeDockerCompose, TypePodmanCompose:
 		v.compose(j)
@@ -183,6 +225,23 @@ func (v *validator) job(f *File, name string, j JobConfig) {
 	v.keepTags(f.Defaults, j)
 }
 
+// stdin checks a job that backs up the output of a command: it reads no files, so the
+// keys that select files do not apply. Set in defaults they are ignored for such a job.
+func (v *validator) stdin(j JobConfig) {
+	v.check(len(j.StdinCommand) > 0, "stdin_command", "must name a program")
+	v.check(!slices.Contains(j.StdinCommand, ""), "stdin_command",
+		"must not contain empty entries")
+	unset := map[string]bool{
+		"sources": j.Sources == nil, "exclude": j.Exclude == nil, "iexclude": j.IExclude == nil,
+		"exclude_file": j.ExcludeFile == nil, "exclude_if_present": j.ExcludeIfPresent == nil,
+		"exclude_caches": j.ExcludeCaches == nil, "one_file_system": j.OneFileSystem == nil,
+		"exclude_larger_than": j.ExcludeLargerThan == nil,
+	}
+	for _, field := range sortedKeys(unset) {
+		v.check(unset[field], field, "not with stdin_command, which reads no files")
+	}
+}
+
 // keepTags checks that the job's snapshots do not all carry a tag that keep.tags keeps:
 // forget would then keep every snapshot of the job.
 func (v *validator) keepTags(d Defaults, j JobConfig) {
@@ -193,7 +252,7 @@ func (v *validator) keepTags(d Defaults, j JobConfig) {
 	}
 }
 
-// references checks that before/after name other jobs.
+// references checks that before/after/requires name other jobs.
 func (v *validator) references(f *File, self, field string, names []string) {
 	for _, n := range names {
 		_, ok := f.Jobs[n]
@@ -253,7 +312,8 @@ func (v *validator) cycle(f *File) {
 	done := map[string]bool{}
 	for _, name := range sortedKeys(f.Jobs) {
 		if c := findCycle(name, after, done, nil); c != nil {
-			v.check(false, "jobs."+c[0], "before/after form a cycle: "+strings.Join(c, " → "))
+			v.check(false, "jobs."+c[0], "before/after/requires form a cycle: "+
+				strings.Join(c, " → "))
 			return
 		}
 	}

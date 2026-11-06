@@ -7,10 +7,12 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
 - Several backup jobs from one YAML file, with defaults shared by all jobs
 - Stops and restarts the services of a job during its backup (Docker/Podman Compose,
   systemd)
-- Job order with `before`/`after`, and as many jobs at once as `concurrency` allows;
-  jobs that share services never run at the same time
+- Job order with `before`/`after`, dependencies with `requires`, and as many jobs at once
+  as `concurrency` allows; jobs that share services never run at the same time
+- Database dumps streamed straight into the repository (`stdin_command`), no temp files
 - Typed, validated restic options (excludes, tags, limits, ...) and retention policies
-  (`keep`) with a single prune for the whole repository
+  (`keep`) with a single prune for the whole repository, and an optional `restic check`
+  after it
 - Hooks before and after each job and on failure, with the job's result in their
   environment
 - `restor restore` restores a snapshot, as a dry run unless `--apply` is given
@@ -101,7 +103,7 @@ other: a normal user who wants the system configuration runs restor with `sudo`.
 journal: `journalctl -u restor` (or `journalctl --user -u restor`).
 
 `restor run` exits 0 when every job was backed up and 1 when the config is invalid, a job
-failed or the run was cancelled. A failed forget or prune is logged and runs the
+failed or the run was cancelled. A failed forget, prune or check is logged and runs the
 top-level `on_failure` hook; a failed `post` or `on_failure` hook is only logged. Neither
 changes the exit code. Before anything is stopped, it checks
 that `restic` is installed and supported (see below). `restor snapshots`,
@@ -152,14 +154,26 @@ so typos never go unnoticed. Durations are strings such as `30s`, `5m` or `4h`.
 environment; `$$` is a literal `$`. Relative `env_file`, `compose_file`, `sources` and
 `exclude_file` paths are resolved against the directory of the config file; `~` is not
 expanded (use `$HOME`). YAML anchors and merge keys work: keep shared blocks under a
-top-level key starting with `x-` and merge them with `<<: *name`. A file with only
+top-level key starting with `x-` and merge them with `<<: *name`.
+
+**Job files:** `include: [jobs.d/*.yaml]` adds the jobs of other files, for hosts with
+many jobs or a configuration management that writes one file per service. Each entry is
+a path or a glob pattern relative to the config file; a pattern that matches nothing is
+fine, a plain path must exist, an empty job file adds no jobs, and the config file
+itself is never included. A job file
+holds only `jobs:` (plus `x-` keys for anchors, which work within that file only); its
+relative paths are resolved against its own directory. It is checked as strictly as the
+config file, every job name must be unique across the files, and `before`/`after` work
+across them. `restor validate` lists the files it read.
+
+A file with only
 `version` and `repository` is valid: `restor snapshots`, `restor restore` and
 `restor restic` work with it, for example on a new host whose real configuration is still
 in the backup; `restor run` then fails with "no jobs configured".
 
 **Repository:** `url` (or `RESTIC_REPOSITORY`/`RESTIC_REPOSITORY_FILE` in the env file),
 `env_file`, `backend_options` (`--option key=value`), `limit_upload`, `limit_download`
-(KiB/s), `retry_lock`, `prune`, `max_unused`. The repository is passed to restic as
+(KiB/s), `retry_lock`, `prune`, `max_unused`, `check`, `check_read_data_subset`. The repository is passed to restic as
 `RESTIC_REPOSITORY`, so it never shows up in command lines or logs.
 
 **The env file** holds the variables of restic only: the repository password and the
@@ -174,11 +188,13 @@ not start with `-` or contain `,` or whitespace.
 | Key | Meaning |
 |---|---|
 | `type` | `docker-compose`, `podman-compose` or `systemd`; leave it out for files only |
-| `sources` | paths to back up (required) |
+| `sources` | paths to back up (required, unless `stdin_command`) |
+| `stdin_command`, `stdin_filename` | back up the output of this command instead of `sources`, saved as `stdin_filename` (default `stdin`); see below |
 | `compose_file` | the compose file (compose types, required); for `compose.yaml`, `compose.yml`, `docker-compose.yml` or `docker-compose.yaml` the override file next to it (`compose.override.yml`, …) is used too, as `docker compose` without `-f` does |
 | `units`, `scope` | the systemd units (required) and `system` (default) or `user` |
 | `services` | services to stop; default: all of the compose file / all `units` |
 | `before`, `after` | jobs that run after / before this one |
+| `requires` | jobs that must succeed for this one to run (it also runs after them) |
 | `stop` | stop the services during the backup (default `true`) |
 | `start_all` | after the backup, also start the services that were not running (default `false`) |
 | `stop_timeout`, `start_timeout` | wait for the services to stop / start (default `1m` / `2m`); compose gets the stop timeout in whole seconds, rounded up |
@@ -189,9 +205,38 @@ not start with `-` or contain `,` or whitespace.
 | `tags` | extra snapshot tags (not the name of a job) |
 | `pre`, `post`, `on_failure` | hooks, see below |
 
-Every key except `type`, `sources`, `compose_file`, `units`, `scope`, `services`,
-`before` and `after` can also be set under `defaults`. A job's own value replaces the
-default; lists are replaced, not merged.
+Every key except `type`, `sources`, `stdin_command`, `stdin_filename`, `compose_file`,
+`units`, `scope`, `services`, `before`, `after` and `requires` can also be set under
+`defaults`. A job's own value replaces the default; lists are replaced, not merged.
+
+**Database dumps:** a job with `stdin_command` backs up what the command writes to
+stdout, as one file named `stdin_filename`, with restic's `--stdin-from-command`: no dump
+on disk, no pre hook to write it and no post hook to remove it. The command is a list,
+run without a shell (use a script for pipes). When it exits with an error, restic saves
+no snapshot and the job fails.
+
+```yaml
+jobs:
+  pg:
+    type: docker-compose
+    compose_file: /srv/app/compose.yml
+    stop: false                 # the database must run to be dumped
+    stdin_command: [docker, compose, -f, /srv/app/compose.yml, exec, -T, db,
+                    pg_dumpall, -U, postgres]
+    stdin_filename: pg.sql
+    before: [files]             # dump first, then back up the files next to it
+```
+
+With a compose or systemd `type`, the job stops its services during the backup as
+usual, so the command runs while they are down: set `stop: false` when it needs them (as
+above), or list in `services` only the ones to stop (stop `app`, dump `db`). restor warns
+at startup about a dump job that stops all of its services.
+
+Such a job reads no files: `exclude`, `exclude_file`, `one_file_system` and the other
+file selection keys are errors in the job itself and ignored when they come from
+`defaults`. Restore the dump with `restor restic dump <snapshot-ID> /pg.sql`. restic runs
+the command, so it gets restic's environment, **including the env file**: unlike a hook it
+can read the repository password. Use it only for commands you trust.
 
 **Order and concurrency:** `concurrency` (default `1`) is how many jobs run at once; `0`
 runs all at once. A job starts once the jobs it runs after have finished, whether they
@@ -200,6 +245,14 @@ of another. Among the jobs that may start, the one first by name starts first, s
 `concurrency: 1` and no `before`/`after` the jobs run in name order. Jobs that share a
 compose file or a systemd unit never run at the same time. `restor validate` prints the
 resulting order.
+
+**Dependencies:** `requires: [db]` makes a job wait for `db` like `after`, and skips it
+when `db` failed: no file backup without the database dump next to it. The skipped job
+counts as failed: the run exits 1, its `on_failure` hook runs (its `pre` and `post` do
+not) with `RESTOR_ERROR` saying which job it required, and it is listed in
+`RESTOR_FAILED_JOBS`. A skipped job in turn skips the jobs that require it. An
+incomplete snapshot (some unreadable files) does not skip. `restor run files` without
+`db` runs `files` without checking `db`.
 
 **Services:** only the services that are running when a job's backup starts are stopped,
 and only those are started again afterwards, also when the backup failed. When none of
@@ -238,8 +291,8 @@ for output that is still open and then warns.
 | `pre` | before the services are stopped; if it fails, the job fails and nothing else runs | `RESTOR_JOB`, `RESTOR_HOOK=pre` |
 | `post` | after the services are started again, whenever `pre` succeeded | also `RESTOR_STATUS` (`success`, `incomplete`, `failed`), `RESTOR_SNAPSHOT_ID`, `RESTOR_ERROR` |
 | job `on_failure` | after `post`, when the job failed | as `post` |
-| top-level `post` | once after every run, after forget and prune | the run summary below |
-| top-level `on_failure` | after the top-level `post`, when a job, forget or prune failed | the run summary below |
+| top-level `post` | once after every run, after forget, prune and check | the run summary below |
+| top-level `on_failure` | after the top-level `post`, when a job, forget, prune or check failed | the run summary below |
 
 The top-level hooks get a summary of the whole run: `RESTOR_HOOK`, `RESTOR_STATUS`
 (`failed` when anything failed, `incomplete` when a snapshot is incomplete, else
@@ -261,6 +314,7 @@ of the packages) has scripts to copy and adapt; each one explains its use at the
 | `notifyapp.sh` | top-level `post`, or job `pre`/`post` | the same messages to the [Notify](https://getnotifyapp.com) iPhone app, one thread per host |
 | `mail.sh` | top-level `post`, or job `post` | a mail through the local `sendmail` with the results and every `RESTOR_*` variable |
 | `healthchecks.sh` | job `pre` + `post`, or top-level `post` | reports each job (or the whole run) to [Healthchecks](https://healthchecks.io): start, success, or failure with the error |
+| `prometheus.sh` | top-level `post` | writes metrics for node_exporter's textfile collector: the run's and each job's result, and when each job last backed up (completely), for alerts on failed or missing backups |
 
 The notification scripts report whatever hook they run as, so the hooks pick the events,
 and `NOTIFY_LEVEL` in `hooks.conf` drops the less important ones (`warning`: only runs
@@ -290,6 +344,13 @@ group, also when its `sources` or `tags` change. With `repository.prune`, one `p
 failed, or whose snapshot is incomplete (restic could not read some files), keeps its
 history and prune waits for a better run. A run that `skip_if_unchanged` skipped counts as
 complete.
+
+**Check:** with `repository.check: true`, every run ends its maintenance with one
+`restic check`, also after failed jobs, so damage to the repository is found before a
+restore needs it. `check_read_data_subset` also reads back part of the data (`5%`,
+`1/10`, `2G`); without it, only the structure is checked. A failed check counts like a
+failed prune: it is logged, the run summary says `failed` and the top-level `on_failure`
+hook runs, but the exit code stays 0 when every job backed up.
 
 ## Restore
 

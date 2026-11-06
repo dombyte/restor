@@ -18,17 +18,19 @@ follow it; there is no external document to consult.
 
 restor orchestrates **restic** backups of several **jobs** on one host.
 
-- **Job:** a named set of `sources` (paths) plus, depending on its `type`, the services that
+- **Job:** a named set of `sources` (paths), or a `stdin_command` whose output is backed
+  up, plus, depending on its `type`, the services that
   must be stopped while they are backed up: `docker-compose`, `podman-compose`, `systemd`
   (system or user scope), or no type (files only, nothing to stop).
 - **Per job:** lock → pre hook → stop services → `restic backup --tag=<job>` → start
   services → post hook (also after a failed backup) → on_failure hook (when it failed).
-- **Order:** a job starts once the jobs it runs `after` (or that name it in `before`) have
-  finished; at most `concurrency` jobs run at once (1 = one after another, 0 = all), and
+- **Order:** a job starts once the jobs it runs `after` (or that name it in `before`, or
+  that it `requires`) have finished, and is skipped as failed when a job it `requires`
+  failed; at most `concurrency` jobs run at once (1 = one after another, 0 = all), and
   jobs that share a compose file or systemd unit never run together.
 - **After all jobs:** `restic forget --group-by=host --tag=<job> <keep>` per job, then one
-  repository-wide `restic prune` and `restic unlock` (only with `repository.prune`); the
-  run-level post hook, then the run-level on_failure hook when anything failed.
+  repository-wide `restic prune` and `restic unlock` (only with `repository.prune`), then
+  `restic check` (only with `repository.check`); the run-level post hook, then the run-level on_failure hook when anything failed.
 - **Runtime:** a single CLI binary that runs **on the host** as a oneshot systemd service
   (`restor run`), triggered by a systemd timer (`example/restor.service`,
   `example/restor.timer`). It shells out to `restic`, `docker compose`, `podman compose`
@@ -128,12 +130,12 @@ internal/app/              composition root: config Plan → Settings, CreateSer
                            restic flags, wiring, restic version check, startup warnings,
                            Describe (validate), snapshots, restore and the restic
                            passthrough
-internal/config/           YAML file (version 2) decoded strictly, ${VAR} expansion, paths,
-                           repository env file, defaults → validated read-only Plan
+internal/config/           YAML file (version 2) and its job files decoded strictly, ${VAR}
+                           expansion, paths, env file, defaults → validated read-only Plan
 internal/backup/           orchestration: Manager (schedule, per-job run, hooks,
-                           forget/prune/unlock); declares Restic, Services, Locker, Runner
-internal/restic/           restic CLI client: typed flags, backup, forget, prune, unlock,
-                           version
+                           forget/prune/unlock/check); declares Restic, Services, Locker, Runner
+internal/restic/           restic CLI client: typed flags, backup, forget, prune, check,
+                           unlock, version
 internal/servicemanager/   Compose (docker/podman), Systemd, Noop; status polling
 internal/lock/             flock(2) lock files per key, lock dir safety checks
 internal/command/          the only os/exec user: runs a program with a fixed env and ctx
@@ -203,7 +205,8 @@ restor itself has no data store. What it writes, and who writes it:
 
 - **restic repository:** one repository (`repository.url`) shared by all jobs. Snapshots
   are separated by the tag `<job name>`. `backup` runs per job (several at once with
-  `concurrency` ≠ 1; restic allows concurrent backups). `forget`, `prune` and `unlock` run
+  `concurrency` ≠ 1; restic allows concurrent backups). `forget`, `prune`, `unlock` and
+  `check` run
   **only in `Manager`, sequentially, after all backups**, because they need exclusive
   repository locks.
 - **Lock files:** `lock.Locker` holds an `flock(2)` on `<lock dir>/<sha256 of key>.lock`
@@ -251,11 +254,12 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 4. `Manager.Run`: run the jobs as the schedule allows; when the run was not cancelled:
    forget each job that has a complete snapshot and a `keep`, then, with
    `repository.prune` and only when every job has a complete snapshot, one prune + unlock
-   (only if at least one job forgot). Then the run-level post hook, and the run-level
-   on_failure hook when a job, forget, prune or unlock failed.
+   (only if at least one job forgot); with `repository.check` one check, whatever the
+   jobs' results. Then the run-level post hook, and the run-level on_failure hook when a
+   job, forget, prune, unlock or check failed.
 5. Exit code: 0 when every job backed up; 1 when config failed, there are no jobs,
-   restic is missing or too old, any job failed or the run was cancelled. Forget, prune, unlock and hook failures
-   are logged but do **not** change the exit code; after a failed or incomplete job only
+   restic is missing or too old, any job failed or the run was cancelled. Forget, prune,
+   unlock, check and hook failures are logged but do **not** change the exit code; after a failed or incomplete job only
    its forget, prune and unlock are skipped (warnings), and a cancelled run does no
    maintenance. `restor restic` exits with restic's exit code.
 
@@ -275,6 +279,7 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   not running within `start_timeout` → warning only (a service that was down must not
   block forget and prune on every run).
 - A failed job runs its on_failure hook after the post hook.
+- A job whose `requires` job failed is skipped and fails (see Schedule).
 - Other jobs always continue, also those that run after the failed one; each failure is
   logged once by `Manager` with the job, and `main` logs the summary
   (`backup: jobs failed: N of M`).
@@ -326,7 +331,17 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 ### Configuration
 - One YAML file (`.yaml`/`.yml`) with `version: 2`; other extensions are an error.
   Template with every option: `example/config.yaml`. Top level: `version`,
-  `concurrency`, `repository`, `post`, `on_failure`, `defaults`, `jobs`.
+  `concurrency`, `repository`, `post`, `on_failure`, `defaults`, `jobs`, `include`.
+- `include` lists job files (paths or `filepath.Glob` patterns, relative to the config
+  file's directory), read in order, the matches of a pattern sorted, each (cleaned) path
+  once and never the config file itself, however it is spelled or linked (`os.SameFile`;
+  `config.include`). A pattern without match is fine, a plain path must exist, an empty
+  job file has no jobs. A job file is decoded as strictly as the config file into
+  `config.includeFile` (`jobs` and `x-` keys only; other top-level keys get a hint),
+  with the same expansion; its relative paths resolve against its own directory. A job
+  name defined twice (in any case) is an error naming both files (or the one file);
+  errors from a job file are prefixed with its path. Job files do not include others.
+  The Plan lists the files read (`Plan.Included`, printed by `validate`).
 - Decoding is strict: a key that matches no field is an error with its path and line
   (`config.unknownKeys` walks the YAML nodes against the struct tags); the keys of version
   1 (`projects`, `mode`, `global`, `service_manager`, `retention_policy`, …) name their
@@ -339,17 +354,20 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - `$VAR`, `${VAR}` and `${VAR:-default}` in scalar values (not keys) are expanded once at
   load time from the **process** environment; `$$` is a literal `$`. A plain scalar is
   re-typed after expansion, so `${LIMIT}` can fill a number.
-- Relative `repository.env_file`, `compose_file`, `sources` and `exclude_file` are
-  resolved against the directory of the config file (systemd runs restor in `/`); hooks
-  are not (they are commands).
-- `defaults` holds every job key except `type`, `sources`, `compose_file`, `units`,
-  `scope`, `services`, `before` and `after` (`config.Defaults`, inlined into
-  `config.JobConfig`). A job's own value replaces the default, lists included (an empty
+- Relative `repository.env_file`, `include`, `compose_file`, `sources` and
+  `exclude_file` are resolved against the directory of the config file, a job file's
+  against its own (systemd runs restor in `/`); hooks and `stdin_command` are not (they
+  are commands).
+- `defaults` holds every job key except `type`, `sources`, `stdin_command`,
+  `stdin_filename`, `compose_file`, `units`, `scope`, `services`, `before`, `after` and
+  `requires`
+  (`config.Defaults`, inlined into `config.JobConfig`). A job's own value replaces the default, lists included (an empty
   list clears the default); `keep` is replaced as a whole. Unset: `stop` true,
   `start_all` false, `stop_timeout` 1m, `start_timeout` 2m, `concurrency` 1.
 - Job names are case-insensitive and used in lowercase (also as the restic tag and in
-  `before`/`after`); names that differ only in case are an error. `before: [x]` on job a
-  is `after: [a]` on x; the Plan holds only the merged, sorted `After` lists.
+  `before`/`after`/`requires`); names that differ only in case are an error.
+  `before: [x]` on job a is `after: [a]` on x, and `requires` is also `after`; the Plan
+  holds the merged, sorted `After` lists and the sorted `Requires`.
 - **Environment:** restic gets the process env + `repository.env_file` +
   `RESTIC_REPOSITORY` (from `repository.url`, if set). The env file is `.env` only
   (`KEY=value` per line, `export ` prefix allowed, a line without `=` is an error,
@@ -362,11 +380,17 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `type` is `docker-compose`, `podman-compose`, `systemd` or absent; `compose_file` for
   the compose types, `units` for systemd, `scope` is `system` or `user`, `services` of a
   systemd job are among its `units`; keys of another type are errors (`units` on a compose
-  job, `services`/`stop`/`start_all`/timeouts on a files-only job); `sources` required, no empty
-  entries; `before`/`after` name other existing jobs and form no cycle (the first cycle is
-  reported as `a → b → a`); durations ≥ 0, `stop_timeout` > 0 when services are
+  job, `services`/`stop`/`start_all`/timeouts on a files-only job); `sources` required
+  unless `stdin_command`, no empty entries; `stdin_command` not empty and without empty
+  entries, not with `sources` or the job's own file selection keys (`exclude`,
+  `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`,
+  `exclude_larger_than`, `one_file_system`; from `defaults` they are dropped),
+  `stdin_filename` only with it; `before`/`after`/`requires` name other existing jobs
+  and form no cycle (the first cycle is reported as `a → b → a`); durations ≥ 0, `stop_timeout` > 0 when services are
   stopped and `start_timeout` > 0 when they are stopped or `start_all` is set; `keep` counts ≥ 0 and `within…` restic durations (`1y2m3d4h`); sizes
   (`exclude_larger_than`) like `500M`; `max_unused` a percentage, size or `unlimited`;
+  `check_read_data_subset` only with `check`, `n/t` (1 ≤ n ≤ t), a percentage in (0, 100]
+  or a size > 0;
   `backend_options` keys like `s3.connections` with non-empty values; limits ≥ 0; env file
   names and values without NUL bytes; no extra `tags` that are the name of a job (forget
   `--tag=<job>` would select those snapshots too); `keep.tags` only next to another rule
@@ -374,10 +398,13 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   own `tags` (every snapshot has it, so forget would remove none); no path starting with
   `~` (YAML does not expand it). Startup warns about a missing repository
   (`repository.url`, `RESTIC_REPOSITORY`, `RESTIC_REPOSITORY_FILE`), an env file that
-  group or others can access (mode & 077), a hook whose program is a relative path
-  (`./x.sh`), and binaries missing from `PATH`.
+  group or others can access (mode & 077), a hook or `stdin_command` whose program is a
+  relative path (`./x.sh`), a `stdin_command` job that stops all of its services (the
+  command runs while they are down; `stop: false` or `services` silence it), and
+  binaries missing from `PATH`.
 - `example/config.yaml` stays complete, commented and valid (`TestLoad_ExampleConfig`);
-  every new option is added there in the same change.
+  its `include: [jobs.d/*.yaml]` matches nothing in `example/`; every new option is
+  added there in the same change.
 - Secrets (restic password, S3 keys) come from the env file or the process env, never from
   `example/`; the real `config.yaml` and env files are gitignored.
 
@@ -385,8 +412,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - `restor run [job...]`: one backup cycle of all or the named jobs (`Plan.Select`;
   unknown names are an error). Ordering against jobs that are not selected is dropped.
 - `restor validate`: loads and wires everything, then prints the jobs in the order they
-  start with concurrency 1 (`Manager.Order`), with type, after, stop, a keep label and
-  sources, and below them each distinct retention policy once with its label (A, B, … in
+  start with concurrency 1 (`Manager.Order`), with type, after, requires, stop, start
+  all, a keep label and sources (above them the concurrency, prune and check settings
+  and the job files read), and below them each distinct retention policy once with its label (A, B, … in
   order of first use; `-` = never forgotten) and its jobs; never the repository URL (it
   may hold credentials). Without jobs it says so instead of the tables.
 - `restor snapshots [job...]`: `restic <repository global flags> snapshots --tag=<job>…`
@@ -422,6 +450,11 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   its lock keys, and fewer than `concurrency` jobs run (0 = no limit). Among the jobs that
   may start, the earlier one in the list (sorted by name) starts first. After a cancel
   no job starts; jobs never started are neither failed nor complete.
+- `requires` jobs are part of `After` (config merges them). When a job starts and one of
+  its `Requires` that is part of the run failed (also by being skipped itself),
+  `Manager.skipJob` fails it without lock, hooks or backup (error
+  `backup: <job>: skipped, required job failed: <name>`, `backup.ErrRequiredJobFailed`)
+  and runs only its on_failure hook.
 
 ### Hooks
 - Split on whitespace and executed directly (no shell): no quoting, pipes or redirects.
@@ -441,7 +474,7 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   (or there is none), also when the backup or the restart failed, so it can undo the pre
   hook. The job's on_failure hook runs after it when the job failed (also after a failed
   lock or pre hook). The run-level post runs once after maintenance, then the run-level
-  on_failure when a job, forget, prune or unlock failed. After a cancel the job's post
+  on_failure when a job, forget, prune, unlock or check failed. After a cancel the job's post
   hook still runs (for at most 1 min), the others are skipped (a warning); their own
   failures are logged only.
 
@@ -493,7 +526,11 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `--skip-if-unchanged` would then skip its snapshot); backup flags
   from `exclude`, `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`,
   `exclude_larger_than`, `one_file_system`, `skip_if_unchanged` and `tags` (extra
-  `--tag=`). The last JSON `summary` message gives the snapshot ID (logged as the
+  `--tag=`). A `stdin_command` job runs `restic [global] backup --json
+  --group-by=host,tags --stdin-from-command [--stdin-filename=…] [--skip-if-unchanged]
+  [--tag=…] --tag=<job> -- <command>`: the command takes the place of the sources and
+  the file selection flags are left out (`BackupFlags.StdinFromCommand`); a command that
+  fails makes restic fail without a snapshot. The last JSON `summary` message gives the snapshot ID (logged as the
   8-character short ID; none for a `dry_run` summary or a missing summary, which is a
   warning, not an error) and the counters logged at info (`files_new`, `bytes_added`,
   `duration`, …). Lines that are not JSON are skipped. Exit code 3 returns the ID with a
@@ -509,6 +546,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - `restic [global] forget --group-by=host --tag=<job> [keep flags]`; keep flags
   `--keep-last=` … `--keep-yearly=`, `--keep-within…=` and `--keep-tag=`.
 - `restic [global] prune [--max-unused=]` and `restic [global] unlock`.
+- `restic [global] check [--read-data-subset=]` (`restic.CheckFlags`), after prune and
+  unlock; it also runs when a job failed or prune was skipped.
 - `restic version` before a run (`restic.ParseVersion` reads `restic X.Y.Z`): below
   `restic.Supported`'s oldest release (0.17.1) the run fails, above its newest tested one
   it warns.
@@ -539,6 +578,10 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   schedule under `repository`) and reload by loading again; the oneshot path stays as is.
 - **Shell out to the CLIs instead of using libraries/APIs:** restic has no stable Go API,
   and the compose/systemctl CLIs behave the same for Docker, Podman and systemd scopes.
+- **`include` for jobs only, not a merge of whole files:** the repository, defaults and
+  run-level hooks stay in one file, so there is one place that says where the backups
+  go and how they are kept; a job file can add jobs but never change that, and no merge
+  order has to be explained. Not nested, for the same reason.
 - **YAML only, versioned and strict:** one format keeps the code and the docs small; the
   file is decoded with go-yaml directly (no viper: it lowercased map keys) and checked
   against the struct tags, so a typo is an error, not a silently ignored key. `version`
@@ -553,6 +596,12 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - **Flat jobs with a `type`:** the type picks the service manager and the keys it allows;
   a new type adds a value and its keys, existing configs stay valid. Defaults replace
   rather than merge, so a job's value is always the whole value.
+- **Dumps through `--stdin-from-command`, not a pipe of restor's own:** restic saves no
+  snapshot when the command fails, which a pipe from restor into `restic backup --stdin`
+  cannot guarantee (restic would save whatever arrived before the command died). The
+  price: restic starts the command with its own environment, so it sees the env file
+  (README says so). A list, not a string split on spaces like a hook: a dump command
+  often needs an argument with spaces (a query, a connection string).
 - **The env file belongs to restic:** it holds the repository credentials; hooks and
   compose files must not see them. Values are literal because expanding them broke
   passwords containing `$`.
@@ -578,9 +627,14 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   tested release once CI passes with it. Per-option version checks are not needed while
   the minimum covers every option; a future option that needs a newer restic raises the
   minimum or brings such a check back.
-- **Ordering only, not dependencies:** `before`/`after` say when a job may start, not
-  whether: a failed database dump must not cancel the backup of the files next to it. A
-  "requires" relation can be added later as its own key.
+- **Ordering by default, dependencies on request:** `before`/`after` say when a job may
+  start, not whether: a failed database dump must not cancel the backup of the files next
+  to it. `requires` is the separate, explicit key for the opposite case (no file backup
+  without its dump). It implies `after`, so the schedule needs no second graph, and a
+  skipped job counts as failed (exit code, on_failure hooks, `RESTOR_FAILED_JOBS`)
+  rather than getting a status of its own: no backup was made, which is what failed
+  means everywhere else. An incomplete snapshot of the required job is a backup and does
+  not skip. Against a job that is not part of the run it is dropped, like ordering.
 - **Shared services wait instead of failing:** the schedule knows each job's lock keys,
   so jobs of one compose file run one after another even with `concurrency: 0`; the
   `flock` locks still guard against a second restor process.
@@ -590,6 +644,11 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   job's post hook runs after a cancel for the same reason (it may end a maintenance mode
   the pre hook started), bounded so that a hanging hook cannot block the shutdown; the
   notification hooks are skipped.
+- **Check after every run, not only after a clean one:** prune is skipped after a failed
+  job because it deletes data; check deletes nothing and verifies what is already in the
+  repository, which matters most when backups keep failing. Its failure is a maintenance
+  failure (summary, run-level on_failure) and leaves the exit code alone, like prune:
+  the exit code says whether the jobs backed up.
 - **Tag = lowercase job name:** keeps each job's retention separate in a shared
   repository; lowercase keeps the tags of snapshots made by earlier versions (viper
   lowercased the names). Renaming a job starts a new snapshot series (the old one is no
@@ -715,7 +774,7 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
   job done, snapshot ID), `warn` for recovered problems (services not stopped/started
   in time, stop command failed, no running service to stop, missing binary, suspicious
   config), `error` for failures
-  that need attention (job failed, forget/prune/unlock failed, a hook
+  that need attention (job failed, forget/prune/unlock/check failed, a hook
   failed).
 - Never log secrets: no restic password, S3 keys, env file contents or repository URLs
   with credentials. Be careful when logging environments or full command lines.

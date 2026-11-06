@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -231,31 +232,69 @@ func restoreFlags(o RestoreOptions) (restic.RestoreFlags, error) {
 	return f, f.Validate()
 }
 
-// Describe writes the validated plan to w: the jobs in the order they start with
-// concurrency 1, with their type, what they wait for and what they back up, then each
-// distinct retention policy once, labelled in the table. The repository URL is left out,
-// it may hold credentials.
+// Describe writes the validated plan to w: the job files it includes, the jobs in the
+// order they start with concurrency 1, with their type, what they wait for and what they
+// back up, then each distinct retention policy once, labelled in the table. The
+// repository URL is left out, it may hold credentials.
 func (a *App) Describe(w io.Writer) error {
 	jobs := a.orderedJobs()
 	labels, groups := keepGroups(jobs)
 	tw := tabwriter.NewWriter(w, 0, 0, columnPadding, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "concurrency:\t%d (0 = all at once)\n", a.plan.Concurrency)
 	_, _ = fmt.Fprintf(tw, "prune:\t%t\n", a.plan.Repository.Prune)
+	_, _ = fmt.Fprintf(tw, "check:\t%s\n", checkLabel(a.plan.Repository))
+	for _, file := range a.plan.Included {
+		_, _ = fmt.Fprintf(tw, "included:\t%s\n", file)
+	}
 	if len(jobs) == 0 {
 		_, _ = fmt.Fprintln(tw, "\nno jobs configured: restor run has nothing to back up")
 		return tw.Flush()
 	}
-	_, _ = fmt.Fprintln(tw, "\nJOB\tTYPE\tAFTER\tSTOP\tSTART ALL\tKEEP\tSOURCES")
+	_, _ = fmt.Fprintln(tw, "\nJOB\tTYPE\tAFTER\tREQUIRES\tSTOP\tSTART ALL\tKEEP\tSOURCES")
 	for _, j := range jobs {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%t\t%t\t%s\t%s\n", j.Name, or(j.Type, "files"),
-			or(strings.Join(j.After, ","), "-"), j.StopsServices(), j.StartsAll(),
-			labels[j.Name], strings.Join(j.Sources, " "))
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%t\t%t\t%s\t%s\n", j.Name,
+			or(j.Type, "files"), or(strings.Join(j.After, ","), "-"),
+			or(strings.Join(j.Requires, ","), "-"), j.StopsServices(), j.StartsAll(),
+			labels[j.Name], sourcesLabel(j))
 	}
 	_, _ = fmt.Fprintln(tw, "\nKEEP")
 	for _, g := range groups {
 		_, _ = fmt.Fprintf(tw, "  %s\t%s\t(%s)\n", g.label, g.policy, strings.Join(g.jobs, ", "))
 	}
 	return tw.Flush()
+}
+
+// checkLabel says whether the run ends with restic check, and how much data it reads.
+func checkLabel(r config.Repository) string {
+	switch {
+	case !r.Check:
+		return "false"
+	case r.CheckReadDataSubset == "":
+		return "true (structure only)"
+	default:
+		return "true (reads " + r.CheckReadDataSubset + " of the data)"
+	}
+}
+
+// sourcesLabel is what a job backs up: its sources, or the command whose output it saves.
+func sourcesLabel(j config.Job) string {
+	if j.FromStdin() {
+		return "stdin: " + commandLabel(j.StdinCommand)
+	}
+	return strings.Join(j.Sources, " ")
+}
+
+// commandLabel joins the arguments of a command, quoting those that contain spaces or
+// quotes, so that each argument stays recognisable.
+func commandLabel(args []string) string {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = a
+		if strings.ContainsAny(a, " \t\n\"'") {
+			quoted[i] = strconv.Quote(a)
+		}
+	}
+	return strings.Join(quoted, " ")
 }
 
 // orderedJobs returns the jobs in the order they start with concurrency 1.
@@ -373,7 +412,7 @@ func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
 	}
 	return backup.NewManager(backup.Settings{
 		Concurrency: plan.Concurrency, Prune: plan.Repository.Prune,
-		Post: plan.Post, OnFailure: plan.OnFailure,
+		Check: plan.Repository.Check, Post: plan.Post, OnFailure: plan.OnFailure,
 	}, jobs, backup.Deps{
 		Restic: d.restic, Locker: locker, Hooks: d.runner, Log: component(d.log, "backup"),
 	})
@@ -403,7 +442,8 @@ func CreateServiceManager(j config.Job, d servicemanager.Deps) (backup.Services,
 
 func jobSettings(j config.Job) backup.JobSettings {
 	return backup.JobSettings{
-		Name: j.Name, After: j.After, Services: j.Services, Sources: j.Sources,
+		Name: j.Name, After: j.After, Requires: j.Requires, Services: j.Services,
+		Sources:      backupSources(j),
 		StopServices: j.StopsServices(), StartAll: j.StartsAll(), StopTimeout: j.StopTimeout,
 		StartTimeout: j.StartTimeout, BackupTimeout: j.BackupTimeout,
 		BackupArgs: backupFlags(j).Args(), ForgetArgs: keep(j.Keep).Args(),
@@ -411,7 +451,23 @@ func jobSettings(j config.Job) backup.JobSettings {
 	}
 }
 
+// backupSources are the positional arguments of the job's backup: its sources, or the
+// command whose output it backs up.
+func backupSources(j config.Job) []string {
+	if j.FromStdin() {
+		return j.StdinCommand
+	}
+	return j.Sources
+}
+
 func backupFlags(j config.Job) restic.BackupFlags {
+	if j.FromStdin() {
+		// The file selection of the defaults does not apply to a command's output.
+		return restic.BackupFlags{
+			StdinFromCommand: true, StdinFilename: j.StdinFilename,
+			SkipIfUnchanged: j.SkipIfUnchanged, Tags: j.Tags,
+		}
+	}
 	return restic.BackupFlags{
 		Exclude: j.Exclude, IExclude: j.IExclude, ExcludeFile: j.ExcludeFile,
 		ExcludeIfPresent: j.ExcludeIfPresent, ExcludeCaches: j.ExcludeCaches,
@@ -436,6 +492,7 @@ func resticSettings(r config.Repository) restic.Settings {
 			LimitDownload: r.LimitDownload, RetryLock: r.RetryLock,
 		}.Args(),
 		PruneArgs: restic.PruneFlags{MaxUnused: r.MaxUnused}.Args(),
+		CheckArgs: restic.CheckFlags{ReadDataSubset: r.CheckReadDataSubset}.Args(),
 	}
 }
 
@@ -460,7 +517,12 @@ func logJobs(log zerolog.Logger, jobs []config.Job) {
 		if len(j.ComposeFiles) > 0 {
 			e = e.Strs("compose_files", j.ComposeFiles)
 		}
-		e.Strs("sources", j.Sources).Strs("after", j.After).
+		if j.FromStdin() {
+			e = e.Strs("stdin_command", j.StdinCommand)
+		} else {
+			e = e.Strs("sources", j.Sources)
+		}
+		e.Strs("after", j.After).Strs("requires", j.Requires).
 			Bool("stop", j.StopsServices()).Bool("start_all", j.StartsAll()).
 			Msg("job configured")
 	}
@@ -481,11 +543,25 @@ func warnConfig(log zerolog.Logger, plan *config.Plan, resticEnv []string) {
 	}
 	warnEnvFileMode(log, plan.Repository.EnvFile)
 	warnRelativeHooks(log, plan)
+	warnStoppedDumps(log, plan.Jobs)
 }
 
-// warnRelativeHooks warns about hooks whose program is a relative path such as
-// ./backup.sh: it resolves against the working directory, which is / (system) or the home
-// directory (user) under systemd, not against the config directory.
+// warnStoppedDumps warns about stdin_command jobs that stop all of their services: the
+// command runs while they are down, so a dump through `compose exec` or from a stopped
+// database fails. Stopping some of them (services) is a deliberate choice and fine.
+func warnStoppedDumps(log zerolog.Logger, jobs []config.Job) {
+	for _, j := range jobs {
+		if j.FromStdin() && j.StopsServices() && len(j.Services) == 0 {
+			log.Warn().Str("field", "jobs."+j.Name+".stdin_command").
+				Msg("the command runs while all services of the job are stopped; set " +
+					"stop: false if it needs them, or name the ones to stop in services")
+		}
+	}
+}
+
+// warnRelativeHooks warns about hooks (and stdin commands) whose program is a relative
+// path such as ./backup.sh: it resolves against the working directory, which is /
+// (system) or the home directory (user) under systemd, not against the config directory.
 func warnRelativeHooks(log zerolog.Logger, plan *config.Plan) {
 	// The setting as a config path, so the run-level hooks need no job.
 	hooks := [][2]string{{"post", plan.Post}, {"on_failure", plan.OnFailure}}
@@ -493,6 +569,9 @@ func warnRelativeHooks(log zerolog.Logger, plan *config.Plan) {
 		path := "jobs." + j.Name + "."
 		hooks = append(hooks, [2]string{path + "pre", j.Pre},
 			[2]string{path + "post", j.Post}, [2]string{path + "on_failure", j.OnFailure})
+		if j.FromStdin() {
+			hooks = append(hooks, [2]string{path + "stdin_command", j.StdinCommand[0]})
+		}
 	}
 	for _, h := range hooks {
 		fields := strings.Fields(h[1])
@@ -530,20 +609,30 @@ func hasRepository(env []string) bool {
 	return vars["RESTIC_REPOSITORY"] != "" || vars["RESTIC_REPOSITORY_FILE"] != ""
 }
 
+// jobBinaries returns the programs a job runs besides restic and its hooks.
+func jobBinaries(j config.Job) []string {
+	var binaries []string
+	switch j.Type {
+	case config.TypeDockerCompose:
+		binaries = append(binaries, "docker")
+	case config.TypePodmanCompose:
+		binaries = append(binaries, "podman")
+	case config.TypeSystemd:
+		binaries = append(binaries, "systemctl")
+	}
+	if j.FromStdin() {
+		binaries = append(binaries, j.StdinCommand[0])
+	}
+	return binaries
+}
+
 // warnMissingBinaries warns about programs the run will need but PATH does not have.
 func warnMissingBinaries(log zerolog.Logger, jobs []config.Job,
 	lookPath func(string) (string, error),
 ) {
 	binaries := []string{"restic"}
 	for _, j := range jobs {
-		switch j.Type {
-		case config.TypeDockerCompose:
-			binaries = append(binaries, "docker")
-		case config.TypePodmanCompose:
-			binaries = append(binaries, "podman")
-		case config.TypeSystemd:
-			binaries = append(binaries, "systemctl")
-		}
+		binaries = append(binaries, jobBinaries(j)...)
 	}
 	slices.Sort(binaries)
 	for _, b := range slices.Compact(binaries) {

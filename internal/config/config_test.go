@@ -243,6 +243,26 @@ func TestLoad_Validation(t *testing.T) {
 		{"limit", "repository: {limit_upload: -1}", "repository.limit_upload: must be >= 0"},
 		{"retry lock", "repository: {retry_lock: -1s}", "repository.retry_lock: must be >= 0"},
 		{"max unused", "repository: {max_unused: lots}", `repository.max_unused: "lots" is not`},
+		{
+			"subset without check", "repository: {check_read_data_subset: 5%}",
+			"repository.check_read_data_subset: only with check: true",
+		},
+		{
+			"subset", "repository: {check: true, check_read_data_subset: half}",
+			`repository.check_read_data_subset: "half" is not a subset such as "5%"`,
+		},
+		{
+			"subset fraction", "repository: {check: true, check_read_data_subset: 3/2}",
+			`repository.check_read_data_subset: "3/2" is not`,
+		},
+		{
+			"subset percent", "repository: {check: true, check_read_data_subset: 101%}",
+			`repository.check_read_data_subset: "101%" is not`,
+		},
+		{
+			"subset size", "repository: {check: true, check_read_data_subset: 0G}",
+			`repository.check_read_data_subset: "0G" is not`,
+		},
 		{"keep count", "defaults: {keep: {daily: -1}}", "defaults.keep.daily: must be >= 0"},
 		{"keep within", "defaults: {keep: {within: 30x}}", `defaults.keep.within: "30x" is not`},
 		{"keep tag", "defaults: {keep: {tags: ['a,b']}}", `defaults.keep.tags: "a,b": a tag`},
@@ -306,13 +326,39 @@ func TestLoad_Validation(t *testing.T) {
 			`jobs.web.before: "web" is not another job`,
 		},
 		{
+			"stdin and sources", "jobs: {db: {stdin_command: [dump], sources: [/a]}}",
+			"jobs.db.sources: not with stdin_command, which reads no files",
+		},
+		{
+			"stdin exclude", "jobs: {db: {stdin_command: [dump], exclude: ['*.x']}}",
+			"jobs.db.exclude: not with stdin_command",
+		},
+		{"stdin empty", "jobs: {db: {stdin_command: []}}", "jobs.db.stdin_command: must name"},
+		{
+			"stdin empty entry", "jobs: {db: {stdin_command: [dump, '']}}",
+			"jobs.db.stdin_command: must not contain empty entries",
+		},
+		{
+			"stdin filename", "jobs: {db: {stdin_filename: db.sql, sources: [/a]}}",
+			"jobs.db.stdin_filename: only with stdin_command",
+		},
+		{
+			"requires", "jobs: {web: {requires: [db], sources: [/a]}}",
+			`jobs.web.requires: "db" is not another job`,
+		},
+		{
+			"requires cycle", "jobs: {a: {requires: [b], sources: [/a]}, " +
+				"b: {after: [a], sources: [/a]}}",
+			"jobs.a: before/after/requires form a cycle: a → b → a",
+		},
+		{
 			"duplicate", "jobs: {web: {sources: [/a]}, WEB: {sources: [/b]}}",
 			"jobs.web: duplicate job name",
 		},
 		{
 			"cycle", "jobs: {a: {after: [c], sources: [/a]}, b: {after: [a], sources: [/a]}, " +
 				"c: {before: [b], after: [b], sources: [/a]}}",
-			"jobs.a: before/after form a cycle: a → c → b → a",
+			"jobs.a: before/after/requires form a cycle: a → c → b → a",
 		},
 	}
 	for _, tt := range tests {
@@ -347,6 +393,56 @@ func TestLoad_StartAll(t *testing.T) {
 	assert.True(t, plan.Jobs[0].StartsAll(), "from defaults")
 	assert.False(t, plan.Jobs[1].StartsAll(), "the job's own value replaces the default")
 	assert.False(t, plan.Jobs[2].StartsAll(), "a files-only job has no services")
+}
+
+func TestLoad_StdinCommand(t *testing.T) {
+	t.Parallel()
+	plan, err := load(t, `version: 2
+defaults: {exclude: ["*.tmp"], one_file_system: true, tags: [db]}
+jobs:
+  pg:
+    type: docker-compose
+    compose_file: /srv/app/compose.yml
+    stop: false
+    stdin_command: [docker, compose, exec, -T, db, pg_dumpall, -U, postgres]
+    stdin_filename: pg.sql
+`, nil)
+
+	require.NoError(t, err, "the file selection of the defaults does not apply")
+	j := plan.Jobs[0]
+	assert.True(t, j.FromStdin())
+	assert.Equal(t, []string{
+		"docker", "compose", "exec", "-T", "db", "pg_dumpall", "-U", "postgres",
+	}, j.StdinCommand, "not resolved: it is a command")
+	assert.Equal(t, "pg.sql", j.StdinFilename)
+	assert.Empty(t, j.Sources)
+}
+
+func TestLoad_Check(t *testing.T) {
+	t.Parallel()
+	for _, subset := range []string{"", "1/10", "10/10", "2.5%", "100%", "500M", "1"} {
+		plan, err := load(t, "version: 2\nrepository: {check: true, check_read_data_subset: '"+
+			subset+"'}\n", nil)
+		require.NoError(t, err, subset)
+		assert.True(t, plan.Repository.Check)
+		assert.Equal(t, subset, plan.Repository.CheckReadDataSubset)
+	}
+}
+
+func TestLoad_Requires(t *testing.T) {
+	t.Parallel()
+	plan, err := load(t, `version: 2
+jobs:
+  db: {sources: [/db]}
+  dump: {sources: [/dump]}
+  files: {sources: [/f], requires: [DB, dump, db], after: [x]}
+  x: {sources: [/x], before: [files]}
+`, nil)
+
+	require.NoError(t, err)
+	files := plan.Jobs[2]
+	assert.Equal(t, []string{"db", "dump"}, files.Requires, "lowercase, sorted, once")
+	assert.Equal(t, []string{"db", "dump", "x"}, files.After, "requires orders too")
 }
 
 func TestLoad_RepositoryOnly(t *testing.T) {
@@ -569,4 +665,111 @@ func TestLoad_SafetyChecks(t *testing.T) {
 	_, err = load(t, "version: 2\ndefaults: {tags: [x], keep: {daily: 7, tags: [x]}}\n"+
 		"jobs: {a: {sources: [/a], tags: [y]}}", nil)
 	require.NoError(t, err, "a job that replaces the default tags")
+}
+
+func TestLoad_Include(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "jobs.d", "sub"), 0o700))
+	writeFile(t, dir, "jobs.d/web.yaml", `x-common: &common {keep: {daily: 3}}
+jobs:
+  Web:
+    <<: *common
+    type: docker-compose
+    compose_file: app/compose.yml
+    sources: [data, /abs]
+    after: [etc]
+`)
+	writeFile(t, dir, "jobs.d/db.yml", "jobs: {db: {sources: ['${DATA}/db'], before: [web]}}\n")
+	writeFile(t, dir, "jobs.d/notes.txt", "not matched")
+	writeFile(t, dir, "jobs.d/sub/deep.yaml", "jobs: {deep: {sources: [/d]}}\n")
+	extra := writeFile(t, dir, "extra.yaml", "jobs: {}\n")
+	path := writeFile(t, dir, "config.yaml", `version: 2
+include: [jobs.d/*.y*ml, "`+extra+`", "*.yaml", jobs.d/web.yaml, empty.d/*.yaml]
+jobs:
+  etc: {sources: [/etc]}
+`)
+
+	plan, err := Load(path, getenv(map[string]string{"DATA": "/srv"}))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		filepath.Join(dir, "jobs.d/db.yml"), filepath.Join(dir, "jobs.d/web.yaml"), extra,
+	}, plan.Included, "each file once, without config.yaml itself; no match is fine")
+	require.Len(t, plan.Jobs, 3)
+	db, web := plan.Jobs[0], plan.Jobs[2]
+	assert.Equal(t, []string{"/srv/db"}, db.Sources, "expanded")
+	assert.Equal(t, "web", web.Name)
+	assert.Equal(t, []string{"db", "etc"}, web.After, "ordering across files")
+	assert.Equal(t, Keep{Daily: 3}, web.Keep, "anchors within the job file")
+	assert.Equal(t, filepath.Join(dir, "jobs.d/app/compose.yml"), web.ComposeFile,
+		"relative to the job file")
+	assert.Equal(t, []string{filepath.Join(dir, "jobs.d/data"), "/abs"}, web.Sources)
+}
+
+func TestLoad_IncludeErrors(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	web := writeFile(t, dir, "web.yaml", "jobs: {web: {sources: [/w]}}\n")
+	bad := writeFile(t, dir, "bad.yaml", `version: 2
+repository: {url: /r}
+jobs:
+  ETC: {sources: [/e]}
+  db: {sources: [~/db], stop_service: true}
+`)
+	typed := writeFile(t, dir, "typed.yaml", "jobs: {x: {sources: /x}}\n")
+	path := writeFile(t, dir, "config.yaml", `version: 2
+include: [web.yaml, bad.yaml, typed.yaml, missing.yaml, "", "[", web.yaml]
+jobs:
+  Web: {sources: [/other]}
+  etc: {sources: [/etc]}
+`)
+
+	_, err := Load(path, getenv(nil))
+
+	require.ErrorIs(t, err, ErrInvalid)
+	for _, want := range []string{
+		"jobs.web: defined in " + path + " and in " + web,
+		"jobs.etc: defined in " + path + " and in " + bad,
+		bad + ": version: unknown key (line 1): a job file holds only jobs",
+		bad + ": repository: unknown key (line 2): a job file holds only jobs",
+		bad + ": jobs.db.stop_service: unknown key (line 5)",
+		bad + `: jobs.db.sources: "~/db": ~ is not expanded`,
+		typed + ": jobs.x.sources: cannot construct !!str `/x` into []string (line 1)",
+		"include: stat " + filepath.Join(dir, "missing.yaml") + ": no such file",
+		"include: must not contain empty entries",
+		"include: \"" + filepath.Join(dir, "[") + "\": syntax error in pattern",
+	} {
+		assert.Contains(t, err.Error(), want)
+	}
+}
+
+func TestLoad_IncludeSelfAndEmpty(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, dir, "empty.yaml", "# every job commented out\n")
+	path := writeFile(t, dir, "config.yaml", "version: 2\ninclude: [\""+dir+
+		"//config.yaml\", \"./link.yaml\", \"empty.yaml\", \"./empty.yaml\"]\n"+
+		"jobs: {a: {sources: [/a]}}\n")
+	require.NoError(t, os.Symlink(path, filepath.Join(dir, "link.yaml")))
+
+	plan, err := Load(path, getenv(nil))
+
+	require.NoError(t, err, "the config file is never included, however it is spelled")
+	assert.Equal(t, []string{filepath.Join(dir, "empty.yaml")}, plan.Included,
+		"read once, and an empty job file has no jobs")
+	assert.Len(t, plan.Jobs, 1)
+}
+
+func TestLoad_IncludeDuplicateInOneFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	dup := writeFile(t, dir, "dup.yaml", "jobs: {Ab: {sources: [/a]}, aB: {sources: [/b]}}\n")
+	writeFile(t, dir, "config.yaml", "version: 2\ninclude: [dup.yaml]\n")
+
+	_, err := Load(filepath.Join(dir, "config.yaml"), getenv(nil))
+
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "jobs.ab: duplicate job name in "+dup+
+		" (names are case-insensitive)")
 }

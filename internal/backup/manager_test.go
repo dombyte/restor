@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -112,6 +113,42 @@ func TestManager_MaintenanceSkipped(t *testing.T) {
 	}
 }
 
+func TestManager_CheckAfterPrune(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expectLock("a")
+	f.expectBackup("a", nil)
+	mock.InOrder(
+		f.restic.EXPECT().Forget(mock.Anything, "a", mock.Anything).Return(nil).Once(),
+		f.restic.EXPECT().Prune(mock.Anything).Return(nil).Once(),
+		f.restic.EXPECT().Unlock(mock.Anything).Return(nil).Once(),
+		f.restic.EXPECT().Check(mock.Anything).Return(nil).Once(),
+	)
+	m := f.manager(t, Settings{Prune: true, Check: true}, fileJob(f, t, "a", "--keep-last 1"))
+
+	require.NoError(t, m.Run(context.Background()))
+}
+
+func TestManager_CheckAfterFailedJob(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	f.expectLock("a")
+	f.expectBackup("a", assert.AnError)
+	checkErr := fmt.Errorf("restic: check: %w", assert.AnError)
+	f.restic.EXPECT().Check(mock.Anything).Return(checkErr).Once()
+	f.hooks.EXPECT().RunEnv(mock.Anything, mock.MatchedBy(func(env []string) bool {
+		return slices.Contains(env, "RESTOR_ERROR="+checkErr.Error()+"; backup: a: "+
+			assert.AnError.Error())
+	}), "/bin/run-failed").Return(nil, nil).Once()
+	m := f.manager(t, Settings{Prune: true, Check: true, OnFailure: "/bin/run-failed"},
+		fileJob(f, t, "a", "--keep-last 1"))
+
+	err := m.Run(context.Background())
+
+	require.ErrorIs(t, err, ErrJobsFailed, "the job fails the run, the check only reports")
+	// No forget or prune after the failed job, but the check still runs.
+}
+
 func TestManager_RunCancelled(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -122,7 +159,7 @@ func TestManager_RunCancelled(t *testing.T) {
 			cancel()
 			return "id", nil
 		})
-	m := f.manager(t, Settings{Concurrency: 1, Prune: true},
+	m := f.manager(t, Settings{Concurrency: 1, Prune: true, Check: true},
 		fileJob(f, t, "a", "--keep-last 1"), fileJob(f, t, "b", "--keep-last 1"))
 
 	err := m.Run(ctx)
@@ -237,6 +274,48 @@ func TestManager_RunAfterFailedJob(t *testing.T) {
 	require.ErrorIs(t, m.Run(context.Background()), ErrJobsFailed)
 	assert.Equal(t, []string{"backup a", "backup b"}, backups(f.rec.list()),
 		"after only orders: b runs although a failed")
+}
+
+// requires makes j require names, which it then also runs after (as config does).
+func requires(j Job, names ...string) Job {
+	j.Settings.Requires = names
+	j.Settings.After = append(j.Settings.After, names...)
+	return j
+}
+
+func TestManager_RunRequires(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	for _, name := range []string{"a", "b", "e", "f", "ok"} {
+		f.expectLock(name)
+	}
+	f.expectBackup("a", assert.AnError)
+	f.expectBackup("b", fmt.Errorf("w: %w", incompleteError{}))
+	for _, name := range []string{"e", "f", "ok"} {
+		f.expectBackup(name, nil)
+	}
+	f.hooks.EXPECT().RunEnv(mock.Anything, []string{
+		"RESTOR_JOB=c", "RESTOR_HOOK=on_failure", "RESTOR_STATUS=failed",
+		"RESTOR_SNAPSHOT_ID=", "RESTOR_ERROR=backup: c: skipped, required job failed: a",
+	}, "/bin/c-failed").Return(nil, nil).Once()
+	c := requires(fileJob(f, t, "c", ""), "a", "b")
+	c.Settings.Pre, c.Settings.OnFailure = "/bin/never", "/bin/c-failed"
+	m := f.manager(t, Settings{},
+		fileJob(f, t, "a", ""), fileJob(f, t, "b", ""), c,
+		requires(fileJob(f, t, "d", ""), "c"),       // transitively: c counts as failed
+		requires(fileJob(f, t, "e", ""), "b"),       // an incomplete snapshot is a backup
+		requires(fileJob(f, t, "f", ""), "missing"), // not in the run: ignored
+		requires(fileJob(f, t, "ok", ""), "e", "f"))
+
+	err := m.Run(context.Background())
+
+	require.ErrorIs(t, err, ErrJobsFailed)
+	assert.Contains(t, err.Error(), "3 of 7", "a, and the skipped c and d")
+	assert.ElementsMatch(t, []string{
+		"backup a", "backup b", "backup e", "backup f",
+		"backup ok",
+	}, backups(f.rec.list()), "c and d are neither locked nor backed up")
+	assert.NotContains(t, f.rec.list(), "lock c")
 }
 
 func TestManager_RunFailureHooks(t *testing.T) {

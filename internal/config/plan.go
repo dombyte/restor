@@ -26,6 +26,8 @@ type Plan struct {
 	OnFailure string
 	// Jobs are sorted by name.
 	Jobs []Job
+	// Included are the job files that include named, absolute and in the order read.
+	Included []string
 }
 
 // Repository is the restic repository and the settings of every restic call.
@@ -41,6 +43,10 @@ type Repository struct {
 	RetryLock      time.Duration
 	Prune          bool
 	MaxUnused      string
+	// Check runs restic check after forget and prune, reading CheckReadDataSubset of the
+	// data ("" reads none).
+	Check               bool
+	CheckReadDataSubset string
 }
 
 // Job is one job with the defaults applied.
@@ -57,9 +63,15 @@ type Job struct {
 	Scope    string
 	Services []string
 	Sources  []string
-	// After are the jobs this job waits for (its after plus the before of the others),
-	// sorted.
-	After             []string
+	// StdinCommand replaces Sources: restic runs it and saves its output as
+	// StdinFilename ("" is restic's default name).
+	StdinCommand  []string
+	StdinFilename string
+	// After are the jobs this job waits for (its after and requires, plus the before of
+	// the others), sorted.
+	After []string
+	// Requires are the jobs whose failure skips this one, sorted.
+	Requires          []string
 	Stop              bool
 	StartAll          bool
 	StopTimeout       time.Duration
@@ -82,6 +94,10 @@ type Job struct {
 
 // StopsServices reports whether the job stops services during its backup.
 func (j Job) StopsServices() bool { return j.Type != TypeFiles && j.Stop }
+
+// FromStdin reports whether the job backs up the output of its StdinCommand instead of
+// files.
+func (j Job) FromStdin() bool { return len(j.StdinCommand) > 0 }
 
 // StartsAll reports whether the job starts all of its services after its backup.
 func (j Job) StartsAll() bool { return j.Type != TypeFiles && j.StartAll }
@@ -134,6 +150,7 @@ func (f *File) plan() (*Plan, []error) {
 			URL: r.URL, EnvFile: r.EnvFile, Env: env, BackendOptions: r.BackendOptions,
 			LimitUpload: r.LimitUpload, LimitDownload: r.LimitDownload,
 			RetryLock: time.Duration(r.RetryLock), Prune: r.Prune, MaxUnused: r.MaxUnused,
+			Check: r.Check, CheckReadDataSubset: r.CheckReadDataSubset,
 		},
 		Post:      f.Post,
 		OnFailure: f.OnFailure,
@@ -154,28 +171,38 @@ func (f *File) lowerJobNames() []error {
 			})
 		}
 		j := f.Jobs[name]
-		j.Before, j.After = lowerAll(j.Before), lowerAll(j.After)
+		j.Before, j.After, j.Requires = lowerAll(j.Before), lowerAll(j.After),
+			lowerAll(j.Requires)
 		lower[key] = j
 	}
 	f.Jobs = lower
 	return errs
 }
 
-// afterLists returns for each job the jobs it waits for: its own after, plus every job
-// that names it in before.
+// afterLists returns for each job the jobs it waits for: its own after and requires,
+// plus every job that names it in before.
 func (f *File) afterLists() map[string][]string {
 	after := map[string][]string{}
 	for name, j := range f.Jobs {
-		after[name] = append(after[name], j.After...)
+		after[name] = slices.Concat(after[name], j.After, j.Requires)
 		for _, b := range j.Before {
 			after[b] = append(after[b], name)
 		}
 	}
 	for name, list := range after {
-		slices.Sort(list)
-		after[name] = slices.Compact(list)
+		after[name] = sortedUnique(list)
 	}
 	return after
+}
+
+// sortedUnique returns list sorted, without duplicates; nil when it is empty.
+func sortedUnique(list []string) []string {
+	if len(list) == 0 {
+		return nil
+	}
+	out := slices.Clone(list)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // job applies the defaults to j.
@@ -188,7 +215,8 @@ func (f *File) job(name string, j JobConfig, after []string) Job {
 		Name: name, Type: j.Type, ComposeFile: j.ComposeFile,
 		ComposeFiles: composeFiles(j.ComposeFile), Units: j.Units,
 		Scope: or(j.Scope, ScopeSystem), Services: j.Services, Sources: j.Sources,
-		After: after, Stop: pick(j.Stop, d.Stop, true),
+		StdinCommand: j.StdinCommand, StdinFilename: j.StdinFilename,
+		After: after, Requires: sortedUnique(j.Requires), Stop: pick(j.Stop, d.Stop, true),
 		StartAll:      pick(j.StartAll, d.StartAll, false),
 		StopTimeout:   duration(j.StopTimeout, d.StopTimeout, DefaultStopTimeout),
 		StartTimeout:  duration(j.StartTimeout, d.StartTimeout, DefaultStartTimeout),
