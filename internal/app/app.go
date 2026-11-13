@@ -26,6 +26,7 @@ import (
 	"github.com/dombyte/restor/internal/lock"
 	"github.com/dombyte/restor/internal/restic"
 	"github.com/dombyte/restor/internal/servicemanager"
+	"github.com/dombyte/restor/internal/state"
 	"github.com/dombyte/restor/internal/util"
 )
 
@@ -102,9 +103,11 @@ func New(o Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	locks := lockDir(o.Getenv)
 	manager, err := createManager(plan, managerDeps{
 		runner: command.New(o.Environ, component(o.Log, "command")), restic: resticClient,
-		clock: util.NewRealClock(), lockDir: lockDir(o.Getenv), log: o.Log,
+		clock: util.NewRealClock(), lockDir: locks, stateDir: stateDir(o.Getenv, locks),
+		log: o.Log,
 	})
 	if err != nil {
 		return nil, err
@@ -381,11 +384,12 @@ func keepLabel(n int) string {
 func (a *App) ShutdownTimeout() time.Duration { return a.manager.ShutdownTimeout() }
 
 type managerDeps struct {
-	runner  *command.Runner
-	restic  *restic.Client
-	clock   util.Clock
-	lockDir string
-	log     zerolog.Logger
+	runner   *command.Runner
+	restic   *restic.Client
+	clock    util.Clock
+	lockDir  string
+	stateDir string
+	log      zerolog.Logger
 }
 
 // SystemConfig is the configuration file of root, a system installation.
@@ -419,8 +423,21 @@ func lockDir(getenv func(string) string) string {
 	})
 }
 
+// stateDir picks the directory of the records of stopped services; locks is the
+// fallback for a user without a home directory.
+func stateDir(getenv func(string) string, locks string) string {
+	return state.DefaultDir(state.User{
+		UID: os.Getuid(), StateHome: getenv("XDG_STATE_HOME"), Home: getenv("HOME"),
+		Fallback: locks,
+	})
+}
+
 func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
 	locker, err := lock.New(lock.Settings{Dir: d.lockDir})
+	if err != nil {
+		return nil, err
+	}
+	records, err := state.New(state.Settings{Dir: d.stateDir})
 	if err != nil {
 		return nil, err
 	}
@@ -437,7 +454,8 @@ func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
 		Concurrency: plan.Concurrency, Prune: plan.Repository.Prune,
 		Check: plan.Repository.Check, Post: plan.Post, OnFailure: plan.OnFailure,
 	}, jobs, backup.Deps{
-		Restic: d.restic, Locker: locker, Hooks: d.runner, Log: component(d.log, "backup"),
+		Restic: d.restic, Locker: locker, State: records, Hooks: d.runner,
+		Log: component(d.log, "backup"),
 	})
 }
 

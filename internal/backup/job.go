@@ -315,6 +315,7 @@ func (m *Manager) stopServices(ctx context.Context, r *jobRun) ([]string, error)
 		r.warn(nil, "no services running, nothing to stop; backing up anyway")
 		return nil, nil
 	}
+	m.saveState(r, services)
 	r.log.Info().Strs("services", services).Msg("stopping services")
 	stopped, err := r.Services.Stop(ctx, services, s.StopTimeout)
 	switch {
@@ -327,9 +328,19 @@ func (m *Manager) stopServices(ctx context.Context, r *jobRun) ([]string, error)
 	return services, nil
 }
 
+// saveState records the services the job is about to stop, so that the next run starts
+// them when this one ends before it does. Without the record the backup still runs.
+func (m *Manager) saveState(r *jobRun, services []string) {
+	if err := m.d.State.Save(r.Settings.Name, services); err != nil {
+		r.warn(err, "cannot record the stopped services: if restor is killed before it "+
+			"starts them again, the next run will not")
+	}
+}
+
 // startServices starts the services stopServices stopped, and fails when they do not run
 // within the start timeout: a service that does not come back needs attention. It uses
 // its own bounded context so that services come back up after the run was cancelled.
+// Once they run, the record of the stopped services is removed.
 func (m *Manager) startServices(ctx context.Context, r *jobRun, services []string) error {
 	if len(services) == 0 {
 		return nil
@@ -345,6 +356,10 @@ func (m *Manager) startServices(ctx context.Context, r *jobRun, services []strin
 	case !running:
 		return fmt.Errorf("%w within %s: %s", ErrNotStarted, timeout,
 			strings.Join(services, ", "))
+	}
+	if err := m.d.State.Remove(r.Settings.Name); err != nil {
+		// The next run starts services that already run: harmless.
+		r.log.Warn().Err(err).Msg("cannot remove the record of the stopped services")
 	}
 	return nil
 }

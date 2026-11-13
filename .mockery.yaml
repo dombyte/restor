@@ -13,6 +13,7 @@ packages:
       Restic:
       Services:
       Locker:
+      State:
       Runner:
   github.com/dombyte/restor/internal/restic:
     interfaces:

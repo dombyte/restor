@@ -34,11 +34,44 @@ func (r *recorder) list() []string {
 	return append([]string(nil), r.calls...)
 }
 
+// memState keeps the records of stopped services in memory.
+type memState struct {
+	mu      sync.Mutex
+	records map[string][]string
+}
+
+func (s *memState) Save(job string, services []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records[job] = services
+	return nil
+}
+
+func (s *memState) Load(job string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.records[job], nil
+}
+
+func (s *memState) Remove(job string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.records, job)
+	return nil
+}
+
+func (s *memState) get(job string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.records[job]
+}
+
 type fixture struct {
 	rec    *recorder
 	restic *mocks.MockRestic
 	locker *mocks.MockLocker
 	hooks  *mocks.MockRunner
+	state  *memState
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -48,13 +81,14 @@ func newFixture(t *testing.T) *fixture {
 		restic: mocks.NewMockRestic(t),
 		locker: mocks.NewMockLocker(t),
 		hooks:  mocks.NewMockRunner(t),
+		state:  &memState{records: map[string][]string{}},
 	}
 	return f
 }
 
 func (f *fixture) deps() Deps {
 	return Deps{
-		Restic: f.restic, Locker: f.locker, Hooks: f.hooks, Log: zerolog.Nop(),
+		Restic: f.restic, Locker: f.locker, State: f.state, Hooks: f.hooks, Log: zerolog.Nop(),
 	}
 }
 
@@ -149,6 +183,12 @@ func TestNewManager_MissingDependencies(t *testing.T) {
 	_, err = NewManager(Settings{}, []Job{{Settings: JobSettings{Name: "x"}}}, f.deps())
 	require.ErrorIs(t, err, ErrMissingDependency)
 	assert.Contains(t, err.Error(), "Jobs[x].Services")
+
+	d := f.deps()
+	d.State = nil
+	_, err = NewManager(Settings{}, nil, d)
+	require.ErrorIs(t, err, ErrMissingDependency)
+	assert.Contains(t, err.Error(), "State")
 }
 
 func TestNewManager_RequiresNotAfter(t *testing.T) {

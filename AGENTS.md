@@ -22,9 +22,11 @@ restor orchestrates **restic** backups of several **jobs** on one host.
   up, plus, depending on its `type`, the services that
   must be stopped while they are backed up: `docker-compose`, `podman-compose`, `systemd`
   (system or user scope), or no type (files only, nothing to stop).
-- **Per job:** lock → pre hook → stop services → `restic backup --host=<host> --tag=<job>`
-  → start services → post hook (also after a failed backup) → on_failure hook (when it
-  failed).
+- **Before the jobs:** start the services that an earlier run stopped and never started
+  again (it was killed, or the host went down), from the state records.
+- **Per job:** lock → pre hook → record the services → stop services →
+  `restic backup --host=<host> --tag=<job>` → start services → remove the record → post
+  hook (also after a failed backup) → on_failure hook (when it failed).
 - **Order:** a job starts once the jobs it runs `after` (or that name it in `before`, or
   that it `requires`) have finished, and is skipped as failed when a job it `requires`
   failed; at most `concurrency` jobs run at once (1 = one after another, 0 = all), and
@@ -134,12 +136,15 @@ internal/app/              composition root: config Plan → Settings, CreateSer
                            passthrough
 internal/config/           YAML file (version 2) and its job files decoded strictly, ${VAR}
                            expansion, paths, env file, defaults → validated read-only Plan
-internal/backup/           orchestration: Manager (schedule, per-job run, hooks,
-                           forget/prune/unlock/check); declares Restic, Services, Locker, Runner
+internal/backup/           orchestration: Manager (recovery, schedule, per-job run, hooks,
+                           forget/prune/unlock/check); declares Restic, Services, Locker,
+                           State, Runner
 internal/restic/           restic CLI client: typed flags, backup, forget, prune, check,
                            unlock, version
 internal/servicemanager/   Compose (docker/podman), Systemd, Noop; status polling
 internal/lock/             flock(2) lock files per key, lock dir safety checks
+internal/state/            records of the services a job stopped (one JSON file per job,
+                           written atomically), state dir safety checks
 internal/command/          the only os/exec user: runs a program with a fixed env and ctx
                            (captured or attached to the terminal)
 internal/util/             RequireAll/DependencyError, Clock; clocktest (fake clock)
@@ -170,18 +175,19 @@ Layout rules:
 
 ```
 cmd/main               → internal/app, cobra, zerolog
-internal/app           → config, backup, restic, servicemanager, lock, command, util
+internal/app           → config, backup, restic, servicemanager, lock, state, command, util
 internal/backup        → util, zerolog
 internal/restic        → util, zerolog
 internal/servicemanager → util
 internal/lock          → util
+internal/state         → util
 internal/command       → zerolog
 internal/config        → yaml
 internal/util          → stdlib only
 ```
 
 Layers: `cmd → app (composition root) → backup (orchestration) → restic, servicemanager,
-lock, command (external clients)`. Dependencies flow down only; no import cycles.
+lock, state, command (external clients)`. Dependencies flow down only; no import cycles.
 
 Rules:
 - Only `internal/app` imports `config` and names concrete types. `backup`, `restic`,
@@ -189,8 +195,12 @@ Rules:
   config's `Plan` onto them. Only `restic` knows restic's flags: `app` turns the typed
   job and repository settings into arguments with `restic.BackupFlags`, `restic.Keep`,
   `restic.Repository` and `restic.PruneFlags`; `backup` passes them on unread.
-- `backup` talks to restic, the service managers, the locker and the hook runner only
-  through interfaces it declares itself (`Restic`, `Services`, `Locker`, `Runner`).
+- `backup` talks to restic, the service managers, the locker, the state records and the
+  hook runner only through interfaces it declares itself (`Restic`, `Services`, `Locker`,
+  `State`, `Runner`).
+- `state` and `lock` do the same job for different data and stay apart (no shared
+  helper for their directory checks): `lock` lives in `/run`, `state` must survive a
+  reboot.
 - `restic` and `servicemanager` run their CLIs through a `Runner` interface they declare;
   `command.Runner` implements it. Only `command` imports `os/exec` (`app` uses
   `exec.LookPath` for the startup warning).
@@ -236,6 +246,20 @@ restor itself has no data store. What it writes, and who writes it:
   services it did not stop (`Services.All` minus the stopped ones; `start` leaves running
   ones as they are), also with `stop: false`, but not after a cancel.
 
+- **State records:** `state.Store` keeps one file per job,
+  `<state dir>/<sha256 of job>.json` (`{"job", "services"}`), written to a temporary file,
+  synced and renamed. A job saves the services it is about to stop before the stop and
+  removes the record once `startServices` saw them running; a failed or timed-out start
+  keeps it. The state dir (`state.DefaultDir`) is `/var/lib/restor` for root,
+  `$XDG_STATE_HOME/restor` or `~/.local/state/restor` for other users, else the lock dir
+  (lost at a reboot); it persists because `compose stop` leaves containers stopped after
+  a reboot, also with `restart: unless-stopped`. Same safety checks as the lock dir
+  (`state.ErrUnsafeDir`). Before the jobs, `Manager.recoverAll` loads every job's record
+  (without a lock), and for one that exists takes the job's locks, reads it again and
+  starts the services: a lock that another process holds means that run owns the record.
+  A recovery is a run-level warning, a failed one a run-level failure (`RESTOR_ERROR`,
+  on_failure), and the record stays for the next run. Not in a dry run.
+
 ## 6. Lifecycle
 
 restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
@@ -253,7 +277,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
    commands that only need the repository); `restic version` must succeed and be at least the oldest supported release
    (`restic.Supported`), before any service is stopped; a release newer than the newest
    tested one is logged as a warning and runs.
-4. `Manager.Run`: run the jobs as the schedule allows; when the run was not cancelled:
+4. `Manager.Run`: start the services earlier runs left stopped (section 5), run the jobs
+   as the schedule allows; when the run was not cancelled:
    forget each job that has a complete snapshot and a `keep`, then, with
    `repository.prune` and only when every job has a complete snapshot, one prune + unlock
    (only if at least one job forgot); with `repository.check` one check, whatever the
@@ -288,7 +313,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - A failed job runs its on_failure hook after the post hook.
 - What goes wrong without failing the job is a warning: logged, and kept per job for
   `RESTOR_WARNINGS` (stop failed or timed out, no services running, incomplete snapshot,
-  `start_all` problems), plus the run-level ones (skipped forget or prune).
+  `start_all` problems, the record of stopped services not written), plus the run-level
+  ones (recovered services, skipped forget or prune).
 - A job whose `requires` job failed is skipped and fails (see Schedule).
 - Other jobs always continue, also those that run after the failed one; each failure is
   logged once by `Manager` with the job, and `main` logs the summary
@@ -327,6 +353,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `podman-restart.service`, the user unit after `podman-restart.service`, so that a run
   caught up at boot finds the containers started; `After=` on a unit that is not
   installed is ignored.
+- A run that ends without restarting services (killed after the deadline, OOM, power
+  loss) leaves their record; the next run starts them first (section 5).
 
 ### Rules (MUST)
 - Every goroutine has an owner that starts it and waits for it to end (`Manager.runJobs`
@@ -486,10 +514,11 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   a snapshot), after a failure `RESTOR_ERROR` and, when the job warned, `RESTOR_WARNINGS`
   (`; `-separated). The run-level `post` and `on_failure`
   get the run summary (`backup.summary`): `RESTOR_HOOK`, `RESTOR_STATUS` (`failed` when a
-  job or the maintenance failed, else `incomplete` when a snapshot is, else `success`),
+  job, the recovery or the maintenance failed, else `incomplete` when a snapshot is, else
+  `success`),
   the comma-separated `RESTOR_JOBS`, `RESTOR_SUCCEEDED_JOBS`, `RESTOR_INCOMPLETE_JOBS`,
   `RESTOR_FAILED_JOBS`, `RESTOR_SNAPSHOT_IDS` (`job=ID`) and, when anything failed,
-  `RESTOR_ERROR` (maintenance failures, then job failures, `; `-separated)
+  `RESTOR_ERROR` (recovery and maintenance failures, then job failures, `; `-separated)
   and, when anything warned, `RESTOR_WARNINGS` (run-level warnings, then each job's as
   `job: warning`). There is no `warning` status: hooks that compare `RESTOR_STATUS` keep
   working. Every value is cleaned before exec (`backup.execSafe`): NUL bytes dropped
@@ -665,8 +694,14 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   stop retention for every job. The other jobs are not affected, except those that
   `require` it.
 - **Warnings as a variable, not a status:** `RESTOR_WARNINGS` carries what went wrong
-  without failing (a backup of live data, services that did not stop in time). A new
+  without failing (a backup of live data, services left stopped by an earlier run). A new
   `RESTOR_STATUS` value would have broken every hook that compares it.
+- **Records of stopped services, started by the next run:** a killed run (shutdown
+  deadline, OOM, power loss) used to leave services down until someone noticed, and the
+  next backup found nothing to stop. The record is a file per job in a directory that
+  survives a reboot; it is read under the job's lock, so a second restor process never
+  starts services that a running backup stopped on purpose. Recovery runs only for the
+  jobs of the run: `restor run web` does not touch the record of `db`.
 - **The process group gets SIGKILL after its leader was reaped:** `exec.Cmd.Wait` reaps
   the leader before `command.Runner.finish` can kill what is left of the group. While a
   member lives, Linux keeps the group ID allocated, so the signal reaches only that
