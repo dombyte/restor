@@ -241,7 +241,7 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 ### Run
 1. `cmd/main`: cobra parses the command and flags (`--config` defaults to
    `app.DefaultConfig`, see CLI); logger = console writer on stderr, `--debug` = debug
-   level (`validate`, `snapshots` and `restic` log warnings only); `signal.NotifyContext` for SIGINT/SIGTERM;
+   level (`validate`, `snapshots` and `restic` log warnings only); `signal.NotifyContext` for SIGINT/SIGTERM/SIGHUP;
    build info is logged. `restor` without a command is an error, so the call of version
    1 (`restor --config x`) cannot pass as a backup.
 2. `app.New`: `config.Load` (file, expansion, paths, env file, defaults, validation),
@@ -285,7 +285,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   (`backup: jobs failed: N of M`).
 
 ### Shutdown and supervision
-- SIGINT/SIGTERM cancel the run context: running commands get SIGTERM and are killed 10 s
+- SIGINT/SIGTERM/SIGHUP cancel the run context (SIGHUP: a manual run in an SSH session
+  that drops): running commands get SIGTERM and are killed 10 s
   later (`exec.Cmd.Cancel`/`WaitDelay`, so restic can remove its repository lock). Each
   command runs in its own process group: SIGTERM goes to the whole group (a hook's child
   processes too), and what is left of it gets SIGKILL when the command returns; no
