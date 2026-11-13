@@ -16,6 +16,7 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
 - Hooks before and after each job and on failure, with the job's result and warnings in
   their environment
 - Services that a killed or crashed run left stopped are started by the next run
+- `restor run --dry-run` shows what a run would stop and back up
 - `restor restore` restores a snapshot, as a dry run unless `--apply` is given
 - `restor restic ...` runs restic against the configured repository, for everything else
 
@@ -85,6 +86,7 @@ sudo loginctl enable-linger "$USER"   # keep the timer running while logged out
 ```bash
 restor run                      # back up every job, then forget and prune
 restor run web db               # only these jobs (their order among each other is kept)
+restor run --dry-run            # show what would be stopped and backed up, change nothing
 restor validate                 # check the config, print the jobs in start order and
                                 # each retention policy once, with the jobs using it
 restor snapshots                # list the snapshots of every job

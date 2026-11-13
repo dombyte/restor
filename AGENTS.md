@@ -35,6 +35,8 @@ restor orchestrates **restic** backups of several **jobs** on one host.
   job, then one
   repository-wide `restic prune` and `restic unlock` (only with `repository.prune`), then
   `restic check` (only with `repository.check`); the run-level post hook, then the run-level on_failure hook when anything failed.
+- **`restor run --dry-run`:** only reports the services each job would stop and runs
+  `restic backup --dry-run`.
 - **Runtime:** a single CLI binary that runs **on the host** as a oneshot systemd service
   (`restor run`), triggered by a systemd timer (`example/restor.service`,
   `example/restor.timer`). It shells out to `restic`, `docker compose`, `podman compose`
@@ -88,6 +90,7 @@ go test -race ./...                                       # all unit tests, as i
 go tool mockery                                           # regenerate mocks (.mockery.yaml)
 make build                                                # ./restor with version info (ldflags)
 ./restor run --config config.yaml [--debug] [job...]     # run one backup cycle
+./restor run --dry-run                                    # what a run would stop and back up
 ./restor validate --config config.yaml                    # check config, print job order
 ./restor restic --config config.yaml snapshots            # restic with repo + env file
 ./restor version                                          # build info (also --version, -v)
@@ -136,9 +139,9 @@ internal/app/              composition root: config Plan → Settings, CreateSer
                            passthrough
 internal/config/           YAML file (version 2) and its job files decoded strictly, ${VAR}
                            expansion, paths, env file, defaults → validated read-only Plan
-internal/backup/           orchestration: Manager (recovery, schedule, per-job run, hooks,
-                           forget/prune/unlock/check); declares Restic, Services, Locker,
-                           State, Runner
+internal/backup/           orchestration: Manager (recovery, schedule, per-job run, dry run,
+                           hooks, forget/prune/unlock/check); declares Restic, Services,
+                           Locker, State, Runner
 internal/restic/           restic CLI client: typed flags, backup, forget, prune, check,
                            unlock, version
 internal/servicemanager/   Compose (docker/podman), Systemd, Noop; status polling
@@ -458,6 +461,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 ### CLI
 - `restor run [job...]`: one backup cycle of all or the named jobs (`Plan.Select`;
   unknown names are an error). Ordering against jobs that are not selected is dropped.
+  `--dry-run`: no recovery, locks, hooks, service changes or maintenance; each job logs
+  the services it would stop (`Services.Running`) and runs `restic backup --dry-run`
+  (`BackupFlags.DryRun`); exit code as for a run.
 - `restor validate`: loads and wires everything, then prints the jobs in the order they
   start with concurrency 1 (`Manager.Order`), with type, after, requires, stop, start
   all, a keep label and sources (above them the concurrency, prune and check settings
@@ -591,8 +597,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `host,paths` would compare a job with another one that has the same sources, and
   `--skip-if-unchanged` would then skip its snapshot); backup flags
   from `exclude`, `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`,
-  `exclude_larger_than`, `one_file_system`, `skip_if_unchanged` and `tags` (extra
-  `--tag=`). A `stdin_command` job runs `restic [global] backup --json
+  `exclude_larger_than`, `one_file_system`, `skip_if_unchanged`, `tags` (extra
+  `--tag=`) and, for `run --dry-run`, `--dry-run`. A `stdin_command` job runs `restic [global] backup --json
   --group-by=host,tags --stdin-from-command [--stdin-filename=…] [--skip-if-unchanged]
   [--tag=…] --tag=<job> -- <command>`: the command takes the place of the sources and
   the file selection flags are left out (`BackupFlags.StdinFromCommand`); a command that
@@ -944,7 +950,7 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
   (`make integration`; `make integration-oldest` with the oldest supported release, which
   CI tests too): one subtest per restic feature restor uses (every backup, forget,
   global and prune flag, skip-if-unchanged, exit codes 3/10/11/12, a whole `restor run`,
-  `restor restore`, forget per host), so a failing release shows what it lacks. A new restic option gets a check there.
+  `restor restore`, forget per host, backup `--dry-run`, `restor run --dry-run`), so a failing release shows what it lacks. A new restic option gets a check there.
   Backups that must be unchanged use `testdata/static` and are retried
   (`unchangedWithin`): restic also records the directories above a source, those of a
   temp dir change while other tests run, and even the home directory can change.

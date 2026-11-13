@@ -87,6 +87,10 @@ type Settings struct {
 	Prune bool
 	// Check runs check after forget and prune, whatever the jobs' results.
 	Check bool
+	// DryRun only reports the services each job would stop and runs its backup with the
+	// dry-run flag (in JobSettings.BackupArgs): no locks, hooks, service changes or
+	// maintenance.
+	DryRun bool
 	// Post is the hook that runs once after every run, with a summary of it.
 	Post string
 	// OnFailure is the hook that runs once after a run in which something failed.
@@ -149,18 +153,24 @@ func NewManager(s Settings, jobs []Job, d Deps) (*Manager, error) {
 // snapshot is complete, and with Check, check. A cancelled run does no maintenance. Job
 // failures are logged here and summarized in the returned ErrJobsFailed; recovery,
 // forget, prune, unlock and check failures are only logged. Then the Post hook runs, and
-// when anything failed, the OnFailure hook.
+// when anything failed, the OnFailure hook. A dry run does only the backups.
 func (m *Manager) Run(ctx context.Context) error {
 	m.d.Log.Info().Int("concurrency", m.s.Concurrency).Int("jobs", len(m.jobs)).
-		Stringer("shutdown_timeout", m.ShutdownTimeout()).Msg("starting backup run")
+		Bool("dry_run", m.s.DryRun).Stringer("shutdown_timeout", m.ShutdownTimeout()).
+		Msg("starting backup run")
 
-	n := m.recoverAll(ctx)
+	var n notes
+	if !m.s.DryRun {
+		n = m.recoverAll(ctx)
+	}
 	results := m.runJobs(ctx)
-	if ctx.Err() == nil {
+	if ctx.Err() == nil && !m.s.DryRun {
 		n.add(m.maintain(ctx, results))
 	}
 	s := m.summarize(results, n)
-	m.runHooks(ctx, s)
+	if !m.s.DryRun {
+		m.runHooks(ctx, s)
+	}
 	if len(s.failed) > 0 {
 		return fmt.Errorf("%w: %d of %d", ErrJobsFailed, len(s.failed), len(m.jobs))
 	}
@@ -224,11 +234,13 @@ func (m *Manager) runJobs(ctx context.Context) []result {
 	}
 }
 
-// startJob runs one job: skipped when the job it requires failed, else a backup.
+// startJob runs one job: skipped when the job it requires failed, a dry run, or a backup.
 func (m *Manager) startJob(ctx context.Context, j Job, failedRequirement string) result {
 	switch {
 	case failedRequirement != "":
 		return m.skipJob(ctx, j, failedRequirement)
+	case m.s.DryRun:
+		return m.dryRunJob(ctx, j)
 	default:
 		return m.runJob(ctx, j)
 	}

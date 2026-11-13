@@ -184,7 +184,7 @@ func TestJobSettings(t *testing.T) {
 		OneFileSystem: true, Tags: []string{"prod"}, Pre: "pre", Post: "post",
 		OnFailure: "fail", After: []string{"db"}, BackupTimeout: time.Hour,
 	}
-	s := jobSettings(j)
+	s := jobSettings(j, false)
 	assert.Equal(t, "web", s.Name)
 	assert.Equal(t, []string{"s"}, s.Services)
 	assert.Equal(t, []string{"/x"}, s.Sources)
@@ -201,13 +201,16 @@ func TestJobSettings(t *testing.T) {
 	assert.Equal(t, time.Hour, s.BackupTimeout)
 
 	j.Type = config.TypeFiles
-	assert.False(t, jobSettings(j).StopServices, "file jobs stop nothing")
+	assert.False(t, jobSettings(j, false).StopServices, "file jobs stop nothing")
+	assert.Equal(t, []string{"--exclude=*.tmp", "--one-file-system", "--dry-run", "--tag=prod"},
+		jobSettings(j, true).BackupArgs)
 
 	j.Sources, j.StdinCommand, j.StdinFilename = nil, []string{"pg_dumpall", "-c"}, "pg.sql"
-	s = jobSettings(j)
+	s = jobSettings(j, true)
 	assert.Equal(t, []string{"pg_dumpall", "-c"}, s.Sources, "the command is backed up")
-	assert.Equal(t, []string{"--stdin-from-command", "--stdin-filename=pg.sql", "--tag=prod"},
-		s.BackupArgs, "without the file selection")
+	assert.Equal(t, []string{
+		"--stdin-from-command", "--stdin-filename=pg.sql", "--dry-run", "--tag=prod",
+	}, s.BackupArgs, "without the file selection")
 }
 
 func TestHostName(t *testing.T) {

@@ -115,6 +115,13 @@ func TestIntegration_CLI(t *testing.T) {
 	require.Len(t, oldIDs, 1)
 	app, removed := appIDs[0], oldIDs[0]
 
+	t.Run("dry run", func(t *testing.T) {
+		code, _, stderr := cli("run", "-c", cfg, "--dry-run")
+		require.Equal(t, 0, code, stderr)
+		assert.Contains(t, stderr, "dry run completed")
+		assert.Equal(t, []string{app}, e.snapshotIDs(t, cfg, "app"), "no new snapshot")
+	})
+
 	t.Run("snapshots", func(t *testing.T) {
 		code, out, stderr := cli("snapshots", "-c", cfg)
 		require.Equal(t, 0, code, stderr)

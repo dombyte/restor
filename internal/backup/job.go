@@ -182,7 +182,9 @@ func (m *Manager) skipJob(ctx context.Context, j Job, required string) result {
 	res := failure(fmt.Errorf("backup: %s: %w: %s", j.Settings.Name, ErrRequiredJobFailed,
 		required))
 	r.log.Error().Err(res.err).Msg("job skipped")
-	m.jobHook(ctx, r, hookOnFailure, res)
+	if !m.s.DryRun {
+		m.jobHook(ctx, r, hookOnFailure, res)
+	}
 	return res
 }
 
@@ -431,6 +433,36 @@ func (m *Manager) resticBackup(ctx context.Context, s JobSettings) (string, erro
 		return id, fmt.Errorf("backup_timeout of %s exceeded: %w", s.BackupTimeout, err)
 	}
 	return id, err
+}
+
+// dryRunJob logs the services the job would stop and runs its backup, whose BackupArgs
+// carry restic's --dry-run: no locks, hooks or service changes, and no snapshot.
+func (m *Manager) dryRunJob(ctx context.Context, j Job) result {
+	r := m.newRun(j)
+	if j.Settings.StopServices {
+		services, err := j.Services.Running(ctx, j.Settings.Services)
+		if err != nil {
+			return m.dryRunFailed(r, err)
+		}
+		r.log.Info().Strs("services", services).Msg("dry run: would stop these services")
+	}
+	_, err := m.resticBackup(ctx, j.Settings)
+	var incomplete interface{ Incomplete() bool }
+	switch {
+	case errors.As(err, &incomplete) && incomplete.Incomplete():
+		r.warn(err, "dry run: some source files could not be read")
+		return backedUp(outcomeIncomplete, "")
+	case err != nil:
+		return m.dryRunFailed(r, err)
+	}
+	r.log.Info().Msg("dry run completed")
+	return backedUp(outcomeComplete, "")
+}
+
+func (m *Manager) dryRunFailed(r *jobRun, err error) result {
+	res := failure(fmt.Errorf("backup: %s: %w", r.Settings.Name, err))
+	r.log.Error().Err(res.err).Msg("dry run failed")
+	return res
 }
 
 // hook runs command, split on whitespace, with env added; an empty command does nothing.
