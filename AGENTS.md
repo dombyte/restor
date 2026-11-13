@@ -615,6 +615,12 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   days, forgetting would rotate out every complete snapshot and keep only incomplete ones.
   Forget runs without `prune` too: forgetting alone frees nothing but keeps the snapshot
   list bounded.
+- **The process group gets SIGKILL after its leader was reaped:** `exec.Cmd.Wait` reaps
+  the leader before `command.Runner.finish` can kill what is left of the group. While a
+  member lives, Linux keeps the group ID allocated, so the signal reaches only that
+  group; a new process could get the ID only after the group is empty, and would have to
+  lead a group of its own within microseconds. Killing before the reap would need
+  `waitid(WNOWAIT)` per platform; not worth it for that window.
 - **Forget groups by host, selected by tag:** restic's default grouping (`host,paths`)
   would leave the snapshots of changed `sources` in a group that is never forgotten, and
   `host,tags` the same after a change of `tags`. `--tag=<job>` selects the job, grouping by
