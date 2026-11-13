@@ -10,6 +10,7 @@ import (
 var (
 	errDotEnvLine  = errors.New(`expected KEY=value`)
 	errDotEnvQuote = errors.New("unterminated quote")
+	errDotEnvAfter = errors.New(`text after the closing quote (only a " #" comment may follow)`)
 )
 
 // loadEnvFile reads a .env file (see parseDotEnv); the values are taken literally, a $
@@ -24,9 +25,9 @@ func loadEnvFile(path string) (map[string]string, error) {
 
 // parseDotEnv parses KEY=value lines of any length. Blank lines and # comments are
 // skipped, and an "export " prefix is ignored. A value in double or single quotes is
-// taken as is, without escape sequences (unlike systemd's EnvironmentFile=); an unquoted
-// value ends at " #". A line without "=" is an error, so a mistyped secret is not
-// silently dropped.
+// taken as is, without escape sequences (unlike systemd's EnvironmentFile=), and only a
+// " #" comment may follow it; an unquoted value ends at " #". A line without "=" is an
+// error, so a mistyped secret is not silently dropped.
 func parseDotEnv(data []byte) (map[string]string, error) {
 	env := map[string]string{}
 	for i, line := range strings.Split(string(data), "\n") {
@@ -64,5 +65,16 @@ func dotEnvValue(value string) (string, error) {
 	if end < 0 {
 		return "", errDotEnvQuote
 	}
+	// `KEY="abc"def` would otherwise silently lose the "def" of a password.
+	if !commentOnly(value[end+2:]) {
+		return "", errDotEnvAfter
+	}
 	return value[1 : end+1], nil
+}
+
+// commentOnly reports whether rest, what follows a closing quote, is empty or a comment
+// after whitespace.
+func commentOnly(rest string) bool {
+	trimmed := strings.TrimLeft(rest, " \t")
+	return trimmed == "" || len(trimmed) < len(rest) && trimmed[0] == '#'
 }

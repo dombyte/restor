@@ -105,7 +105,7 @@ func loadJobFile(path string, getenv func(string) string) (map[string]JobConfig,
 		return nil, []error{err}
 	}
 	errs := jobFileKeys(root)
-	expandNode(root, getenv)
+	errs = append(errs, expandNode(root, getenv, "")...)
 	var inc includeFile
 	if err := root.Decode(&inc); err != nil {
 		return nil, inFile(path, append(errs, decodeErrors(err, root)...))

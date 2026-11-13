@@ -357,8 +357,10 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   are checked against the type they are merged into; top-level keys starting with `x-`
   are ignored (a place for anchors, as in Compose files).
 - `$VAR`, `${VAR}` and `${VAR:-default}` in scalar values (not keys) are expanded once at
-  load time from the **process** environment; `$$` is a literal `$`. A plain scalar is
-  re-typed after expansion, so `${LIMIT}` can fill a number.
+  load time from the **process** environment; `$$` is a literal `$`. A variable without
+  a default that is unset or empty is an error with the field path and line (`getenv`
+  cannot tell the two apart; `${VAR:-}` allows empty). A plain scalar is re-typed after
+  expansion, so `${LIMIT}` can fill a number.
 - Relative `repository.env_file`, `include`, `compose_file`, `sources` and
   `exclude_file` are resolved against the directory of the config file, a job file's
   against its own (systemd runs restor in `/`); hooks and `stdin_command` are not (they
@@ -376,7 +378,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - **Environment:** restic gets the process env + `repository.env_file` +
   `RESTIC_REPOSITORY` (from `repository.url`, if set). The env file is `.env` only
   (`KEY=value` per line, `export ` prefix allowed, a line without `=` is an error,
-  `"…"`/`'…'` values taken as is, an unquoted value ends at ` #`) and its values are
+  `"…"`/`'…'` values taken as is and followed by nothing or a whitespace + `#` comment, an
+  unquoted value ends at ` #`) and its values are
   **never expanded**. Service managers and hooks get only the process env (hooks plus
   their `RESTOR_*` variables).
 - Validation (all problems at once, with field paths): `version` is 2; `concurrency` ≥ 0;

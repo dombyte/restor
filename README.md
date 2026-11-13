@@ -154,7 +154,9 @@ jobs:
 startup and every problem is reported with its field path; an unknown key is an error,
 so typos never go unnoticed. Durations are strings such as `30s`, `5m` or `4h`.
 `$VAR`, `${VAR}` and `${VAR:-default}` in values are replaced from restor's process
-environment; `$$` is a literal `$`. Relative `env_file`, `compose_file`, `sources` and
+environment; `$$` is a literal `$`. A variable that is unset or empty is an error, so
+`${DATA}/db` never becomes `/db`; write `${VAR:-}` when empty is fine, and `$$` for a `$`
+that restic should see (`*.$$1`). Relative `env_file`, `compose_file`, `sources` and
 `exclude_file` paths are resolved against the directory of the config file; `~` is not
 expanded (use `$HOME`). YAML anchors and merge keys work: keep shared blocks under a
 top-level key starting with `x-` and merge them with `<<: *name`.
@@ -182,7 +184,9 @@ in the backup; `restor run` then fails with "no jobs configured".
 **The env file** holds the variables of restic only: the repository password and the
 backend credentials, and restic's own settings such as `RESTIC_CACHE_DIR` or
 `RESTIC_COMPRESSION`. One `KEY=value` per line, like systemd's `EnvironmentFile=`, but
-values are taken literally, also in quotes: a `$` or `\` in a password stays as it is. Keep it private (`chmod 600`);
+values are taken literally, also in quotes: a `$` or `\` in a password stays as it is.
+Only a ` #` comment may follow a closing quote (`KEY="abc"def` is an error). Keep it
+private (`chmod 600`);
 restor warns when other users can read it. Hooks and service managers do not see it.
 
 **Jobs:** the name is case-insensitive, its lowercase form is the restic tag, and it must
@@ -383,6 +387,12 @@ restor restore 1a2b3c4d --in-place --include /srv/app/db --apply
 - Only the repository part of the configuration is needed, so it works on a new host with
   a file that has `version` and `repository` only. Ownership is restored only when run
   as root.
+
+## Upgrading from an earlier 2.x release
+
+- **Unset variables are errors:** `${VAR}` without a default and an unset or empty `VAR`
+  used to become empty; write `${VAR:-}` where that was meant.
+- **Env file:** text after a closing quote is an error instead of being dropped.
 
 ## Upgrading from configuration version 1
 

@@ -497,6 +497,22 @@ jobs:
 	assert.Equal(t, "/bin/h", plan.Jobs[0].Pre)
 }
 
+func TestLoad_UnsetVariable(t *testing.T) {
+	t.Parallel()
+	_, err := load(t, `version: 2
+jobs:
+  web:
+    sources: ["${DATA}/db"]
+    exclude: ['*.$1']
+    pre: ${HOOK:-}
+`, nil)
+
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "jobs.web.sources: $DATA is not set (line 4)")
+	assert.Contains(t, err.Error(), "jobs.web.exclude: $1 is not set (line 5)")
+	assert.NotContains(t, err.Error(), "HOOK", "a default makes a variable optional")
+}
+
 func TestPlan_Select(t *testing.T) {
 	t.Parallel()
 	plan := &Plan{Concurrency: 1, Jobs: []Job{{Name: "a"}, {Name: "b"}, {Name: "c"}}}
