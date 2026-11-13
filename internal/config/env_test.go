@@ -63,13 +63,23 @@ func TestParseDotEnv_Values(t *testing.T) {
 	}, got, "values are literal: no $ expansion")
 }
 
+func TestParseDotEnv_TextAfterQuote(t *testing.T) {
+	t.Parallel()
+	for _, line := range []string{`A="abc"def`, `A='abc'#x`, `A="abc" def`} {
+		_, err := parseDotEnv([]byte(line))
+		require.ErrorIs(t, err, errDotEnvAfter, line)
+	}
+	got, err := parseDotEnv([]byte("A=\"abc\"\t# comment"))
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"A": "abc"}, got)
+}
+
 func TestExpand(t *testing.T) {
 	t.Parallel()
 	env := getenv(map[string]string{"SET": "value", "EMPTY": ""})
 	tests := map[string]string{
 		"${SET}":                   "value",
 		"$SET/x":                   "value/x",
-		"${MISSING}":               "",
 		"${MISSING:-eu-central-1}": "eu-central-1",
 		"${EMPTY:-fallback}":       "fallback",
 		"${SET:-fallback}":         "value",
@@ -79,6 +89,12 @@ func TestExpand(t *testing.T) {
 		"$$SET":                    "$SET",
 	}
 	for in, want := range tests {
-		assert.Equal(t, want, expand(in, env), in)
+		got, missing := expand(in, env)
+		assert.Equal(t, want, got, in)
+		assert.Empty(t, missing, in)
 	}
+	got, missing := expand("${MISSING}/db/$EMPTY/*.$1", env)
+	assert.Equal(t, "/db//*.", got)
+	assert.Equal(t, []string{"MISSING", "EMPTY", "1"}, missing,
+		"unset or empty without a default")
 }

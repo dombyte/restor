@@ -44,7 +44,7 @@ func Load(path string, getenv func(string) string) (*Plan, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	keyErrs := unknownKeys(root, reflect.TypeFor[File](), "")
-	expandNode(root, getenv)
+	keyErrs = append(keyErrs, expandNode(root, getenv, "")...)
 	var f File
 	if err := root.Decode(&f); err != nil {
 		return nil, fmt.Errorf("config: %w",
@@ -259,41 +259,67 @@ func keyPath(path, key string) string {
 	return joinPath(path, key)
 }
 
-// expandNode replaces ${VAR} references in the scalar values below n (not in keys). A
-// plain scalar is re-typed after the expansion, so "${LIMIT}" can fill a number.
-func expandNode(n *yaml.Node, getenv func(string) string) {
+// expandNode replaces ${VAR} references in the scalar values below n (not in keys) and
+// returns an error, with the field path below path, for every variable that is unset or
+// empty and has no default: a path such as "${DATA}/db" would otherwise silently become
+// "/db". A plain scalar is re-typed after the expansion, so "${LIMIT}" can fill a number.
+func expandNode(n *yaml.Node, getenv func(string) string, path string) []error {
+	var errs []error
 	switch n.Kind {
 	case yaml.ScalarNode:
-		if v := expand(n.Value, getenv); v != n.Value {
-			n.Value = v
-			if n.Style == 0 {
-				n.Tag = ""
-			}
-		}
+		errs = expandScalar(n, getenv, path)
 	case yaml.MappingNode:
-		for i := 1; i < len(n.Content); i += 2 {
-			expandNode(n.Content[i], getenv)
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			errs = append(errs, expandNode(n.Content[i+1], getenv,
+				keyPath(path, n.Content[i].Value))...)
 		}
 	default:
 		for _, c := range n.Content {
-			expandNode(c, getenv)
+			errs = append(errs, expandNode(c, getenv, path)...)
 		}
 	}
+	return errs
+}
+
+// expandScalar expands the value of the scalar node n (see expandNode).
+func expandScalar(n *yaml.Node, getenv func(string) string, path string) []error {
+	v, missing := expand(n.Value, getenv)
+	errs := make([]error, 0, len(missing))
+	for _, name := range missing {
+		errs = append(errs, &FieldError{Path: path, Problem: fmt.Sprintf(
+			"$%s is not set (line %d); write ${%s:-} for an optional value, or $$ for "+
+				"a literal $", name, n.Line, name)})
+	}
+	if v != n.Value {
+		n.Value = v
+		if n.Style == 0 {
+			n.Tag = ""
+		}
+	}
+	return errs
 }
 
 // expand replaces $VAR and ${VAR} with getenv(VAR); ${VAR:-default} uses default when
-// VAR is unset or empty, and $$ is a literal $.
-func expand(s string, getenv func(string) string) string {
-	return os.Expand(s, func(name string) string {
+// VAR is unset or empty, and $$ is a literal $. It also returns the variables without a
+// default that are unset or empty (getenv cannot tell them apart).
+func expand(s string, getenv func(string) string) (string, []string) {
+	var missing []string
+	out := os.Expand(s, func(name string) string {
 		if name == "$" {
 			return "$"
 		}
 		name, def, hasDefault := strings.Cut(name, ":-")
-		if v := getenv(name); v != "" || !hasDefault {
+		v := getenv(name)
+		switch {
+		case v != "":
 			return v
+		case hasDefault:
+			return def
 		}
-		return def
+		missing = append(missing, name)
+		return ""
 	})
+	return out, missing
 }
 
 // homePaths reports paths that start with "~": the shell expands it, YAML does not, so
