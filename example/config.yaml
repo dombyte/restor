@@ -42,6 +42,11 @@ repository:
   #   rest:  rest:https://user:pass@host:8000/repo     (prefer the env file for passwords)
   url: s3:https://s3.amazonaws.com/your-backups
 
+  # The host name of the snapshots: backup records it, and forget only thins out the
+  # snapshots of this host, so several hosts can share the repository. Default: the
+  # system's host name; set it after a rename to keep the old series.
+  # host: nas
+
   # Variables for restic only (not for hooks or service managers): the password and the
   # backend credentials. One KEY=value per line, values are taken literally (a "$" in a
   # password stays a "$"). Keep it private: chmod 600 (restor warns otherwise).

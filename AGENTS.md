@@ -22,13 +22,15 @@ restor orchestrates **restic** backups of several **jobs** on one host.
   up, plus, depending on its `type`, the services that
   must be stopped while they are backed up: `docker-compose`, `podman-compose`, `systemd`
   (system or user scope), or no type (files only, nothing to stop).
-- **Per job:** lock → pre hook → stop services → `restic backup --tag=<job>` → start
-  services → post hook (also after a failed backup) → on_failure hook (when it failed).
+- **Per job:** lock → pre hook → stop services → `restic backup --host=<host> --tag=<job>`
+  → start services → post hook (also after a failed backup) → on_failure hook (when it
+  failed).
 - **Order:** a job starts once the jobs it runs `after` (or that name it in `before`, or
   that it `requires`) have finished, and is skipped as failed when a job it `requires`
   failed; at most `concurrency` jobs run at once (1 = one after another, 0 = all), and
   jobs that share a compose file or systemd unit never run together.
-- **After all jobs:** `restic forget --group-by=host --tag=<job> <keep>` per job, then one
+- **After all jobs:** `restic forget --group-by=host --host=<host> --tag=<job> <keep>` per
+  job, then one
   repository-wide `restic prune` and `restic unlock` (only with `repository.prune`), then
   `restic check` (only with `repository.check`); the run-level post hook, then the run-level on_failure hook when anything failed.
 - **Runtime:** a single CLI binary that runs **on the host** as a oneshot systemd service
@@ -385,8 +387,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - Validation (all problems at once, with field paths): `version` is 2; `concurrency` ≥ 0;
   `jobs` may be empty; job names and tags are not empty, do not start with `-` and
   contain no `,` or whitespace (they are restic tags, and restic splits `--tag` on commas);
-  `type` is `docker-compose`, `podman-compose`, `systemd` or absent; `compose_file` for
-  the compose types, `units` for systemd, `scope` is `system` or `user`, `services` of a
+  `repository.host` like a job name; `type` is `docker-compose`, `podman-compose`,
+  `systemd` or absent; `compose_file` for the compose types, `units` for systemd, `scope`
+  is `system` or `user`, `services` of a
   systemd job are among its `units`; keys of another type are errors (`units` on a compose
   job, `services`/`stop`/`start_all`/timeouts on a files-only job); `sources` required
   unless `stdin_command`, no empty entries; `stdin_command` not empty and without empty
@@ -422,7 +425,7 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - `restor validate`: loads and wires everything, then prints the jobs in the order they
   start with concurrency 1 (`Manager.Order`), with type, after, requires, stop, start
   all, a keep label and sources (above them the concurrency, prune and check settings
-  and the job files read), and below them each distinct retention policy once with its label (A, B, … in
+  and the job files read, and the host), and below them each distinct retention policy once with its label (A, B, … in
   order of first use; `-` = never forgotten) and its jobs; never the repository URL (it
   may hold credentials). Without jobs it says so instead of the tables.
 - `restor snapshots [job...]`: `restic <repository global flags> snapshots --tag=<job>…`
@@ -528,8 +531,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `backend_options` entry (sorted), `--limit-upload=`, `--limit-download=`,
   `--retry-lock=`. Settings restic reads from its environment (`RESTIC_CACHE_DIR`,
   `RESTIC_COMPRESSION`, `RESTIC_PACK_SIZE`, …) get no config key: they go in the env file.
-- `restic [global] backup --json --group-by=host,tags [backup flags] --tag=<job> --
-  <sources>`: the parent snapshot comes from the job's own snapshots (restic's default
+- `restic [global] backup --json --group-by=host,tags [backup flags] --host=<host>
+  --tag=<job> -- <sources>`: the host is `repository.host` or `os.Hostname()` (startup
+  fails without one, `app.ErrNoHostname`), the same for forget; the parent snapshot comes from the job's own snapshots (restic's default
   `host,paths` would compare a job with another one that has the same sources, and
   `--skip-if-unchanged` would then skip its snapshot); backup flags
   from `exclude`, `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`,
@@ -551,7 +555,7 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   only restic's last stderr lines. backup writes its errors there as JSON messages; each
   is replaced by its text (`message`, or `error.message` for an unreadable file), so logs
   and `RESTOR_ERROR` read `Fatal: …`, not `{"message_type":"exit_error",…}`.
-- `restic [global] forget --group-by=host --tag=<job> [keep flags]`; keep flags
+- `restic [global] forget --group-by=host --host=<host> --tag=<job> [keep flags]`; keep flags
   `--keep-last=` … `--keep-yearly=`, `--keep-within…=` and `--keep-tag=`.
 - `restic [global] prune [--max-unused=]` and `restic [global] unlock`.
 - `restic [global] check [--read-data-subset=]` (`restic.CheckFlags`), after prune and
@@ -622,6 +626,13 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   days, forgetting would rotate out every complete snapshot and keep only incomplete ones.
   Forget runs without `prune` too: forgetting alone frees nothing but keeps the snapshot
   list bounded.
+- **Forget selects this host:** without `--host`, forget selected a job's snapshots of
+  every host, so in a repository shared by several hosts one host's `keep` thinned out
+  the other host's snapshots of a job with the same name (and its prune then deleted
+  them). Backup and forget therefore both pass the same host, `repository.host` or the
+  system's; the key exists for a renamed host, whose old series would otherwise never be
+  forgotten again. `restor snapshots` lists every host's snapshots: a restore may need
+  another host's.
 - **The process group gets SIGKILL after its leader was reaped:** `exec.Cmd.Wait` reaps
   the leader before `command.Runner.finish` can kill what is left of the group. While a
   member lives, Linux keeps the group ID allocated, so the signal reaches only that
@@ -864,7 +875,7 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
   (`make integration`; `make integration-oldest` with the oldest supported release, which
   CI tests too): one subtest per restic feature restor uses (every backup, forget,
   global and prune flag, skip-if-unchanged, exit codes 3/10/11/12, a whole `restor run`,
-  `restor restore`), so a failing release shows what it lacks. A new restic option gets a check there.
+  `restor restore`, forget per host), so a failing release shows what it lacks. A new restic option gets a check there.
   Backups that must be unchanged use `testdata/static` and are retried
   (`unchangedWithin`): restic also records the directories above a source, those of a
   temp dir change while other tests run, and even the home directory can change.

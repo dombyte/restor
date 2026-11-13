@@ -66,7 +66,9 @@ type includeFile struct {
 
 // RepositoryConfig is the repository section.
 type RepositoryConfig struct {
-	URL            string            `yaml:"url"`
+	URL string `yaml:"url"`
+	// Host is the host name of the snapshots; empty is the system's host name.
+	Host           string            `yaml:"host"`
 	EnvFile        string            `yaml:"env_file"`
 	BackendOptions map[string]string `yaml:"backend_options"`
 	LimitUpload    int               `yaml:"limit_upload"`   // KiB/s

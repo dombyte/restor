@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -112,6 +113,7 @@ func TestIntegration(t *testing.T) {
 	t.Run("skip if unchanged", testSkipIfUnchanged)
 	t.Run("stdin from command", testStdinCommand)
 	t.Run("forget", testForget)
+	t.Run("forget per host", testForgetPerHost)
 	t.Run("incomplete snapshot", testIncomplete)
 	t.Run("missing source", testMissingSource)
 	t.Run("exit codes", testExitCodes)
@@ -288,6 +290,38 @@ func testForget(t *testing.T) {
 	assert.Len(t, r.snapshots(t, "other"), 1, "other jobs are not touched")
 }
 
+// testForgetPerHost backs up one job from two hosts into one repository: forget on one
+// host must leave the other host's snapshots alone.
+func testForgetPerHost(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	ctx := context.Background()
+	nas, laptop := r.client(t, restic.Settings{Host: "nas"}),
+		r.client(t, restic.Settings{Host: "laptop"})
+	src := filepath.Join(r.dir, "src")
+	for i := range 2 {
+		write(t, filepath.Join(src, "f.txt"), strconv.Itoa(i))
+		for _, c := range []*restic.Client{nas, laptop} {
+			_, err := c.Backup(ctx, "web", []string{src}, nil)
+			require.NoError(t, err)
+		}
+	}
+
+	require.NoError(t, nas.Forget(ctx, "web", restic.Keep{Last: 1}.Args()))
+
+	hosts := map[string]int{}
+	out, err := r.runner.Run(ctx, "restic", "snapshots", "--json", "--tag=web")
+	require.NoError(t, err)
+	var list []struct {
+		Hostname string `json:"hostname"`
+	}
+	require.NoError(t, json.Unmarshal(out, &list))
+	for _, s := range list {
+		hosts[s.Hostname]++
+	}
+	assert.Equal(t, map[string]int{"nas": 1, "laptop": 2}, hosts)
+}
+
 func testIncomplete(t *testing.T) {
 	t.Parallel()
 	if os.Getuid() == 0 {
@@ -406,7 +440,7 @@ jobs:
 	}
 	o := Options{
 		ConfigPath: path, Getenv: func(string) string { return "" }, Environ: environ,
-		Log: zerolog.Nop(),
+		Log: zerolog.Nop(), Hostname: os.Hostname,
 	}
 	run := func() {
 		a, err := New(o)
@@ -453,7 +487,7 @@ func testRestore(t *testing.T) {
 	write(t, path, "version: 2\nrepository: {url: "+filepath.Join(r.dir, "repo")+"}\n")
 	a, err := New(Options{
 		ConfigPath: path, Getenv: func(string) string { return "" }, Environ: r.env,
-		Log: zerolog.Nop(),
+		Log: zerolog.Nop(), Hostname: os.Hostname,
 	})
 	require.NoError(t, err)
 	restore := func(o RestoreOptions) string {

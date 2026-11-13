@@ -33,6 +33,7 @@ version: 2
 concurrency: 2
 repository:
   url: ${REPO}
+  host: nas
   env_file: restic.env
   backend_options: {s3.connections: "10"}
   limit_upload: ${LIMIT}
@@ -94,7 +95,7 @@ func TestLoad(t *testing.T) {
 	assert.Equal(t, "/bin/notify summary", plan.Post)
 	assert.Equal(t, "/bin/notify run", plan.OnFailure)
 	assert.Equal(t, Repository{
-		URL: "/srv/repo", EnvFile: filepath.Join(dir, "restic.env"),
+		URL: "/srv/repo", Host: "nas", EnvFile: filepath.Join(dir, "restic.env"),
 		Env:            []string{"RESTIC_PASSWORD=pa$word"},
 		BackendOptions: map[string]string{"s3.connections": "10"}, LimitUpload: 100,
 		RetryLock: 10 * time.Minute, Prune: true, MaxUnused: "5%",
@@ -241,6 +242,7 @@ func TestLoad_Validation(t *testing.T) {
 			"repository.backend_options.s3.connections: must not be empty",
 		},
 		{"limit", "repository: {limit_upload: -1}", "repository.limit_upload: must be >= 0"},
+		{"host", "repository: {host: 'a b'}", "repository.host: must not start"},
 		{"retry lock", "repository: {retry_lock: -1s}", "repository.retry_lock: must be >= 0"},
 		{"max unused", "repository: {max_unused: lots}", `repository.max_unused: "lots" is not`},
 		{

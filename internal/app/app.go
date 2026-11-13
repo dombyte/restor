@@ -49,6 +49,9 @@ var (
 	// ErrRestoreTarget is returned by Restore unless exactly one of Target and InPlace is
 	// set: restor never picks where a restore writes.
 	ErrRestoreTarget = errors.New("app: restore needs either --target <dir> or --in-place")
+	// ErrNoHostname is returned by New when the system has no host name and
+	// repository.host is not set: forget must select this host's snapshots only.
+	ErrNoHostname = errors.New("app: cannot determine the host name")
 )
 
 // Options are the inputs of New.
@@ -63,6 +66,8 @@ type Options struct {
 	Environ []string
 	// Log is the root logger.
 	Log zerolog.Logger
+	// Hostname returns the host name of the snapshots when repository.host is not set.
+	Hostname func() (string, error)
 }
 
 // App is one wired backup run.
@@ -83,12 +88,16 @@ func New(o Options) (*App, error) {
 	if plan, err = plan.Select(o.Jobs); err != nil {
 		return nil, err
 	}
+	host, err := hostName(plan.Repository, o.Hostname)
+	if err != nil {
+		return nil, err
+	}
 	resticEnv := resticEnv(o.Environ, plan.Repository)
 	warnConfig(o.Log, plan, resticEnv)
 	warnMissingBinaries(o.Log, plan.Jobs, exec.LookPath)
 
 	resticRunner := command.New(resticEnv, component(o.Log, "restic"))
-	resticClient, err := restic.New(resticSettings(plan.Repository),
+	resticClient, err := restic.New(resticSettings(plan.Repository, host),
 		restic.Deps{Runner: resticRunner, Log: component(o.Log, "restic")})
 	if err != nil {
 		return nil, err
@@ -104,6 +113,19 @@ func New(o Options) (*App, error) {
 		plan: plan, manager: manager, restic: resticClient, resticRunner: resticRunner,
 		log: o.Log,
 	}, nil
+}
+
+// hostName returns the host name of the snapshots: repository.host, else the system's.
+// Backup and forget both use it, so forget never selects another host's snapshots.
+func hostName(r config.Repository, hostname func() (string, error)) (string, error) {
+	if r.Host != "" {
+		return r.Host, nil
+	}
+	h, err := hostname()
+	if err != nil || h == "" {
+		return "", fmt.Errorf("%w (set repository.host): %w", ErrNoHostname, err)
+	}
+	return h, nil
 }
 
 // Run checks the restic version, then runs one backup cycle.
@@ -150,7 +172,7 @@ type Stdio = command.Stdio
 // Restic runs restic with args, the repository settings and env file, connected to
 // stdio: `restor restic snapshots` and the like.
 func (a *App) Restic(ctx context.Context, stdio Stdio, args []string) error {
-	global := resticSettings(a.plan.Repository).GlobalArgs
+	global := globalArgs(a.plan.Repository)
 	return a.resticRunner.Attach(ctx, stdio, "restic", slices.Concat(global, args)...)
 }
 
@@ -165,7 +187,7 @@ func (a *App) Snapshots(ctx context.Context, stdio Stdio, all bool) error {
 			tags = append(tags, j.Name)
 		}
 	}
-	args := slices.Concat(resticSettings(a.plan.Repository).GlobalArgs, []string{"snapshots"},
+	args := slices.Concat(globalArgs(a.plan.Repository), []string{"snapshots"},
 		restic.SnapshotsFlags{Tags: tags}.Args())
 	return a.resticRunner.Attach(ctx, stdio, "restic", args...)
 }
@@ -202,7 +224,7 @@ func (a *App) Restore(ctx context.Context, stdio Stdio, o RestoreOptions) error 
 	log := a.log.With().Str("snapshot", o.Snapshot).Str("target", flags.Target).
 		Bool("dry_run", flags.DryRun).Logger()
 	log.Info().Msg("restoring snapshot")
-	args := slices.Concat(resticSettings(a.plan.Repository).GlobalArgs, []string{"restore"},
+	args := slices.Concat(globalArgs(a.plan.Repository), []string{"restore"},
 		flags.Args())
 	if err := a.resticRunner.Attach(ctx, stdio, "restic", args...); err != nil {
 		return err
@@ -240,6 +262,7 @@ func (a *App) Describe(w io.Writer) error {
 	jobs := a.orderedJobs()
 	labels, groups := keepGroups(jobs)
 	tw := tabwriter.NewWriter(w, 0, 0, columnPadding, ' ', 0)
+	_, _ = fmt.Fprintf(tw, "host:\t%s\n", or(a.plan.Repository.Host, "(system host name)"))
 	_, _ = fmt.Fprintf(tw, "concurrency:\t%d (0 = all at once)\n", a.plan.Concurrency)
 	_, _ = fmt.Fprintf(tw, "prune:\t%t\n", a.plan.Repository.Prune)
 	_, _ = fmt.Fprintf(tw, "check:\t%s\n", checkLabel(a.plan.Repository))
@@ -485,15 +508,21 @@ func keep(k config.Keep) restic.Keep {
 	}
 }
 
-func resticSettings(r config.Repository) restic.Settings {
+func resticSettings(r config.Repository, host string) restic.Settings {
 	return restic.Settings{
-		GlobalArgs: restic.Repository{
-			BackendOptions: r.BackendOptions, LimitUpload: r.LimitUpload,
-			LimitDownload: r.LimitDownload, RetryLock: r.RetryLock,
-		}.Args(),
-		PruneArgs: restic.PruneFlags{MaxUnused: r.MaxUnused}.Args(),
-		CheckArgs: restic.CheckFlags{ReadDataSubset: r.CheckReadDataSubset}.Args(),
+		Host:       host,
+		GlobalArgs: globalArgs(r),
+		PruneArgs:  restic.PruneFlags{MaxUnused: r.MaxUnused}.Args(),
+		CheckArgs:  restic.CheckFlags{ReadDataSubset: r.CheckReadDataSubset}.Args(),
 	}
+}
+
+// globalArgs are the restic flags of every command.
+func globalArgs(r config.Repository) []string {
+	return restic.Repository{
+		BackendOptions: r.BackendOptions, LimitUpload: r.LimitUpload,
+		LimitDownload: r.LimitDownload, RetryLock: r.RetryLock,
+	}.Args()
 }
 
 // resticEnv is the environment of restic: the process environment, the env file and the
