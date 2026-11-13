@@ -109,7 +109,8 @@ changes the exit code. Before anything is stopped, it checks
 that `restic` is installed and supported (see below). `restor snapshots`,
 `restor restore` and `restor restic` exit with restic's exit code.
 
-On SIGINT/SIGTERM restor stops the running backups, restarts the services it stopped,
+On SIGINT, SIGTERM or SIGHUP (a closed SSH session) restor stops the running backups,
+restarts the services it stopped,
 runs the `post` hook of those jobs, starts no further job and exits within its shutdown
 timeout (the largest `start_timeout` + 4 minutes, + 1 minute for a `post` hook, logged as
 `shutdown_timeout`). The shipped units allow 900 s (`TimeoutStopSec`); raise it if a

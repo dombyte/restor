@@ -58,7 +58,10 @@ func main() {
 
 // run executes the CLI with args and returns the process exit code.
 func run(args []string, stdout, stderr io.Writer) int {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	// SIGHUP too: a manual run in an SSH session that drops must still restart the
+	// services it stopped, not die at once.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM,
+		syscall.SIGHUP)
 	defer stop()
 
 	root := newRootCommand(app.DefaultConfig(os.Getuid(), os.Getenv), stdout, stderr)
