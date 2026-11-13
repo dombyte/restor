@@ -270,7 +270,9 @@ incomplete snapshot (some unreadable files) does not skip. `restor run files` wi
 and only those are started again afterwards, also when the backup failed. When none of
 them runs, restor warns and backs up anyway: check `compose_file` or `units` if the
 services should have been running (a project started with `-p` needs `project_name`,
-services of a profile need `profiles`). With
+services of a profile need `profiles`). A unit that is `failed`, or a container that has
+exited, right after the start fails the restart at once; a container that is
+`restarting` does not count as running. With
 `start_all: true` the backup also starts the job's other services (`services`, or all of
 the compose file / all `units`), so a service that was down comes back up; a failed start
 of those is only a warning and does not fail the job. `start_all` works with `stop: false`
@@ -278,10 +280,11 @@ too. Compose `start` does not create containers that were removed (`down`), and 
 services (init containers, `Type=oneshot` units) run again, so list `services` when the
 project has some. After a cancel only the stopped services are started. A systemd unit
 counts as started once `systemctl is-active` reports `active`, a `Type=oneshot` unit also
-once it has run (`inactive`). A `Type=simple` unit is
-`active` as soon as its process runs, so restor cannot tell when it crashes right after
-starting; use `Type=notify`, or check the unit in a `post` hook, when its start has to be
-confirmed. A lock per compose file and per unit keeps two restor runs from working on the
+once it has run (`inactive`). Services count as started only when two checks half a
+second apart see them running, so one that crashes at once (a container that exits, a
+`Type=simple` unit that fails) fails the job. A `Type=simple` unit is `active` as soon as
+its process runs, so a crash a few seconds later is not seen; use `Type=notify`, or check
+the unit in a `post` hook, when its start has to be confirmed. A lock per compose file and per unit keeps two restor runs from working on the
 same services; the second one fails.
 
 **Dependencies between units:** restor stops and waits for the listed `units` only, and

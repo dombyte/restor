@@ -144,12 +144,24 @@ func TestSystemd_Start(t *testing.T) {
 	expectSystemctl(r, "is-active", "a.service", "b.service").
 		Return([]byte("active\nactivating\n"), assert.AnError).Once()
 	expectSystemctl(r, "is-active", "a.service", "b.service").
-		Return([]byte("active\nactive\n"), nil).Once()
+		Return([]byte("active\nactive\n"), nil).Twice() // started at two polls in a row
 
 	ok, err := s.Start(context.Background(), []string{"a.service", "b.service"}, time.Second)
 
 	require.NoError(t, err)
 	assert.True(t, ok)
+}
+
+func TestSystemd_StartCrashesAtOnce(t *testing.T) {
+	t.Parallel()
+	s, r := newSystemd(t, false)
+	expectSystemctl(r, "start", "a.service").Return(nil, nil).Once()
+	expectSystemctl(r, "is-active", "a.service").Return([]byte("active"), nil).Once()
+	expectSystemctl(r, "is-active", "a.service").Return([]byte("failed"), nil).Once()
+
+	_, err := s.Start(context.Background(), []string{"a.service"}, time.Hour)
+
+	require.ErrorIs(t, err, errStartFailed, "active at the first poll is not enough")
 }
 
 func TestSystemd_StartOneshot(t *testing.T) {
@@ -189,11 +201,25 @@ func TestSystemd_StartTimeout(t *testing.T) {
 	t.Parallel()
 	s, r := newSystemd(t, false)
 	expectSystemctl(r, "start", "a.service").Return(nil, nil).Once()
-	expectSystemctl(r, "is-active", "a.service").Return([]byte("failed"), assert.AnError)
+	expectSystemctl(r, "is-active", "a.service").Return([]byte("activating"), assert.AnError)
 
 	ok, err := s.Start(context.Background(), []string{"a.service"}, time.Second)
 
 	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestSystemd_StartFailedUnit(t *testing.T) {
+	t.Parallel()
+	s, r := newSystemd(t, false)
+	expectSystemctl(r, "start", "a.service", "b.service").Return(nil, nil).Once()
+	expectSystemctl(r, "is-active", "a.service", "b.service").
+		Return([]byte("active\nfailed\n"), assert.AnError).Once()
+
+	ok, err := s.Start(context.Background(), []string{"a.service", "b.service"}, time.Hour)
+
+	require.ErrorIs(t, err, errStartFailed, "no wait for the timeout")
+	assert.Contains(t, err.Error(), ": b.service")
 	assert.False(t, ok)
 }
 

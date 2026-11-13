@@ -277,6 +277,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   prune are skipped. A snapshot that `--skip-if-unchanged` skipped (a summary without ID)
   counts as **complete**: the latest snapshot is still current.
 - Restarting services fails → job fails; not running within `start_timeout` → warning.
+  A `failed` unit or an `exited`/`dead` container (without a running one of the same
+  service) right after the start is a failed restart (`servicemanager.errStartFailed`).
 - `start_all`: listing or starting the services that were not stopped fails, or they are
   not running within `start_timeout` → warning only (a service that was down must not
   block forget and prune on every run).
@@ -500,23 +502,33 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   name that `config --services` does not report fails the job); stop with
   `stop -t <stop_timeout in s, rounded up> <services>` (ignores "no containers to stop"),
   start with `start <services>` (not `up`: a backup never recreates containers from a
-  changed compose file). Running = `ps --format json` reports the service with `State`
-  `running` (Docker JSON lines or a JSON array; podman-compose via the
-  `com.docker.compose.service` label).
+  changed compose file). Status = `ps --format json` (`--all` for docker only: Docker
+  lists only running containers without it, podman-compose always lists all and may not
+  know the flag); a service is running when one of its containers has `State` `running`
+  (Docker JSON lines or a JSON array; podman-compose via the
+  `com.docker.compose.service` label), `restarting` is not running, and `exited`/`dead`
+  without a running container ends a start (`errStartFailed`). `config --services` runs
+  only when a requested service has no container in `ps` (to tell a stopped service from
+  a typo) or none are requested.
 - systemd: `systemctl [--user] stop|start <units>` (stop ignores "not running"/"not
   loaded"); state from `systemctl is-active <units>`. Up (running before the backup, and
   not yet stopped) = `active`, `activating`, `deactivating`, `reloading` or `refreshing`;
-  started = all `active`, or `inactive` for a `Type=oneshot` unit (`systemctl start`
+  started = all `active`, or `inactive` for a `Type=oneshot` unit; a `failed` unit ends the
+  start at once (`errStartFailed`) (`systemctl start`
   waits until it has run and fails when it failed; the type comes from
   `systemctl show --property=Type <units>`, queried once when a unit is inactive). A
-  `Type=simple` unit is `active` as soon as its process runs, so a crash right after the
-  start is not seen; README says so.
+  `Type=simple` unit is `active` as soon as its process runs, so a crash a few seconds
+  after the start is not seen; README says so.
   `services` selects some of `units` (a name that is not one of them is a validation
   error); empty means all units.
 - Files only (no type): the `noop` service manager; no services, every operation
   succeeds, lock key `files:<job>`.
 - Stop and start poll every 500 ms until the expected state or the timeout; a failed
-  status query is retried, and its error counts only when the last poll failed. The
+  status query is retried, and its error counts only when the last poll failed
+  (`errStartFailed` ends the wait at once). Start counts the services as started only
+  when two polls in a row see them so (`confirmed`): right after the start command a
+  container that crashes at once is still `running` ("Up Less than a second"), and a
+  `Type=simple` unit `active`. The
   timeout counts from before the stop/start command, so a slow command shortens the wait
   (at least one status query still runs); a restart thus ends within `start_timeout` +
   2 min + one status query, inside the `start_timeout` + 3 min bound after a cancel.

@@ -59,15 +59,15 @@ func TestCompose_Running(t *testing.T) {
 	ps := []byte(`{"Service":"web","State":"running"}` + "\n" +
 		`{"Service":"db","State":"exited"}`)
 	c, r := newCompose(t)
-	expectCompose(r, "config", "--services").Return([]byte("web\ndb\njob\n\n"), nil).Once()
 	expectCompose(r, "ps", "--format", "json").Return(ps, nil).Once()
 	requested := []string{"web", "db"}
 	got, err := c.Running(context.Background(), requested)
-	require.NoError(t, err)
+	require.NoError(t, err, "no config --services: ps reported both services")
 	assert.Equal(t, []string{"web"}, got)
 	assert.Equal(t, []string{"web", "db"}, requested, "requested is not modified")
 
 	expectCompose(r, "ps", "--format", "json").Return(ps, nil).Once()
+	expectCompose(r, "config", "--services").Return([]byte("web\ndb\njob\n\n"), nil).Once()
 	got, err = c.Running(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"web"}, got)
@@ -76,6 +76,7 @@ func TestCompose_Running(t *testing.T) {
 	_, err = c.Running(context.Background(), []string{"web"})
 	require.ErrorIs(t, err, assert.AnError)
 
+	expectCompose(r, "ps", "--format", "json").Return(ps, nil).Once()
 	_, err = c.Running(context.Background(), []string{"web", "postgress"})
 	require.ErrorIs(t, err, errUnknownService, "a typo must not skip the stop silently")
 	assert.Contains(t, err.Error(), `"postgress"`)
@@ -103,6 +104,7 @@ func TestCompose_All(t *testing.T) {
 func TestCompose_RunningListFails(t *testing.T) {
 	t.Parallel()
 	c, r := newCompose(t)
+	expectCompose(r, "ps", "--format", "json").Return(nil, nil).Once()
 	expectCompose(r, "config", "--services").Return(nil, assert.AnError).Once()
 
 	_, err := c.Running(context.Background(), []string{"web"})
@@ -255,12 +257,12 @@ func TestCompose_Start(t *testing.T) {
 		Return([]byte(`{"Service":"web","State":"running"}`), nil).Once()
 	expectCompose(r, "ps", "--format", "json").
 		Return([]byte(`{"Service":"web","State":"running"}`+"\n"+
-			`{"Service":"db","State":"running"}`), nil).Once()
+			`{"Service":"db","State":"running"}`), nil).Twice()
 
 	ok, err := c.Start(context.Background(), []string{"web", "db"}, time.Minute)
 
 	require.NoError(t, err)
-	assert.True(t, ok, "returns as soon as all services run")
+	assert.True(t, ok, "returns once all services run at two polls in a row")
 }
 
 func TestCompose_StartTimeout(t *testing.T) {
@@ -274,4 +276,65 @@ func TestCompose_StartTimeout(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.False(t, ok)
+}
+
+func TestCompose_StartExited(t *testing.T) {
+	t.Parallel()
+	c, r := newCompose(t)
+	expectCompose(r, "start", "web", "db").Return(nil, nil).Once()
+	expectCompose(r, "ps", "--format", "json").
+		Return([]byte(`[{"Service":"web","State":"running"},`+
+			`{"Service":"db","State":"exited"}]`), nil).Once()
+
+	ok, err := c.Start(context.Background(), []string{"web", "db"}, time.Hour)
+
+	require.ErrorIs(t, err, errStartFailed, "no wait for the timeout")
+	assert.Contains(t, err.Error(), ": db")
+	assert.False(t, ok)
+}
+
+func TestCompose_StartCrashesAtOnce(t *testing.T) {
+	t.Parallel()
+	c, r := newCompose(t)
+	expectCompose(r, "start", "web").Return(nil, nil).Once()
+	// Right after the start, a container that crashes at once is still "Up".
+	expectCompose(r, "ps", "--format", "json").
+		Return([]byte(`{"Service":"web","State":"running"}`), nil).Once()
+	expectCompose(r, "ps", "--format", "json").
+		Return([]byte(`{"Service":"web","State":"exited"}`), nil).Once()
+
+	_, err := c.Start(context.Background(), []string{"web"}, time.Hour)
+
+	require.ErrorIs(t, err, errStartFailed)
+}
+
+func TestCompose_DockerListsAllContainers(t *testing.T) {
+	t.Parallel()
+	d, r, _ := newDeps(t)
+	c, err := NewCompose(ComposeSettings{Binary: "docker", Files: []string{composeFile}}, d)
+	require.NoError(t, err)
+	r.On("Run", mock.Anything, "docker", "compose", "-f", composeFile, "start", "web").
+		Return(nil, nil).Once()
+	// Without --all, Docker would not list the exited container at all.
+	r.On("Run", mock.Anything, "docker", "compose", "-f", composeFile, "ps", "--format",
+		"json", "--all").Return([]byte(`{"Service":"web","State":"dead"}`), nil).Once()
+
+	_, err = c.Start(context.Background(), []string{"web"}, time.Hour)
+
+	require.ErrorIs(t, err, errStartFailed)
+}
+
+func TestCompose_RunningWinsOverExited(t *testing.T) {
+	t.Parallel()
+	c, r := newCompose(t)
+	expectCompose(r, "start", "web").Return(nil, nil).Once()
+	// Two replicas, one of them exited: the service runs.
+	expectCompose(r, "ps", "--format", "json").
+		Return([]byte(`[{"Service":"web","State":"running"},`+
+			`{"Service":"web","State":"exited"}]`), nil).Twice()
+
+	ok, err := c.Start(context.Background(), []string{"web"}, time.Hour)
+
+	require.NoError(t, err)
+	assert.True(t, ok)
 }

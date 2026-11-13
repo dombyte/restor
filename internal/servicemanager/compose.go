@@ -18,6 +18,9 @@ import (
 // reports services only through it).
 const composeServiceLabel = "com.docker.compose.service"
 
+// stateRunning is the container state of a running service.
+const stateRunning = "running"
+
 // ComposeSettings configure a Compose manager.
 type ComposeSettings struct {
 	// Binary is "docker" or "podman"; the manager runs `<binary> compose -f <file> …`.
@@ -40,6 +43,9 @@ type Compose struct {
 	// services caches `config --services`: the compose files do not change during a job,
 	// and the command is slow (Compose parses and interpolates every file).
 	services []string
+	// seen are the services `ps` reported a container for: a listed service among them
+	// needs no `config --services` to tell it from a typo.
+	seen map[string]bool
 }
 
 // NewCompose returns a Compose manager.
@@ -67,11 +73,11 @@ func (c *Compose) file() string { return c.s.Files[0] }
 // it is empty) that have a running container. A requested name that is not a service of
 // the compose file is an error: a typo would otherwise back up a running service.
 func (c *Compose) Running(ctx context.Context, requested []string) ([]string, error) {
-	services, err := c.listServices(ctx, requested)
+	running, err := c.running(ctx)
 	if err != nil {
 		return nil, err
 	}
-	running, err := c.running(ctx)
+	services, err := c.listServices(ctx, requested)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +91,14 @@ func (c *Compose) All(ctx context.Context, requested []string) ([]string, error)
 }
 
 // listServices returns a copy of requested, or of every service of the compose file.
+// Requested services that `ps` reported exist: only another name needs the slow
+// `config --services` to be checked.
 func (c *Compose) listServices(ctx context.Context, requested []string) ([]string, error) {
+	if len(requested) > 0 && !slices.ContainsFunc(requested, func(s string) bool {
+		return !c.seen[s]
+	}) {
+		return slices.Clone(requested), nil
+	}
 	all, err := c.allServices(ctx)
 	if err != nil {
 		return nil, err
@@ -141,9 +154,11 @@ func (c *Compose) Stop(ctx context.Context, services []string, timeout time.Dura
 	})
 }
 
-// Start runs `start <services>` and waits until all of them are running. It returns
-// false when some are not running after timeout. `start` (unlike `up`) restarts the
-// stopped containers as they were and never recreates them from a changed compose file.
+// Start runs `start <services>` and waits until all of them are running at two polls in a
+// row (see confirmed). It returns false when some are not running after timeout, and an
+// error wrapping errStartFailed as soon as one has exited (or is dead) without a running
+// container: waiting would not bring it back. `start` (unlike `up`) restarts the stopped
+// containers as they were and never recreates them from a changed compose file.
 func (c *Compose) Start(ctx context.Context, services []string, timeout time.Duration) (
 	bool, error,
 ) {
@@ -156,17 +171,42 @@ func (c *Compose) Start(ctx context.Context, services []string, timeout time.Dur
 	if _, err := c.run(cmdCtx, append([]string{"start"}, services...)...); err != nil {
 		return false, fmt.Errorf("servicemanager: start %s: %w", c.file(), err)
 	}
+	stable := confirmed()
 	return waitUntil(ctx, c.clock, deadline, func(ctx context.Context) (bool, error) {
-		running, err := c.running(ctx)
-		return err == nil && allOf(services, running), err
+		states, err := c.states(ctx)
+		if err != nil {
+			return false, err
+		}
+		if failed := exited(services, states); len(failed) > 0 {
+			return false, fmt.Errorf("servicemanager: start %s: %w: %s", c.file(),
+				errStartFailed, strings.Join(failed, ","))
+		}
+		return stable(allOf(services, running(states))), nil
 	})
 }
 
-// running returns the services of the compose project that have a running container.
+// running returns the services of the compose project that have a running container
+// (not one that is restarting: it is not up yet, and may never be).
 func (c *Compose) running(ctx context.Context) (map[string]bool, error) {
+	states, err := c.states(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return running(states), nil
+}
+
+// states returns the state of every service that has a container: "running" when one of
+// its containers runs, else the (lowercase) state of the last one listed. Docker lists
+// only running containers without --all; podman-compose always lists all, and may not
+// know the flag.
+func (c *Compose) states(ctx context.Context) (map[string]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, statusTimeout)
 	defer cancel()
-	out, err := c.run(ctx, "ps", "--format", "json")
+	args := []string{"ps", "--format", "json"}
+	if c.s.Binary == "docker" {
+		args = append(args, "--all")
+	}
+	out, err := c.run(ctx, args...)
 	if err != nil {
 		return nil, fmt.Errorf("servicemanager: status of %s: %w", c.file(), err)
 	}
@@ -174,13 +214,40 @@ func (c *Compose) running(ctx context.Context) (map[string]bool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("servicemanager: status of %s: %w", c.file(), err)
 	}
-	running := map[string]bool{}
+	states := map[string]string{}
 	for _, e := range entries {
-		if strings.EqualFold(e.State, "running") {
-			running[e.service()] = true
+		if states[e.service()] != stateRunning {
+			states[e.service()] = strings.ToLower(e.State)
 		}
 	}
-	return running, nil
+	c.see(states)
+	return states, nil
+}
+
+// see remembers the services that have a container.
+func (c *Compose) see(states map[string]string) {
+	if c.seen == nil {
+		c.seen = map[string]bool{}
+	}
+	for s := range states {
+		c.seen[s] = true
+	}
+}
+
+// running returns the services whose state is running.
+func running(states map[string]string) map[string]bool {
+	up := map[string]bool{}
+	for s, st := range states {
+		up[s] = st == stateRunning
+	}
+	return up
+}
+
+// exited returns the services among names whose container exited or died.
+func exited(names []string, states map[string]string) []string {
+	return slices.DeleteFunc(slices.Clone(names), func(s string) bool {
+		return states[s] != "exited" && states[s] != "dead"
+	})
 }
 
 func (c *Compose) run(ctx context.Context, args ...string) ([]byte, error) {

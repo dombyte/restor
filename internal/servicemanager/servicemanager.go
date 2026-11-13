@@ -30,6 +30,8 @@ var (
 	errUnexpectedOutput = errors.New("unexpected output")
 	errUnknownUnit      = errors.New("service is not one of the systemd units")
 	errUnknownService   = errors.New("service is not in the compose file")
+	// errStartFailed ends the wait for a start: a service failed or exited.
+	errStartFailed = errors.New("service failed to start")
 )
 
 // Runner executes a program and returns its stdout, also on failure. Its error carries
@@ -56,7 +58,7 @@ func (d Deps) validate() error {
 // waitUntil polls done every pollInterval until it reports true (true), ctx ends, or
 // deadline has passed (false); it polls at least once. A failed poll (e.g. a status query
 // that timed out) is retried; its error is returned only when the last poll before the
-// deadline failed.
+// deadline failed, or at once when it wraps errStartFailed.
 func waitUntil(ctx context.Context, clock util.Clock, deadline time.Time,
 	done func(ctx context.Context) (bool, error),
 ) (bool, error) {
@@ -65,7 +67,7 @@ func waitUntil(ctx context.Context, clock util.Clock, deadline time.Time,
 		if err == nil && ok {
 			return true, nil
 		}
-		if !clock.Now().Before(deadline) {
+		if gaveUp(err, clock, deadline) {
 			return false, err
 		}
 		select {
@@ -73,6 +75,25 @@ func waitUntil(ctx context.Context, clock util.Clock, deadline time.Time,
 			return false, fmt.Errorf("servicemanager: wait: %w", ctx.Err())
 		case <-clock.After(pollInterval):
 		}
+	}
+}
+
+// gaveUp reports whether waitUntil stops after a poll that returned err: at the deadline,
+// or at once for a service that failed to start.
+func gaveUp(err error, clock util.Clock, deadline time.Time) bool {
+	return errors.Is(err, errStartFailed) || !clock.Now().Before(deadline)
+}
+
+// confirmed returns a poll result that reports true only when up was true at this poll
+// and the one before: a service that crashes at once is still reported as running right
+// after its start command ("Up Less than a second", or active for a Type=simple unit), and
+// the second look, pollInterval later, sees it exited or failed.
+func confirmed() func(up bool) bool {
+	before := false
+	return func(up bool) bool {
+		done := up && before
+		before = up
+		return done
 	}
 }
 
