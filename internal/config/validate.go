@@ -83,6 +83,8 @@ func (v *validator) matches(pattern, value, field, problem string) {
 
 func (v *validator) repository(r RepositoryConfig) {
 	rv := v.at("repository")
+	rv.check(r.Host == "" || validName(r.Host), "host",
+		`must not start with "-" or contain "," or whitespace`)
 	for _, key := range sortedKeys(r.BackendOptions) {
 		rv.matches(backendPattern, key, "backend_options", "a backend option such as "+
 			"s3.connections")

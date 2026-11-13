@@ -294,6 +294,7 @@ func newApp(f *flags, jobs []string, log zerolog.Logger) (*app.App, error) {
 	}
 	a, err := app.New(app.Options{
 		ConfigPath: f.config, Jobs: jobs, Getenv: os.Getenv, Environ: os.Environ(), Log: log,
+		Hostname: os.Hostname,
 	})
 	if err != nil {
 		for _, problem := range joined(err) {

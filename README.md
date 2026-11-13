@@ -177,9 +177,11 @@ A file with only
 in the backup; `restor run` then fails with "no jobs configured".
 
 **Repository:** `url` (or `RESTIC_REPOSITORY`/`RESTIC_REPOSITORY_FILE` in the env file),
-`env_file`, `backend_options` (`--option key=value`), `limit_upload`, `limit_download`
-(KiB/s), `retry_lock`, `prune`, `max_unused`, `check`, `check_read_data_subset`. The repository is passed to restic as
-`RESTIC_REPOSITORY`, so it never shows up in command lines or logs.
+`host`, `env_file`, `backend_options` (`--option key=value`), `limit_upload`,
+`limit_download` (KiB/s), `retry_lock`, `prune`, `max_unused`, `check`,
+`check_read_data_subset`. The repository is passed to restic as `RESTIC_REPOSITORY`, so
+it never shows up in command lines or logs. `host` is the host name of the snapshots
+(default: the system's); set it to keep a series going after the host was renamed.
 
 **The env file** holds the variables of restic only: the repository password and the
 backend credentials, and restic's own settings such as `RESTIC_CACHE_DIR` or
@@ -345,8 +347,9 @@ Tokens go into `hooks.conf`, not into the hook command: restor logs a hook's arg
 at debug level, and hooks do not see the env file.
 
 **Retention:** after all backups, every job with `keep` and a complete snapshot runs
-`restic forget --group-by=host --tag=<job>`, so each job's snapshots on this host are one
-group, also when its `sources` or `tags` change. With `repository.prune`, one `prune` and
+`restic forget --group-by=host --host=<host> --tag=<job>`, so each job's snapshots on this
+host are one group, also when its `sources` or `tags` change, and the snapshots that
+other hosts save into the same repository are never touched. With `repository.prune`, one `prune` and
 `unlock` follow, but only when every job of the run has a complete snapshot: a job that
 failed, or whose snapshot is incomplete (restic could not read some files), keeps its
 history and prune waits for a better run. A run that `skip_if_unchanged` skipped counts as
@@ -390,6 +393,11 @@ restor restore 1a2b3c4d --in-place --include /srv/app/db --apply
 
 ## Upgrading from an earlier 2.x release
 
+- **Forget selects this host:** forget used to select a job's snapshots by tag only, so in
+  a repository that several hosts share, one host's `keep` also thinned out another
+  host's snapshots of a job with the same name. It now passes `--host`. After a host was
+  renamed, set `repository.host` to the old name, or its old snapshots are never
+  forgotten again.
 - **Unset variables are errors:** `${VAR}` without a default and an unset or empty `VAR`
   used to become empty; write `${VAR:-}` where that was meant.
 - **Env file:** text after a closing quote is an error instead of being dropped.

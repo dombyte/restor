@@ -33,6 +33,8 @@ type Plan struct {
 // Repository is the restic repository and the settings of every restic call.
 type Repository struct {
 	URL string
+	// Host is the host name of the snapshots; empty is the system's host name.
+	Host string
 	// EnvFile is the absolute path of the env file, "" when there is none.
 	EnvFile string
 	// Env are the variables of EnvFile as sorted KEY=value pairs; only restic gets them.
@@ -147,8 +149,9 @@ func (f *File) plan() (*Plan, []error) {
 	return &Plan{
 		Concurrency: valueOr(f.Concurrency, DefaultConcurrency),
 		Repository: Repository{
-			URL: r.URL, EnvFile: r.EnvFile, Env: env, BackendOptions: r.BackendOptions,
-			LimitUpload: r.LimitUpload, LimitDownload: r.LimitDownload,
+			URL: r.URL, Host: r.Host, EnvFile: r.EnvFile, Env: env,
+			BackendOptions: r.BackendOptions,
+			LimitUpload:    r.LimitUpload, LimitDownload: r.LimitDownload,
 			RetryLock: time.Duration(r.RetryLock), Prune: r.Prune, MaxUnused: r.MaxUnused,
 			Check: r.Check, CheckReadDataSubset: r.CheckReadDataSubset,
 		},

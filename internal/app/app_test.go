@@ -32,6 +32,7 @@ func options(path string) Options {
 	return Options{
 		ConfigPath: path, Getenv: func(string) string { return "" },
 		Environ: []string{"PATH=/usr/bin"}, Log: zerolog.Nop(),
+		Hostname: func() (string, error) { return "test-host", nil },
 	}
 }
 
@@ -209,6 +210,21 @@ func TestJobSettings(t *testing.T) {
 		s.BackupArgs, "without the file selection")
 }
 
+func TestHostName(t *testing.T) {
+	t.Parallel()
+	system := func() (string, error) { return "nas", nil }
+	broken := func() (string, error) { return "", assert.AnError }
+
+	h, err := hostName(config.Repository{}, system)
+	require.NoError(t, err)
+	assert.Equal(t, "nas", h)
+	h, err = hostName(config.Repository{Host: "old-nas"}, broken)
+	require.NoError(t, err)
+	assert.Equal(t, "old-nas", h, "repository.host wins")
+	_, err = hostName(config.Repository{}, broken)
+	require.ErrorIs(t, err, ErrNoHostname)
+}
+
 func TestResticSettingsAndEnv(t *testing.T) {
 	t.Parallel()
 	r := config.Repository{
@@ -216,7 +232,8 @@ func TestResticSettingsAndEnv(t *testing.T) {
 		BackendOptions: map[string]string{"s3.connections": "2"}, MaxUnused: "1%",
 		Check: true, CheckReadDataSubset: "2G",
 	}
-	s := resticSettings(r)
+	s := resticSettings(r, "nas")
+	assert.Equal(t, "nas", s.Host)
 	assert.Equal(t, []string{"--option=s3.connections=2", "--limit-upload=5"}, s.GlobalArgs)
 	assert.Equal(t, []string{"--max-unused=1%"}, s.PruneArgs)
 	assert.Equal(t, []string{"--read-data-subset=2G"}, s.CheckArgs)

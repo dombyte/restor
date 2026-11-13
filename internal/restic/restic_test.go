@@ -197,6 +197,23 @@ func TestClient_Forget(t *testing.T) {
 	require.NoError(t, c.Forget(context.Background(), "web", []string{"--keep-daily=7"}))
 }
 
+func TestClient_Host(t *testing.T) {
+	t.Parallel()
+	r := mocks.NewMockRunner(t)
+	c, err := New(Settings{Host: "nas"}, Deps{Runner: r})
+	require.NoError(t, err)
+	r.EXPECT().Run(mock.Anything, "restic", "backup", "--json", "--group-by=host,tags",
+		"--host=nas", "--tag=web", "--", "/a").Return([]byte(jsonSummary), nil).Once()
+	// --host selects this host's snapshots: another host's job of the same name keeps its
+	// history.
+	r.EXPECT().Run(mock.Anything, "restic", "forget", "--group-by=host", "--host=nas",
+		"--tag=web", "--keep-daily=7").Return(nil, nil).Once()
+
+	_, err = c.Backup(context.Background(), "web", []string{"/a"}, nil)
+	require.NoError(t, err)
+	require.NoError(t, c.Forget(context.Background(), "web", []string{"--keep-daily=7"}))
+}
+
 func TestClient_ForgetFails(t *testing.T) {
 	t.Parallel()
 	c, r := newClient(t)
