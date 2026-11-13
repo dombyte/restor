@@ -116,7 +116,10 @@ func (s *Systemd) Stop(ctx context.Context, units []string, timeout time.Duratio
 // Start runs `systemctl start <units>` and waits until all of them are active, or, for a
 // Type=oneshot unit, inactive: `systemctl start` waits until a oneshot unit has run and
 // fails when it failed, so inactive means it ran (unless it sets RemainAfterExit=yes,
-// then it is active). It returns false when some are not started after timeout.
+// then it is active). It returns false when some are not started after timeout, and an
+// error wrapping errStartFailed as soon as one is failed: waiting would not bring it back.
+// They must be started at two polls in a row (see confirmed), so that a Type=simple unit
+// that crashes at once is caught.
 func (s *Systemd) Start(ctx context.Context, units []string, timeout time.Duration) (bool, error) {
 	if len(units) == 0 {
 		return true, nil
@@ -128,16 +131,32 @@ func (s *Systemd) Start(ctx context.Context, units []string, timeout time.Durati
 		return false, fmt.Errorf("servicemanager: start %s: %w", unitList(units), err)
 	}
 	var oneshot []bool // looked up once, when a unit is inactive
+	stable := confirmed()
 	return waitUntil(ctx, s.clock, deadline, func(ctx context.Context) (bool, error) {
 		states, err := s.states(ctx, units)
 		if err != nil {
 			return false, err
 		}
+		if failed := failedUnits(units, states); len(failed) > 0 {
+			return false, fmt.Errorf("servicemanager: start %s: %w: %s", unitList(units),
+				errStartFailed, unitList(failed))
+		}
 		if oneshot == nil && slices.Contains(states, "inactive") {
 			oneshot = s.oneshots(ctx, units)
 		}
-		return started(states, oneshot), nil
+		return stable(started(states, oneshot)), nil
 	})
+}
+
+// failedUnits returns the units whose state is failed.
+func failedUnits(units, states []string) []string {
+	var failed []string
+	for i, st := range states {
+		if st == "failed" {
+			failed = append(failed, units[i])
+		}
+	}
+	return failed
 }
 
 // started reports whether every unit is active, or inactive and a oneshot unit.
