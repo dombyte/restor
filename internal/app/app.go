@@ -69,6 +69,8 @@ type Options struct {
 	Log zerolog.Logger
 	// Hostname returns the host name of the snapshots when repository.host is not set.
 	Hostname func() (string, error)
+	// DryRun makes Run report what it would stop and back up, without changing anything.
+	DryRun bool
 }
 
 // App is one wired backup run.
@@ -104,7 +106,7 @@ func New(o Options) (*App, error) {
 		return nil, err
 	}
 	locks := lockDir(o.Getenv)
-	manager, err := createManager(plan, managerDeps{
+	manager, err := createManager(plan, o, managerDeps{
 		runner: command.New(o.Environ, component(o.Log, "command")), restic: resticClient,
 		clock: util.NewRealClock(), lockDir: locks, stateDir: stateDir(o.Getenv, locks),
 		log: o.Log,
@@ -432,7 +434,7 @@ func stateDir(getenv func(string) string, locks string) string {
 	})
 }
 
-func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
+func createManager(plan *config.Plan, o Options, d managerDeps) (*backup.Manager, error) {
 	locker, err := lock.New(lock.Settings{Dir: d.lockDir})
 	if err != nil {
 		return nil, err
@@ -448,11 +450,12 @@ func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
 		if err != nil {
 			return nil, fmt.Errorf("app: job %s: %w", j.Name, err)
 		}
-		jobs = append(jobs, backup.Job{Settings: jobSettings(j), Services: services})
+		jobs = append(jobs, backup.Job{Settings: jobSettings(j, o.DryRun), Services: services})
 	}
 	return backup.NewManager(backup.Settings{
 		Concurrency: plan.Concurrency, Prune: plan.Repository.Prune,
-		Check: plan.Repository.Check, Post: plan.Post, OnFailure: plan.OnFailure,
+		Check: plan.Repository.Check, DryRun: o.DryRun, Post: plan.Post,
+		OnFailure: plan.OnFailure,
 	}, jobs, backup.Deps{
 		Restic: d.restic, Locker: locker, State: records, Hooks: d.runner,
 		Log: component(d.log, "backup"),
@@ -485,13 +488,13 @@ func composeSettings(binary string, j config.Job) servicemanager.ComposeSettings
 	}
 }
 
-func jobSettings(j config.Job) backup.JobSettings {
+func jobSettings(j config.Job, dryRun bool) backup.JobSettings {
 	return backup.JobSettings{
 		Name: j.Name, After: j.After, Requires: j.Requires, Services: j.Services,
 		Sources:      backupSources(j),
 		StopServices: j.StopsServices(), StartAll: j.StartsAll(), StopTimeout: j.StopTimeout,
 		StartTimeout: j.StartTimeout, BackupTimeout: j.BackupTimeout,
-		BackupArgs: backupFlags(j).Args(), ForgetArgs: keep(j.Keep).Args(),
+		BackupArgs: backupFlags(j, dryRun).Args(), ForgetArgs: keep(j.Keep).Args(),
 		Pre: j.Pre, Post: j.Post, OnFailure: j.OnFailure,
 	}
 }
@@ -505,19 +508,19 @@ func backupSources(j config.Job) []string {
 	return j.Sources
 }
 
-func backupFlags(j config.Job) restic.BackupFlags {
+func backupFlags(j config.Job, dryRun bool) restic.BackupFlags {
 	if j.FromStdin() {
 		// The file selection of the defaults does not apply to a command's output.
 		return restic.BackupFlags{
 			StdinFromCommand: true, StdinFilename: j.StdinFilename,
-			SkipIfUnchanged: j.SkipIfUnchanged, Tags: j.Tags,
+			SkipIfUnchanged: j.SkipIfUnchanged, Tags: j.Tags, DryRun: dryRun,
 		}
 	}
 	return restic.BackupFlags{
 		Exclude: j.Exclude, IExclude: j.IExclude, ExcludeFile: j.ExcludeFile,
 		ExcludeIfPresent: j.ExcludeIfPresent, ExcludeCaches: j.ExcludeCaches,
 		ExcludeLargerThan: j.ExcludeLargerThan, OneFileSystem: j.OneFileSystem,
-		SkipIfUnchanged: j.SkipIfUnchanged, Tags: j.Tags,
+		SkipIfUnchanged: j.SkipIfUnchanged, Tags: j.Tags, DryRun: dryRun,
 	}
 }
 

@@ -63,6 +63,8 @@ type BackupFlags struct {
 	// StdinFilename is the file name of the command's output in the snapshot; empty is
 	// restic's default ("stdin").
 	StdinFilename string
+	// DryRun reads the sources (or runs the command) without saving a snapshot.
+	DryRun bool
 }
 
 // Args returns the restic backup flags of f. Every value is passed as --flag=value, so
@@ -74,6 +76,7 @@ func (f BackupFlags) Args() []string {
 			args = append(args, "--stdin-filename="+f.StdinFilename)
 		}
 		args = appendBool(args, skipIfUnchanged, f.SkipIfUnchanged)
+		args = appendBool(args, "--dry-run", f.DryRun)
 		return appendEach(args, "--tag", f.Tags)
 	}
 	var args []string
@@ -87,6 +90,7 @@ func (f BackupFlags) Args() []string {
 	}
 	args = appendBool(args, "--one-file-system", f.OneFileSystem)
 	args = appendBool(args, skipIfUnchanged, f.SkipIfUnchanged)
+	args = appendBool(args, "--dry-run", f.DryRun)
 	return appendEach(args, "--tag", f.Tags)
 }
 

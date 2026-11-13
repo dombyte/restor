@@ -114,6 +114,7 @@ func TestIntegration(t *testing.T) {
 	t.Run("stdin from command", testStdinCommand)
 	t.Run("forget", testForget)
 	t.Run("forget per host", testForgetPerHost)
+	t.Run("dry run", testDryRun)
 	t.Run("incomplete snapshot", testIncomplete)
 	t.Run("missing source", testMissingSource)
 	t.Run("exit codes", testExitCodes)
@@ -322,6 +323,27 @@ func testForgetPerHost(t *testing.T) {
 	assert.Equal(t, map[string]int{"nas": 1, "laptop": 2}, hosts)
 }
 
+// testDryRun runs a backup with --dry-run, of files and of a command: no snapshot.
+func testDryRun(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t)
+	c := r.client(t, restic.Settings{})
+	ctx := context.Background()
+	src := filepath.Join(r.dir, "src")
+	write(t, filepath.Join(src, "f.txt"), "x")
+
+	id, err := c.Backup(ctx, "web", []string{src}, restic.BackupFlags{DryRun: true}.Args())
+	require.NoError(t, err)
+	assert.Empty(t, id)
+	id, err = c.Backup(ctx, "db", []string{"echo", "dump"},
+		restic.BackupFlags{StdinFromCommand: true, DryRun: true}.Args())
+	require.NoError(t, err)
+	assert.Empty(t, id)
+
+	assert.Empty(t, r.snapshots(t, "web"))
+	assert.Empty(t, r.snapshots(t, "db"))
+}
+
 func testIncomplete(t *testing.T) {
 	t.Parallel()
 	if os.Getuid() == 0 {
@@ -462,8 +484,16 @@ jobs:
 
 	assert.True(t, skipped, "a later run skips both jobs as unchanged")
 
+	before := len(r.snapshots(t, "a"))
+	dry := o
+	dry.DryRun = true
+	a, err := New(dry)
+	require.NoError(t, err)
+	require.NoError(t, a.Run(context.Background()))
+	assert.Len(t, r.snapshots(t, "a"), before, "a dry run saves nothing")
+
 	o.Jobs = []string{"b"}
-	a, err := New(o)
+	a, err = New(o)
 	require.NoError(t, err)
 	var out bytes.Buffer
 	require.NoError(t, a.Snapshots(context.Background(), Stdio{Out: &out, Err: &out}, false))

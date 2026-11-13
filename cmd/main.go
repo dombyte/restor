@@ -125,17 +125,28 @@ its sources, starts the services again and applies the retention policies.`,
 	return root
 }
 
+// runOptions are the flags of run.
+type runOptions struct {
+	dryRun bool
+}
+
 func newRunCommand(f *flags, stderr io.Writer) *cobra.Command {
-	return &cobra.Command{
+	var o runOptions
+	cmd := &cobra.Command{
 		Use:   "run [job...]",
 		Short: "Run one backup cycle of all jobs, or of the named ones",
 		Long: `Run one backup cycle: back up every job (or only the named ones, in the order
-their before/after allows), then forget and prune. Exits 1 when a job failed.`,
+their before/after allows), then forget, prune and check as configured. Exits 1 when a
+job failed. --dry-run only shows what each job would stop and back up: no services are
+stopped, no hooks run and no snapshot is saved.`,
 		RunE: func(cmd *cobra.Command, jobs []string) error {
-			return runBackup(cmd.Context(), f, jobs,
+			return runBackup(cmd.Context(), f, jobs, o,
 				newLogger(stderr, level(f.debug, zerolog.InfoLevel)))
 		},
 	}
+	cmd.Flags().BoolVar(&o.dryRun, "dry-run", false,
+		"show what would be stopped and backed up, change nothing")
+	return cmd
 }
 
 func newValidateCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
@@ -145,7 +156,7 @@ func newValidateCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
 			log := newLogger(stderr, level(f.debug, zerolog.WarnLevel))
-			a, err := newApp(f, nil, log)
+			a, err := newApp(f, nil, runOptions{}, log)
 			if err != nil {
 				return err
 			}
@@ -169,7 +180,7 @@ other options.`,
 				return errAllWithJobs
 			}
 			log := newLogger(stderr, level(f.debug, zerolog.WarnLevel))
-			a, err := newApp(f, jobs, log)
+			a, err := newApp(f, jobs, runOptions{}, log)
 			if err != nil {
 				return err
 			}
@@ -198,7 +209,7 @@ stop the services that use them, and restor.timer, before an in-place restore.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o.Snapshot = args[0]
 			log := newLogger(stderr, level(f.debug, zerolog.InfoLevel))
-			a, err := newApp(f, nil, log)
+			a, err := newApp(f, nil, runOptions{}, log)
 			if err != nil {
 				return err
 			}
@@ -247,7 +258,7 @@ func newResticCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
   restor restic restore latest --tag web --target /tmp/restore`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			log := newLogger(stderr, level(f.debug, zerolog.WarnLevel))
-			a, err := newApp(f, nil, log)
+			a, err := newApp(f, nil, runOptions{}, log)
 			if err != nil {
 				return err
 			}
@@ -288,13 +299,13 @@ func isTerminal(w io.Writer) bool {
 // newApp wires the application for the jobs (all when empty) with the process
 // environment. Errors are logged here, one line per problem: an invalid config lists all
 // of its problems at once.
-func newApp(f *flags, jobs []string, log zerolog.Logger) (*app.App, error) {
+func newApp(f *flags, jobs []string, o runOptions, log zerolog.Logger) (*app.App, error) {
 	if f.config == "" {
 		return nil, errNoConfig
 	}
 	a, err := app.New(app.Options{
 		ConfigPath: f.config, Jobs: jobs, Getenv: os.Getenv, Environ: os.Environ(), Log: log,
-		Hostname: os.Hostname,
+		Hostname: os.Hostname, DryRun: o.dryRun,
 	})
 	if err != nil {
 		for _, problem := range joined(err) {
@@ -321,10 +332,12 @@ func needsConfigHint(err error, f *flags) bool {
 
 // runBackup wires the application and runs one backup cycle of the jobs (all when
 // empty). Errors are logged here.
-func runBackup(ctx context.Context, f *flags, jobs []string, log zerolog.Logger) error {
+func runBackup(ctx context.Context, f *flags, jobs []string, o runOptions,
+	log zerolog.Logger,
+) error {
 	log.Info().Str("version", Version).Str("commit", Commit).Str("build_date", BuildDate).
 		Str("go_version", GoVersion).Str("config", f.config).Msg("starting restor")
-	a, err := newApp(f, jobs, log)
+	a, err := newApp(f, jobs, o, log)
 	if err != nil {
 		return err
 	}
