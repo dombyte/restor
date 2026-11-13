@@ -106,7 +106,8 @@ Every command reads `/etc/restor/config.yaml` when run as root and
 user, unless `--config <file>` (`-c`) says otherwise. There is no fallback from one to the
 other: a normal user who wants the system configuration runs restor with `sudo`.
 `--debug` logs every command line. Logs go to stderr, under systemd to the
-journal: `journalctl -u restor` (or `journalctl --user -u restor`).
+journal: `journalctl -u restor` (or `journalctl --user -u restor`). `--log-format json`
+writes one JSON object per line instead, for log collectors.
 
 `restor run` exits 0 when every job was backed up and 1 when the config is invalid, a job
 failed (also when its services did not come back) or the run was cancelled. A failed
