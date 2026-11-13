@@ -43,3 +43,9 @@ RESTIC_CACHE := $(or $(XDG_CACHE_HOME),$(HOME)/.cache)/restor/restic/$(RESTIC_OL
 integration-oldest:
 	./scripts/install-restic.sh $(RESTIC_OLDEST) $(RESTIC_CACHE)
 	PATH="$(RESTIC_CACHE):$$PATH" $(MAKE) integration
+
+# End-to-end tests with real Docker Compose (and Podman, systemd, restic when the image
+# has them), inside a throwaway privileged container: E2E_IMAGE=<image> make e2e.
+.PHONY: e2e
+e2e:
+	./scripts/e2e.sh $(E2E_IMAGE)

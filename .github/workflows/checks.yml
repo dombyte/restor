@@ -122,3 +122,30 @@ jobs:
 
       - name: Integration tests
         run: restic version && go test -tags integration -race -count=1 -run TestIntegration ./internal/app ./cmd
+
+  # The service managers against real Docker Compose, Podman and systemd, and the recovery
+  # of services a killed run left stopped. The runner is a throwaway VM; locally the
+  # tests run in a container (scripts/e2e.sh). Root for the systemd units.
+  e2e:
+    name: End-to-end (compose, systemd)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install restic
+        run: |
+          version=$(sed -n 's/^[[:space:]]*newestTested = "\([^"]*\)".*/\1/p' internal/restic/version.go)
+          ./scripts/install-restic.sh "$version" "$RUNNER_TEMP/restic"
+
+      - name: End-to-end tests
+        run: |
+          CGO_ENABLED=0 go test -c -tags e2e -o "$RUNNER_TEMP/e2e.test" ./internal/app
+          sudo systemctl start podman.socket || true
+          sudo env CI=true RESTOR_E2E=1 PATH="$RUNNER_TEMP/restic:$PATH" \
+            "$RUNNER_TEMP/e2e.test" -test.v -test.count=1 -test.run TestE2E
