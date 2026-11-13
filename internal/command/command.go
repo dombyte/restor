@@ -130,7 +130,7 @@ func (r *Runner) Attach(ctx context.Context, stdio Stdio, name string, args ...s
 	cmd.Env = r.env
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdio.In, stdio.Out, stdio.Err
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = waitDelay
+	cmd.WaitDelay = r.waitDelay
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("command: %s: %w", name, err)
 	}
