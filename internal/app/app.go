@@ -445,11 +445,9 @@ func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
 func CreateServiceManager(j config.Job, d servicemanager.Deps) (backup.Services, error) {
 	switch j.Type {
 	case config.TypeDockerCompose:
-		return servicemanager.NewCompose(
-			servicemanager.ComposeSettings{Binary: "docker", Files: j.ComposeFiles}, d)
+		return servicemanager.NewCompose(composeSettings("docker", j), d)
 	case config.TypePodmanCompose:
-		return servicemanager.NewCompose(
-			servicemanager.ComposeSettings{Binary: "podman", Files: j.ComposeFiles}, d)
+		return servicemanager.NewCompose(composeSettings("podman", j), d)
 	case config.TypeSystemd:
 		return servicemanager.NewSystemd(servicemanager.SystemdSettings{
 			Units: j.Units, User: j.Scope == config.ScopeUser,
@@ -460,6 +458,12 @@ func CreateServiceManager(j config.Job, d servicemanager.Deps) (backup.Services,
 			nil
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownType, j.Type)
+	}
+}
+
+func composeSettings(binary string, j config.Job) servicemanager.ComposeSettings {
+	return servicemanager.ComposeSettings{
+		Binary: binary, Files: j.ComposeFiles, ProjectName: j.ProjectName, Profiles: j.Profiles,
 	}
 }
 
@@ -545,6 +549,9 @@ func logJobs(log zerolog.Logger, jobs []config.Job) {
 		e := log.Info().Str("job", j.Name).Str("type", or(j.Type, "files"))
 		if len(j.ComposeFiles) > 0 {
 			e = e.Strs("compose_files", j.ComposeFiles)
+		}
+		if len(j.Profiles) > 0 {
+			e = e.Strs("profiles", j.Profiles)
 		}
 		if j.FromStdin() {
 			e = e.Strs("stdin_command", j.StdinCommand)

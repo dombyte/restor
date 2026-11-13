@@ -368,7 +368,7 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   against its own (systemd runs restor in `/`); hooks and `stdin_command` are not (they
   are commands).
 - `defaults` holds every job key except `type`, `sources`, `stdin_command`,
-  `stdin_filename`, `compose_file`, `units`, `scope`, `services`, `before`, `after` and
+  `stdin_filename`, `compose_file`, `profiles`, `project_name`, `units`, `scope`, `services`, `before`, `after` and
   `requires`
   (`config.Defaults`, inlined into `config.JobConfig`). A job's own value replaces the default, lists included (an empty
   list clears the default); `keep` is replaced as a whole. Unset: `stop` true,
@@ -388,8 +388,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `jobs` may be empty; job names and tags are not empty, do not start with `-` and
   contain no `,` or whitespace (they are restic tags, and restic splits `--tag` on commas);
   `repository.host` like a job name; `type` is `docker-compose`, `podman-compose`,
-  `systemd` or absent; `compose_file` for the compose types, `units` for systemd, `scope`
-  is `system` or `user`, `services` of a
+  `systemd` or absent; `compose_file` for the compose types, `profiles` (no empty entries)
+  and `project_name` (`^[a-z0-9][a-z0-9_-]*$`) only for them, `units` for systemd, `scope` is `system` or `user`, `services` of a
   systemd job are among its `units`; keys of another type are errors (`units` on a compose
   job, `services`/`stop`/`start_all`/timeouts on a files-only job); `sources` required
   unless `stdin_command`, no empty entries; `stdin_command` not empty and without empty
@@ -490,7 +490,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   failures are logged only.
 
 ### Service managers
-- Compose: `<docker|podman> compose -f <file> [-f <override>] …`; the override is the first
+- Compose: `<docker|podman> compose -f <file> [-f <override>] [-p <project_name>]
+  [--profile <p>]… …`; the override is the first
   of `compose.override.yml`, `compose.override.yaml`, `docker-compose.override.yml`,
   `docker-compose.override.yaml` next to a file with a default name (`compose.yaml`,
   `compose.yml`, `docker-compose.yml`, `docker-compose.yaml`), found at load time

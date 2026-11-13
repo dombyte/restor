@@ -200,13 +200,15 @@ not start with `-` or contain `,` or whitespace.
 | `sources` | paths to back up (required, unless `stdin_command`) |
 | `stdin_command`, `stdin_filename` | back up the output of this command instead of `sources`, saved as `stdin_filename` (default `stdin`); see below |
 | `compose_file` | the compose file (compose types, required); for `compose.yaml`, `compose.yml`, `docker-compose.yml` or `docker-compose.yaml` the override file next to it (`compose.override.yml`, …) is used too, as `docker compose` without `-f` does |
+| `profiles` | compose profiles to enable (`--profile`): without them Compose does not list, and restor does not stop, the services of a profile |
+| `project_name` | the compose project name (`-p`), when the project was started with one |
 | `units`, `scope` | the systemd units (required) and `system` (default) or `user` |
 | `services` | services to stop; default: all of the compose file / all `units` |
 | `before`, `after` | jobs that run after / before this one |
 | `requires` | jobs that must succeed for this one to run (it also runs after them) |
 | `stop` | stop the services during the backup (default `true`) |
 | `start_all` | after the backup, also start the services that were not running (default `false`) |
-| `stop_timeout`, `start_timeout` | wait for the services to stop / start (default `1m` / `2m`); compose gets the stop timeout in whole seconds, rounded up |
+| `stop_timeout`, `start_timeout` | wait for the services to stop / start (default `1m` / `2m`); compose gets the stop timeout in whole seconds, rounded up, and it replaces each service's `stop_grace_period`: give a database that needs longer a larger `stop_timeout` |
 | `backup_timeout` | cancel a backup that takes longer; the services start again, the job fails |
 | `keep` | retention: `last`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`, `within…`, and `tags` next to another rule (not one of the job's own `tags`) |
 | `exclude`, `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`, `exclude_larger_than`, `one_file_system` | what restic leaves out (the restic options of the same name) |
@@ -215,7 +217,8 @@ not start with `-` or contain `,` or whitespace.
 | `pre`, `post`, `on_failure` | hooks, see below |
 
 Every key except `type`, `sources`, `stdin_command`, `stdin_filename`, `compose_file`,
-`units`, `scope`, `services`, `before`, `after` and `requires` can also be set under
+`profiles`, `project_name`, `units`, `scope`, `services`, `before`, `after` and
+`requires` can also be set under
 `defaults`. A job's own value replaces the default; lists are replaced, not merged.
 
 **Database dumps:** a job with `stdin_command` backs up what the command writes to
@@ -266,8 +269,8 @@ incomplete snapshot (some unreadable files) does not skip. `restor run files` wi
 **Services:** only the services that are running when a job's backup starts are stopped,
 and only those are started again afterwards, also when the backup failed. When none of
 them runs, restor warns and backs up anyway: check `compose_file` or `units` if the
-services should have been running (a project started with `-p` or from other compose
-files is not found). With
+services should have been running (a project started with `-p` needs `project_name`,
+services of a profile need `profiles`). With
 `start_all: true` the backup also starts the job's other services (`services`, or all of
 the compose file / all `units`), so a service that was down comes back up; a failed start
 of those is only a warning and does not fail the job. `start_all` works with `stop: false`

@@ -203,6 +203,9 @@ include: [jobs.d/*.yaml]
 # docker-compose / podman-compose:
 #   compose_file: the compose file (required); with a default name (compose.yaml, …) its
 #                 override file (compose.override.yml, …) is used too, as Compose does
+#   profiles:     compose profiles to enable; without them the services of a profile are
+#                 neither found nor stopped
+#   project_name: the project name (-p), when the project was started with one
 #   services:     services to stop; default: every service of the compose file
 # systemd:
 #   units:        units to stop (required)
@@ -228,6 +231,8 @@ jobs:
     exclude: ["*.tmp", "cache/"]
     keep: {daily: 30, weekly: 12}
     tags: [prod]
+    # The worker belongs to the "jobs" profile (docker compose --profile jobs up).
+    profiles: [jobs]
     # pre: /usr/local/bin/app-maintenance-on
     # post: /usr/local/bin/app-maintenance-off
 
@@ -235,6 +240,8 @@ jobs:
   wiki:
     type: podman-compose
     compose_file: /srv/wiki/compose.yml
+    # Started with "podman compose -p wiki up"; the default would be the directory name.
+    project_name: wiki
     stop: false
     # Make sure the wiki is up after each backup, also when it was down before.
     start_all: true
