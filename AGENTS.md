@@ -312,7 +312,11 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   their own scope) instead of `Nice=`/`IOSchedulingClass=` (inherited by the containers
   podman-compose restarts).
 - There is no in-process retry and no restart: systemd records the failed run, and the
-  next timer run is the retry (`Persistent=true` catches up missed runs).
+  next timer run is the retry (`Persistent=true` catches up missed runs). The system
+  units run after `network-online.target` (`Wants=` too), `docker.service` and
+  `podman-restart.service`, the user unit after `podman-restart.service`, so that a run
+  caught up at boot finds the containers started; `After=` on a unit that is not
+  installed is ignored.
 
 ### Rules (MUST)
 - Every goroutine has an owner that starts it and waits for it to end (`Manager.runJobs`

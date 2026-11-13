@@ -1,6 +1,10 @@
 # User unit installed by the .deb/.rpm packages: systemctl --user enable --now restor.timer
 [Unit]
 Description=Restic Backup Orchestrator
+# A run the timer catches up at login must wait for the rootless containers that
+# podman-restart.service starts: before that, restor finds nothing running and backs up
+# live data. (A user unit cannot wait for system units such as network-online.target.)
+After=podman-restart.service
 
 [Service]
 # No [Install] section: the timer starts this unit. Enabling the service itself would

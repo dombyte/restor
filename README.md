@@ -116,7 +116,9 @@ timeout (the largest `start_timeout` + 4 minutes, + 1 minute for a `post` hook, 
 `shutdown_timeout`). The shipped units allow 900 s (`TimeoutStopSec`); raise it if a
 `start_timeout` is above 10 minutes. Keep `KillMode=process` and the `CPUWeight=`/
 `IOWeight=` settings in custom units: containers that podman-compose starts again keep
-their monitor process in restor's cgroup and would inherit a `Nice=` setting.
+their monitor process in restor's cgroup and would inherit a `Nice=` setting. The units
+start after `network-online.target` and the container engines, so that a run caught up at
+boot finds the services running.
 
 ## Configuration
 
