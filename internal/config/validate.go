@@ -100,7 +100,6 @@ func (v *validator) repository(r RepositoryConfig) {
 			`a limit such as "5%", "1G" or "unlimited"`)
 	}
 	if r.CheckReadDataSubset != "" {
-		rv.check(r.Check, "check_read_data_subset", "only with check: true")
 		rv.check(validSubset(r.CheckReadDataSubset), "check_read_data_subset", fmt.Sprintf(
 			`%q is not a subset such as "5%%", "1/10" or "2G"`, r.CheckReadDataSubset))
 	}

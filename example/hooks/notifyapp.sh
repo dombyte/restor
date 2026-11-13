@@ -78,7 +78,9 @@ if [ -z "${RESTOR_JOB:-}" ]; then
 		[ -n "$RESTOR_FAILED_JOBS" ] || title="🚨 restor on $host: maintenance failed"
 		;;
 	esac
-	if [ "$level" = info ] && [ -n "${RESTOR_WARNINGS:-}" ]; then
+	if [ "${RESTOR_COMMAND:-run}" = maintain ]; then
+		[ "$level" = error ] || title="✅ restor on $host: maintenance completed"
+	elif [ "$level" = info ] && [ -n "${RESTOR_WARNINGS:-}" ]; then
 		# Backed up, but e.g. on live data, or after services an earlier run left stopped.
 		level=warning
 		title="⚠️ restor on $host: all $jobs jobs backed up, with warnings"

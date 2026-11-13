@@ -43,6 +43,7 @@ func TestRun_Errors(t *testing.T) {
 		{name: "validate", args: []string{"validate", "-c", missing}, want: "startup failed"},
 		{name: "restic", args: []string{"restic", "-c", missing}, want: "startup failed"},
 		{name: "snapshots", args: []string{"snapshots", "-c", missing}, want: "startup failed"},
+		{name: "maintain", args: []string{"maintain", "-c", missing}, want: "startup failed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
