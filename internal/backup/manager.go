@@ -35,6 +35,10 @@ var (
 	// ErrRequiresNotAfter is returned by NewManager for a job that requires a job it does
 	// not run after: the schedule would not wait for the result it checks.
 	ErrRequiresNotAfter = errors.New("backup: a required job is not in after")
+	// ErrMaintenanceFailed is returned by Maintain when prune, unlock or check failed.
+	ErrMaintenanceFailed = errors.New("backup: maintenance failed")
+	// ErrNothingToMaintain is returned by Maintain when both prune and check are off.
+	ErrNothingToMaintain = errors.New("backup: nothing to do: both prune and check are skipped")
 )
 
 // Restic runs restic commands against the repository.
@@ -95,6 +99,14 @@ type Settings struct {
 	Post string
 	// OnFailure is the hook that runs once after a run in which something failed.
 	OnFailure string
+}
+
+// Maintenance selects what Maintain runs.
+type Maintenance struct {
+	// Prune runs prune and unlock.
+	Prune bool
+	// Check runs check.
+	Check bool
 }
 
 // Job is one job and its service manager.
@@ -167,12 +179,39 @@ func (m *Manager) Run(ctx context.Context) error {
 	if ctx.Err() == nil && !m.s.DryRun {
 		n.add(m.maintain(ctx, results))
 	}
-	s := m.summarize(results, n)
+	s := m.summarize(commandRun, results, n)
 	if !m.s.DryRun {
 		m.runHooks(ctx, s)
 	}
 	if len(s.failed) > 0 {
 		return fmt.Errorf("%w: %d of %d", ErrJobsFailed, len(s.failed), len(m.jobs))
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+	return nil
+}
+
+// Maintain runs prune and unlock, and check, as mt selects, without any backup or forget
+// (forget belongs to a fresh snapshot), then the run-level hooks. It returns
+// ErrMaintenanceFailed when one of them failed.
+func (m *Manager) Maintain(ctx context.Context, mt Maintenance) error {
+	if !mt.Prune && !mt.Check {
+		return ErrNothingToMaintain
+	}
+	m.d.Log.Info().Bool("prune", mt.Prune).Bool("check", mt.Check).
+		Msg("starting maintenance")
+	var n notes
+	if mt.Prune {
+		n.add(m.prune(ctx))
+	}
+	if mt.Check {
+		n.add(m.check(ctx))
+	}
+	m.runHooks(ctx, m.summarize(commandMaintain, nil, n))
+	if len(n.failures) > 0 {
+		return fmt.Errorf("%w: %s", ErrMaintenanceFailed,
+			strings.Join(n.failures, warningSeparator))
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("backup: %w", err)

@@ -83,16 +83,19 @@ repository:
   check: true
   # Also read back part of the data, to find damaged pack files: a percentage such as
   # "5%" or a size such as "2G" (a random part on every run), or "n/t" (always the n-th
-  # of t parts). It downloads that much from the repository on every run.
-  # Default: none (structure only).
+  # of t parts). It downloads that much from the repository on every run. It applies to
+  # "restor maintain" too, which runs prune and check on a schedule of its own: for a
+  # weekly check instead of one per run, set check: false and run "restor maintain"
+  # from a second timer. Default: none (structure only).
   check_read_data_subset: 2%
 
 # Run-level hooks: commands that run once after the run (after forget, prune and check).
 #   post:       after every run
 #   on_failure: after post, when a job, forget, prune, unlock or check failed
 # Both get a summary of the run in their environment:
-#   RESTOR_HOOK (post or on_failure); RESTOR_STATUS: failed when anything failed,
-#   incomplete when a snapshot is incomplete, else success; the comma-separated job names
+#   RESTOR_HOOK (post or on_failure); RESTOR_COMMAND (run, or maintain after
+#   "restor maintain"); RESTOR_STATUS: failed when anything failed, incomplete when a
+#   snapshot is incomplete, else success; the comma-separated job names
 #   RESTOR_JOBS, RESTOR_SUCCEEDED_JOBS, RESTOR_INCOMPLETE_JOBS, RESTOR_FAILED_JOBS;
 #   RESTOR_SNAPSHOT_IDS (job=ID, comma-separated); when anything failed, RESTOR_ERROR
 #   (all failures, "; "-separated); and when anything warned, RESTOR_WARNINGS ("job:

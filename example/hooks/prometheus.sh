@@ -34,6 +34,8 @@ if [ -n "${RESTOR_JOB:-}" ]; then
 	echo "prometheus: use this script as the top-level post hook, not as a job's hook" >&2
 	exit 1
 fi
+# restor maintain backs up nothing: the metrics describe the last backup run.
+[ "${RESTOR_COMMAND:-run}" = maintain ] && exit 0
 
 out="$PROM_TEXTFILE_DIR/restor.prom"
 tmp="$out.$$.tmp"

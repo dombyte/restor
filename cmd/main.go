@@ -1,5 +1,6 @@
 // Package main is the restor CLI. `restor run` runs one backup cycle and exits 0 when
-// every job was backed up, 1 otherwise; `restor validate` checks the configuration,
+// every job was backed up, 1 otherwise; `restor maintain` runs prune and check on their
+// own; `restor validate` checks the configuration,
 // `restor snapshots` lists the snapshots of the jobs, `restor restore` restores a snapshot
 // (a dry run unless --apply is given), `restor restic …` runs restic against the
 // configured repository and `restor version` (or --version) prints the build
@@ -113,7 +114,8 @@ its sources, starts the services again and applies the retention policies.`,
 	root.PersistentFlags().StringVarP(&f.config, "config", "c", defaultConfig,
 		"configuration file")
 	root.PersistentFlags().BoolVar(&f.debug, "debug", false, "enable debug logging")
-	root.AddCommand(newRunCommand(f, stderr), newValidateCommand(f, stdout, stderr),
+	root.AddCommand(newRunCommand(f, stderr), newMaintainCommand(f, stderr),
+		newValidateCommand(f, stdout, stderr),
 		newSnapshotsCommand(f, stdout, stderr), newRestoreCommand(f, stdout, stderr),
 		newResticCommand(f, stdout, stderr),
 		&cobra.Command{
@@ -125,9 +127,9 @@ its sources, starts the services again and applies the retention policies.`,
 	return root
 }
 
-// runOptions are the flags of run.
+// runOptions are the flags of run and maintain.
 type runOptions struct {
-	dryRun bool
+	dryRun, skipPrune, skipCheck bool
 }
 
 func newRunCommand(f *flags, stderr io.Writer) *cobra.Command {
@@ -146,7 +148,42 @@ stopped, no hooks run and no snapshot is saved.`,
 	}
 	cmd.Flags().BoolVar(&o.dryRun, "dry-run", false,
 		"show what would be stopped and backed up, change nothing")
+	skipFlags(cmd, &o)
 	return cmd
+}
+
+func newMaintainCommand(f *flags, stderr io.Writer) *cobra.Command {
+	var o runOptions
+	cmd := &cobra.Command{
+		Use:   "maintain",
+		Short: "Run prune, unlock and check of the repository, without backups",
+		Long: `Run restic prune and unlock, then restic check (with
+repository.max_unused and check_read_data_subset), without backups or forget, whatever
+repository.prune and repository.check say: for a schedule of their own, e.g. a weekly
+check next to daily backups. The run-level hooks run after it with RESTOR_COMMAND=maintain.
+Exits 1 when prune, unlock or check failed.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			log := newLogger(stderr, level(f.debug, zerolog.InfoLevel))
+			a, err := newApp(f, nil, o, log)
+			if err != nil {
+				return err
+			}
+			if err := a.Maintain(cmd.Context()); err != nil {
+				log.Error().Err(err).Msg("maintenance failed")
+				return errReported
+			}
+			log.Info().Msg("maintenance completed")
+			return nil
+		},
+	}
+	skipFlags(cmd, &o)
+	return cmd
+}
+
+func skipFlags(cmd *cobra.Command, o *runOptions) {
+	cmd.Flags().BoolVar(&o.skipPrune, "skip-prune", false, "do not run prune and unlock")
+	cmd.Flags().BoolVar(&o.skipCheck, "skip-check", false, "do not run check")
 }
 
 func newValidateCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
@@ -305,7 +342,8 @@ func newApp(f *flags, jobs []string, o runOptions, log zerolog.Logger) (*app.App
 	}
 	a, err := app.New(app.Options{
 		ConfigPath: f.config, Jobs: jobs, Getenv: os.Getenv, Environ: os.Environ(), Log: log,
-		Hostname: os.Hostname, DryRun: o.dryRun,
+		Hostname: os.Hostname, DryRun: o.dryRun, SkipPrune: o.skipPrune,
+		SkipCheck: o.skipCheck,
 	})
 	if err != nil {
 		for _, problem := range joined(err) {

@@ -360,7 +360,7 @@ func TestManager_RunFailureHooks(t *testing.T) {
 		"RESTOR_SNAPSHOT_ID=", "RESTOR_ERROR=backup: a: " + assert.AnError.Error(),
 	}, jobEnv)
 	assert.Equal(t, []string{
-		"RESTOR_HOOK=on_failure", "RESTOR_STATUS=failed",
+		"RESTOR_HOOK=on_failure", "RESTOR_COMMAND=run", "RESTOR_STATUS=failed",
 		"RESTOR_JOBS=a,b",
 		"RESTOR_SUCCEEDED_JOBS=b", "RESTOR_INCOMPLETE_JOBS=", "RESTOR_FAILED_JOBS=a",
 		"RESTOR_SNAPSHOT_IDS=b=abc", "RESTOR_ERROR=backup: a: " + assert.AnError.Error(),
@@ -376,7 +376,7 @@ func TestManager_RunFailureHookAfterPruneFailure(t *testing.T) {
 	f.restic.EXPECT().Prune(mock.Anything).Return(assert.AnError).Once()
 	f.restic.EXPECT().Unlock(mock.Anything).Return(nil).Once()
 	f.hooks.EXPECT().RunEnv(mock.Anything, []string{
-		"RESTOR_HOOK=on_failure", "RESTOR_STATUS=failed",
+		"RESTOR_HOOK=on_failure", "RESTOR_COMMAND=run", "RESTOR_STATUS=failed",
 		"RESTOR_JOBS=a",
 		"RESTOR_SUCCEEDED_JOBS=a", "RESTOR_INCOMPLETE_JOBS=", "RESTOR_FAILED_JOBS=",
 		"RESTOR_SNAPSHOT_IDS=a=abc", "RESTOR_ERROR=" + assert.AnError.Error(),
@@ -413,19 +413,19 @@ func TestManager_RunPostHook(t *testing.T) {
 		want []string
 	}{
 		{name: "success", want: []string{
-			"RESTOR_HOOK=post", "RESTOR_STATUS=success", "RESTOR_JOBS=a,b",
+			"RESTOR_HOOK=post", "RESTOR_COMMAND=run", "RESTOR_STATUS=success", "RESTOR_JOBS=a,b",
 			"RESTOR_SUCCEEDED_JOBS=a,b", "RESTOR_INCOMPLETE_JOBS=", "RESTOR_FAILED_JOBS=",
 			"RESTOR_SNAPSHOT_IDS=a=abc,b=abc",
 		}},
 		{name: "incomplete", errB: incompleteError{}, want: []string{
-			"RESTOR_HOOK=post", "RESTOR_STATUS=incomplete", "RESTOR_JOBS=a,b",
+			"RESTOR_HOOK=post", "RESTOR_COMMAND=run", "RESTOR_STATUS=incomplete", "RESTOR_JOBS=a,b",
 			"RESTOR_SUCCEEDED_JOBS=a", "RESTOR_INCOMPLETE_JOBS=b", "RESTOR_FAILED_JOBS=",
 			"RESTOR_SNAPSHOT_IDS=a=abc,b=abc",
 			"RESTOR_WARNINGS=b: backup completed, but some source files could not be read: " +
 				"snapshot incomplete",
 		}},
 		{name: "unchanged has no snapshot", errB: unchangedError{}, want: []string{
-			"RESTOR_HOOK=post", "RESTOR_STATUS=success", "RESTOR_JOBS=a,b",
+			"RESTOR_HOOK=post", "RESTOR_COMMAND=run", "RESTOR_STATUS=success", "RESTOR_JOBS=a,b",
 			"RESTOR_SUCCEEDED_JOBS=a,b", "RESTOR_INCOMPLETE_JOBS=", "RESTOR_FAILED_JOBS=",
 			"RESTOR_SNAPSHOT_IDS=a=abc",
 		}},
@@ -458,7 +458,7 @@ func TestManager_RunPostHookBeforeOnFailure(t *testing.T) {
 		RunAndReturn(func(_ context.Context, env []string, name string, _ ...string) (
 			[]byte, error,
 		) {
-			f.rec.add(name + " " + env[0] + " " + env[1])
+			f.rec.add(name + " " + env[0] + " " + env[2])
 			return nil, nil
 		}).Twice()
 	m := f.manager(t, Settings{Post: "/bin/run-post", OnFailure: "/bin/run-failed"},

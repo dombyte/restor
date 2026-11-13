@@ -16,7 +16,8 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
 - Hooks before and after each job and on failure, with the job's result and warnings in
   their environment
 - Services that a killed or crashed run left stopped are started by the next run
-- `restor run --dry-run` shows what a run would stop and back up
+- `restor run --dry-run` shows what a run would stop and back up; `restor maintain` runs
+  prune and check on a schedule of their own
 - `restor restore` restores a snapshot, as a dry run unless `--apply` is given
 - `restor restic ...` runs restic against the configured repository, for everything else
 
@@ -84,9 +85,11 @@ sudo loginctl enable-linger "$USER"   # keep the timer running while logged out
 ## Usage
 
 ```bash
-restor run                      # back up every job, then forget and prune
+restor run                      # back up every job, then forget, prune and check
 restor run web db               # only these jobs (their order among each other is kept)
 restor run --dry-run            # show what would be stopped and backed up, change nothing
+restor run --skip-check         # this time without check (also --skip-prune)
+restor maintain                 # prune, unlock and check only, no backups (see below)
 restor validate                 # check the config, print the jobs in start order and
                                 # each retention policy once, with the jobs using it
 restor snapshots                # list the snapshots of every job
@@ -109,7 +112,8 @@ journal: `journalctl -u restor` (or `journalctl --user -u restor`).
 failed (also when its services did not come back) or the run was cancelled. A failed
 forget, prune or check is logged and runs the
 top-level `on_failure` hook; a failed `post` or `on_failure` hook is only logged. Neither
-changes the exit code. Before anything is stopped, it checks
+changes the exit code. `restor maintain` exits 1 when prune, unlock or check failed.
+Before anything is stopped, it checks
 that `restic` is installed and supported (see below). `restor snapshots`,
 `restor restore` and `restor restic` exit with restic's exit code.
 
@@ -319,7 +323,7 @@ for output that is still open and then warns.
 | `pre` | before the services are stopped; if it fails, the job fails and nothing else runs | `RESTOR_JOB`, `RESTOR_HOOK=pre` |
 | `post` | after the services are started again, whenever `pre` succeeded | also `RESTOR_STATUS` (`success`, `incomplete`, `failed`), `RESTOR_SNAPSHOT_ID`, `RESTOR_ERROR`, `RESTOR_WARNINGS` |
 | job `on_failure` | after `post`, when the job failed | as `post` |
-| top-level `post` | once after every run, after forget, prune and check | the run summary below |
+| top-level `post` | once after every run, after forget, prune and check, and after `restor maintain` | the run summary below |
 | top-level `on_failure` | after the top-level `post`, when a job, forget, prune or check failed | the run summary below |
 
 `RESTOR_WARNINGS` (`; `-separated, set only when there are any) lists what went wrong
@@ -327,7 +331,8 @@ without failing the job: services that did not stop in time or were not running 
 backup ran on live data), an incomplete snapshot, services an earlier run left stopped,
 skipped forgets and prunes.
 
-The top-level hooks get a summary of the whole run: `RESTOR_HOOK`, `RESTOR_STATUS`
+The top-level hooks get a summary of the whole run: `RESTOR_HOOK`, `RESTOR_COMMAND`
+(`run` or `maintain`), `RESTOR_STATUS`
 (`failed` when anything failed, `incomplete` when a snapshot is incomplete, else
 `success`), the comma-separated job names in `RESTOR_JOBS`, `RESTOR_SUCCEEDED_JOBS`,
 `RESTOR_INCOMPLETE_JOBS` and `RESTOR_FAILED_JOBS`, the snapshots in `RESTOR_SNAPSHOT_IDS`
@@ -388,6 +393,24 @@ restore needs it. `check_read_data_subset` also reads back part of the data (`5%
 failed prune: it is logged, the run summary says `failed` and the top-level `on_failure`
 hook runs, but the exit code stays 0 when every job backed up.
 
+**Maintenance on its own schedule:** `restor maintain` runs `prune` and `unlock`, then
+`check` (with `max_unused` and `check_read_data_subset`), without backups or forget,
+whatever `repository.prune` and `repository.check` say; `--skip-prune` or `--skip-check`
+leave one out. For a weekly check that reads part of the data next to daily backups, set
+`check: false` (and `check_read_data_subset`) and add a second timer:
+
+```ini
+# /etc/systemd/system/restor-maintain.service: a copy of restor.service with
+ExecStart=/usr/bin/restor maintain --config /etc/restor/config.yaml
+# /etc/systemd/system/restor-maintain.timer
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00
+Persistent=true
+```
+
+Schedule it apart from the backups: prune needs an exclusive repository lock and fails
+while a backup runs (unless `retry_lock` waits for it).
+
 ## Restore
 
 `restor restore <snapshot-ID>` restores one snapshot with `restic restore`. Find the ID
@@ -429,6 +452,8 @@ restor restore 1a2b3c4d --in-place --include /srv/app/db --apply
 - **Services that do not come back fail the job:** not running within `start_timeout`
   used to be a warning only. The snapshot still counts for forget and prune.
 - **Env file:** text after a closing quote is an error instead of being dropped.
+- **`check_read_data_subset`** no longer needs `check: true`: it also applies to
+  `restor maintain`.
 
 ## Upgrading from configuration version 1
 

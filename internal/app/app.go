@@ -71,10 +71,13 @@ type Options struct {
 	Hostname func() (string, error)
 	// DryRun makes Run report what it would stop and back up, without changing anything.
 	DryRun bool
+	// SkipPrune and SkipCheck leave out prune and unlock, or check, in Run and Maintain.
+	SkipPrune, SkipCheck bool
 }
 
 // App is one wired backup run.
 type App struct {
+	opts         Options
 	plan         *config.Plan
 	manager      *backup.Manager
 	restic       *restic.Client
@@ -115,8 +118,8 @@ func New(o Options) (*App, error) {
 		return nil, err
 	}
 	return &App{
-		plan: plan, manager: manager, restic: resticClient, resticRunner: resticRunner,
-		log: o.Log,
+		opts: o, plan: plan, manager: manager, restic: resticClient,
+		resticRunner: resticRunner, log: o.Log,
 	}, nil
 }
 
@@ -143,6 +146,18 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 	return a.manager.Run(ctx)
+}
+
+// Maintain checks the restic version, then runs prune and unlock, and check, without
+// backups (unless SkipPrune or SkipCheck leave one out): `restor maintain` on a schedule
+// of its own.
+func (a *App) Maintain(ctx context.Context) error {
+	if err := a.checkRestic(ctx); err != nil {
+		return err
+	}
+	return a.manager.Maintain(ctx, backup.Maintenance{
+		Prune: !a.opts.SkipPrune, Check: !a.opts.SkipCheck,
+	})
 }
 
 // checkRestic fails when restic is missing or older than restor supports, before any
@@ -292,16 +307,17 @@ func (a *App) Describe(w io.Writer) error {
 	return tw.Flush()
 }
 
-// checkLabel says whether the run ends with restic check, and how much data it reads.
+// checkLabel says whether the run ends with restic check, and how much data it (and
+// restor maintain) reads.
 func checkLabel(r config.Repository) string {
-	switch {
-	case !r.Check:
-		return "false"
-	case r.CheckReadDataSubset == "":
-		return "true (structure only)"
-	default:
-		return "true (reads " + r.CheckReadDataSubset + " of the data)"
+	reads := "structure only"
+	if r.CheckReadDataSubset != "" {
+		reads = "reads " + r.CheckReadDataSubset + " of the data"
 	}
+	if !r.Check {
+		return "false (restor maintain: " + reads + ")"
+	}
+	return "true (" + reads + ")"
 }
 
 // sourcesLabel is what a job backs up: its sources, or the command whose output it saves.
@@ -453,8 +469,8 @@ func createManager(plan *config.Plan, o Options, d managerDeps) (*backup.Manager
 		jobs = append(jobs, backup.Job{Settings: jobSettings(j, o.DryRun), Services: services})
 	}
 	return backup.NewManager(backup.Settings{
-		Concurrency: plan.Concurrency, Prune: plan.Repository.Prune,
-		Check: plan.Repository.Check, DryRun: o.DryRun, Post: plan.Post,
+		Concurrency: plan.Concurrency, Prune: plan.Repository.Prune && !o.SkipPrune,
+		Check: plan.Repository.Check && !o.SkipCheck, DryRun: o.DryRun, Post: plan.Post,
 		OnFailure: plan.OnFailure,
 	}, jobs, backup.Deps{
 		Restic: d.restic, Locker: locker, State: records, Hooks: d.runner,

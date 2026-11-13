@@ -492,6 +492,10 @@ jobs:
 	require.NoError(t, a.Run(context.Background()))
 	assert.Len(t, r.snapshots(t, "a"), before, "a dry run saves nothing")
 
+	a, err = New(o)
+	require.NoError(t, err)
+	require.NoError(t, a.Maintain(context.Background()), "restor maintain")
+
 	o.Jobs = []string{"b"}
 	a, err = New(o)
 	require.NoError(t, err)

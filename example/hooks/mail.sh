@@ -55,7 +55,9 @@ if [ -z "${RESTOR_JOB:-}" ]; then
 		[ -n "$RESTOR_FAILED_JOBS" ] || subject="maintenance failed"
 		;;
 	esac
-	if [ "$level" = info ] && [ -n "${RESTOR_WARNINGS:-}" ]; then
+	if [ "${RESTOR_COMMAND:-run}" = maintain ]; then
+		[ "$level" = error ] || subject="maintenance completed"
+	elif [ "$level" = info ] && [ -n "${RESTOR_WARNINGS:-}" ]; then
 		level=warning subject="all $jobs jobs backed up, with warnings"
 	fi
 elif [ "$RESTOR_HOOK" = pre ]; then

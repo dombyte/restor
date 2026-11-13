@@ -260,10 +260,6 @@ func TestLoad_Validation(t *testing.T) {
 		{"retry lock", "repository: {retry_lock: -1s}", "repository.retry_lock: must be >= 0"},
 		{"max unused", "repository: {max_unused: lots}", `repository.max_unused: "lots" is not`},
 		{
-			"subset without check", "repository: {check_read_data_subset: 5%}",
-			"repository.check_read_data_subset: only with check: true",
-		},
-		{
 			"subset", "repository: {check: true, check_read_data_subset: half}",
 			`repository.check_read_data_subset: "half" is not a subset such as "5%"`,
 		},

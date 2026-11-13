@@ -25,7 +25,10 @@ conf=${RESTOR_HOOKS_CONF:-/etc/restor/hooks.conf}
 [ -r "$conf" ] && . "$conf"
 
 : "${HC_PING_KEY:?healthchecks: HC_PING_KEY is not set in $conf}"
-base="${HC_URL:-https://hc-ping.com}/$HC_PING_KEY/${1:-${RESTOR_JOB:-restor}}"
+# restor maintain reports to a check of its own: it runs on another schedule.
+run_slug=restor
+[ "${RESTOR_COMMAND:-run}" = maintain ] && run_slug=restor-maintain
+base="${HC_URL:-https://hc-ping.com}/$HC_PING_KEY/${1:-${RESTOR_JOB:-$run_slug}}"
 query=""
 [ "${HC_CREATE:-0}" = 1 ] && query="?create=1"
 

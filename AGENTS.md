@@ -35,8 +35,9 @@ restor orchestrates **restic** backups of several **jobs** on one host.
   job, then one
   repository-wide `restic prune` and `restic unlock` (only with `repository.prune`), then
   `restic check` (only with `repository.check`); the run-level post hook, then the run-level on_failure hook when anything failed.
-- **`restor run --dry-run`:** only reports the services each job would stop and runs
-  `restic backup --dry-run`.
+- **`restor maintain`:** prune + unlock and check without backups or forget, for a
+  schedule of their own; **`restor run --dry-run`:** only reports the services each job
+  would stop and runs `restic backup --dry-run`.
 - **Runtime:** a single CLI binary that runs **on the host** as a oneshot systemd service
   (`restor run`), triggered by a systemd timer (`example/restor.service`,
   `example/restor.timer`). It shells out to `restic`, `docker compose`, `podman compose`
@@ -91,6 +92,7 @@ go tool mockery                                           # regenerate mocks (.m
 make build                                                # ./restor with version info (ldflags)
 ./restor run --config config.yaml [--debug] [job...]     # run one backup cycle
 ./restor run --dry-run                                    # what a run would stop and back up
+./restor maintain [--skip-prune] [--skip-check]           # prune, unlock and check only
 ./restor validate --config config.yaml                    # check config, print job order
 ./restor restic --config config.yaml snapshots            # restic with repo + env file
 ./restor version                                          # build info (also --version, -v)
@@ -130,9 +132,9 @@ make build                                                # ./restor with versio
 ## 3. Project Structure
 
 ```
-cmd/main.go                main package: cobra commands (run, validate, snapshots, restore,
-                           restic, version), logger, signal context, shutdown deadline,
-                           exit code, build info
+cmd/main.go                main package: cobra commands (run, maintain, validate, snapshots,
+                           restore, restic, version), logger, signal context, shutdown
+                           deadline, exit code, build info
 internal/app/              composition root: config Plan → Settings, CreateServiceManager,
                            restic flags, wiring, restic version check, startup warnings,
                            Describe (validate), snapshots, restore and the restic
@@ -140,8 +142,8 @@ internal/app/              composition root: config Plan → Settings, CreateSer
 internal/config/           YAML file (version 2) and its job files decoded strictly, ${VAR}
                            expansion, paths, env file, defaults → validated read-only Plan
 internal/backup/           orchestration: Manager (recovery, schedule, per-job run, dry run,
-                           hooks, forget/prune/unlock/check); declares Restic, Services,
-                           Locker, State, Runner
+                           hooks, forget/prune/unlock/check, Maintain); declares Restic,
+                           Services, Locker, State, Runner
 internal/restic/           restic CLI client: typed flags, backup, forget, prune, check,
                            unlock, version
 internal/servicemanager/   Compose (docker/podman), Systemd, Noop; status polling
@@ -439,7 +441,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   and form no cycle (the first cycle is reported as `a → b → a`); durations ≥ 0, `stop_timeout` > 0 when services are
   stopped and `start_timeout` > 0 when they are stopped or `start_all` is set; `keep` counts ≥ 0 and `within…` restic durations (`1y2m3d4h`); sizes
   (`exclude_larger_than`) like `500M`; `max_unused` a percentage, size or `unlimited`;
-  `check_read_data_subset` only with `check`, `n/t` (1 ≤ n ≤ t), a percentage in (0, 100]
+  `check_read_data_subset` (also without `check`: `restor maintain` uses it) `n/t`
+  (1 ≤ n ≤ t), a percentage in (0, 100]
   or a size > 0;
   `backend_options` keys like `s3.connections` with non-empty values; limits ≥ 0; env file
   names and values without NUL bytes; no extra `tags` that are the name of a job (forget
@@ -463,7 +466,14 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   unknown names are an error). Ordering against jobs that are not selected is dropped.
   `--dry-run`: no recovery, locks, hooks, service changes or maintenance; each job logs
   the services it would stop (`Services.Running`) and runs `restic backup --dry-run`
-  (`BackupFlags.DryRun`); exit code as for a run.
+  (`BackupFlags.DryRun`); exit code as for a run. `--skip-prune` and `--skip-check` turn
+  off the configured prune + unlock and check for this run.
+- `restor maintain [--skip-prune] [--skip-check]`: checks the restic version, then
+  `Manager.Maintain`: prune + unlock and check, whatever `repository.prune`/`check` say
+  (both skipped = `backup.ErrNothingToMaintain`), no backup and no forget (forget belongs
+  to a fresh snapshot), then the run-level hooks with `RESTOR_COMMAND=maintain` and empty
+  job lists. Exit 1 when one of them failed (`backup.ErrMaintenanceFailed`). Works
+  without jobs.
 - `restor validate`: loads and wires everything, then prints the jobs in the order they
   start with concurrency 1 (`Manager.Order`), with type, after, requires, stop, start
   all, a keep label and sources (above them the concurrency, prune and check settings
@@ -519,9 +529,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `RESTOR_STATUS` (`success`, `incomplete`, `failed`), `RESTOR_SNAPSHOT_ID` (empty without
   a snapshot), after a failure `RESTOR_ERROR` and, when the job warned, `RESTOR_WARNINGS`
   (`; `-separated). The run-level `post` and `on_failure`
-  get the run summary (`backup.summary`): `RESTOR_HOOK`, `RESTOR_STATUS` (`failed` when a
-  job, the recovery or the maintenance failed, else `incomplete` when a snapshot is, else
-  `success`),
+  get the run summary (`backup.summary`): `RESTOR_HOOK`, `RESTOR_COMMAND` (`run` or
+  `maintain`), `RESTOR_STATUS` (`failed` when a job, the recovery or the maintenance
+  failed, else `incomplete` when a snapshot is, else `success`),
   the comma-separated `RESTOR_JOBS`, `RESTOR_SUCCEEDED_JOBS`, `RESTOR_INCOMPLETE_JOBS`,
   `RESTOR_FAILED_JOBS`, `RESTOR_SNAPSHOT_IDS` (`job=ID`) and, when anything failed,
   `RESTOR_ERROR` (recovery and maintenance failures, then job failures, `; `-separated)
@@ -708,6 +718,9 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   survives a reboot; it is read under the job's lock, so a second restor process never
   starts services that a running backup stopped on purpose. Recovery runs only for the
   jobs of the run: `restor run web` does not touch the record of `db`.
+- **Maintenance as its own command:** prune and especially `check --read-data-subset`
+  can take longer than all backups together; `restor maintain` lets them run on another
+  timer. Forget stays with the backups: it may only run after a fresh complete snapshot.
 - **The process group gets SIGKILL after its leader was reaped:** `exec.Cmd.Wait` reaps
   the leader before `command.Runner.finish` can kill what is left of the group. While a
   member lives, Linux keeps the group ID allocated, so the signal reaches only that
@@ -950,7 +963,8 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
   (`make integration`; `make integration-oldest` with the oldest supported release, which
   CI tests too): one subtest per restic feature restor uses (every backup, forget,
   global and prune flag, skip-if-unchanged, exit codes 3/10/11/12, a whole `restor run`,
-  `restor restore`, forget per host, backup `--dry-run`, `restor run --dry-run`), so a failing release shows what it lacks. A new restic option gets a check there.
+  `restor restore`, forget per host, backup `--dry-run`, `restor run --dry-run` and
+  `restor maintain`), so a failing release shows what it lacks. A new restic option gets a check there.
   Backups that must be unchanged use `testdata/static` and are retried
   (`unchangedWithin`): restic also records the directories above a source, those of a
   temp dir change while other tests run, and even the home directory can change.
