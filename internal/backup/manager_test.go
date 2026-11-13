@@ -18,9 +18,17 @@ import (
 func fileJob(f *fixture, t *testing.T, name, policy string) Job {
 	t.Helper()
 	p := job(name, f.services(t, name))
-	p.Settings.Pre, p.Settings.Post = "", ""
+	p.Settings.Pre, p.Settings.Post, p.Settings.StopServices = "", "", false
 	p.Settings.ForgetArgs = strings.Fields(policy)
 	return p
+}
+
+// stoppingJob is a job that stops its services, without hooks.
+func stoppingJob(f *fixture, t *testing.T, name string) Job {
+	t.Helper()
+	j := fileJob(f, t, name, "")
+	j.Settings.StopServices = true
+	return j
 }
 
 func TestManager_RunSequential(t *testing.T) {
@@ -217,13 +225,13 @@ func TestManager_ShutdownTimeout(t *testing.T) {
 	assert.Equal(t, shutdownGrace, f.manager(t, Settings{}).ShutdownTimeout(),
 		"no services to restart")
 
-	slow := fileJob(f, t, "slow", "")
+	slow := stoppingJob(f, t, "slow")
 	slow.Settings.StartTimeout = 5 * time.Minute
 	unstopped := fileJob(f, t, "unstopped", "")
-	unstopped.Settings.StartTimeout, unstopped.Settings.StopServices = time.Hour, false
+	unstopped.Settings.StartTimeout = time.Hour
 	jobs := []Job{slow, unstopped}
 	for i := range 10 {
-		jobs = append(jobs, fileJob(f, t, strconv.Itoa(i), "")) // 20 s each
+		jobs = append(jobs, stoppingJob(f, t, strconv.Itoa(i))) // 20 s each
 	}
 	m := f.manager(t, Settings{}, jobs...)
 
@@ -234,10 +242,10 @@ func TestManager_ShutdownTimeout(t *testing.T) {
 func TestManager_ShutdownTimeoutPostHook(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	hooked := fileJob(f, t, "hooked", "")
+	hooked := stoppingJob(f, t, "hooked")
 	hooked.Settings.Post = "/bin/post"
 	files := fileJob(f, t, "files", "")
-	files.Settings.Post, files.Settings.StopServices = "/bin/post", false
+	files.Settings.Post = "/bin/post"
 	m := f.manager(t, Settings{}, hooked, files)
 
 	assert.Equal(t, shutdownGrace+20*time.Second+restartGrace+postHookGrace,
@@ -352,7 +360,8 @@ func TestManager_RunFailureHooks(t *testing.T) {
 		"RESTOR_SNAPSHOT_ID=", "RESTOR_ERROR=backup: a: " + assert.AnError.Error(),
 	}, jobEnv)
 	assert.Equal(t, []string{
-		"RESTOR_HOOK=on_failure", "RESTOR_STATUS=failed", "RESTOR_JOBS=a,b",
+		"RESTOR_HOOK=on_failure", "RESTOR_STATUS=failed",
+		"RESTOR_JOBS=a,b",
 		"RESTOR_SUCCEEDED_JOBS=b", "RESTOR_INCOMPLETE_JOBS=", "RESTOR_FAILED_JOBS=a",
 		"RESTOR_SNAPSHOT_IDS=b=abc", "RESTOR_ERROR=backup: a: " + assert.AnError.Error(),
 	}, runEnv)
@@ -367,7 +376,8 @@ func TestManager_RunFailureHookAfterPruneFailure(t *testing.T) {
 	f.restic.EXPECT().Prune(mock.Anything).Return(assert.AnError).Once()
 	f.restic.EXPECT().Unlock(mock.Anything).Return(nil).Once()
 	f.hooks.EXPECT().RunEnv(mock.Anything, []string{
-		"RESTOR_HOOK=on_failure", "RESTOR_STATUS=failed", "RESTOR_JOBS=a",
+		"RESTOR_HOOK=on_failure", "RESTOR_STATUS=failed",
+		"RESTOR_JOBS=a",
 		"RESTOR_SUCCEEDED_JOBS=a", "RESTOR_INCOMPLETE_JOBS=", "RESTOR_FAILED_JOBS=",
 		"RESTOR_SNAPSHOT_IDS=a=abc", "RESTOR_ERROR=" + assert.AnError.Error(),
 	}, "/bin/run-failed").Return(nil, nil).Once()
@@ -411,6 +421,8 @@ func TestManager_RunPostHook(t *testing.T) {
 			"RESTOR_HOOK=post", "RESTOR_STATUS=incomplete", "RESTOR_JOBS=a,b",
 			"RESTOR_SUCCEEDED_JOBS=a", "RESTOR_INCOMPLETE_JOBS=b", "RESTOR_FAILED_JOBS=",
 			"RESTOR_SNAPSHOT_IDS=a=abc,b=abc",
+			"RESTOR_WARNINGS=b: backup completed, but some source files could not be read: " +
+				"snapshot incomplete",
 		}},
 		{name: "unchanged has no snapshot", errB: unchangedError{}, want: []string{
 			"RESTOR_HOOK=post", "RESTOR_STATUS=success", "RESTOR_JOBS=a,b",
@@ -475,4 +487,29 @@ func backups(calls []string) []string {
 		}
 	}
 	return out
+}
+
+func TestManager_ServicesNotStartedKeepRetention(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	svc := f.services(t, "db", "postgres")
+	f.expectLock("db")
+	f.expectLock("files")
+	f.expectStop(svc, true, nil)
+	f.expectBackup("db", nil)
+	f.expectStart(svc, false, nil)
+	f.restic.EXPECT().Forget(mock.Anything, "db", mock.Anything).Return(nil).Once()
+	f.restic.EXPECT().Prune(mock.Anything).Return(nil).Once()
+	f.restic.EXPECT().Unlock(mock.Anything).Return(nil).Once()
+	db := job("db", svc)
+	db.Settings.Pre, db.Settings.Post, db.Settings.ForgetArgs = "", "", []string{"--keep-last=1"}
+	files := fileJob(f, t, "files", "")
+	files.Settings.After = []string{"db"}
+	f.expectBackup("files", nil) // files only runs after db: it does not require it
+
+	err := f.manager(t, Settings{Prune: true}, db, files).Run(context.Background())
+
+	require.ErrorIs(t, err, ErrJobsFailed, "a service that did not come back fails its job")
+	assert.Contains(t, err.Error(), "1 of 2", "and only its job")
+	// Forget and prune ran: the restic mock fails the test on a missing call.
 }

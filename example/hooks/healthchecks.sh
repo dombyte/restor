@@ -40,7 +40,8 @@ report() {
 if [ -z "${RESTOR_JOB:-}" ]; then
 	# The top-level post or on_failure hook: one check for the whole run.
 	case "$RESTOR_STATUS" in
-	success) report "" "backed up: $RESTOR_SUCCEEDED_JOBS" ;;
+	success) report "" "backed up: $RESTOR_SUCCEEDED_JOBS
+${RESTOR_WARNINGS:-}" ;;
 	*) report /fail "failed: $RESTOR_FAILED_JOBS
 incomplete: $RESTOR_INCOMPLETE_JOBS
 ${RESTOR_ERROR:-}" ;;

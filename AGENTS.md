@@ -276,13 +276,19 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   output → warning, the job counts as backed up but is **incomplete**: its forget and the
   prune are skipped. A snapshot that `--skip-if-unchanged` skipped (a summary without ID)
   counts as **complete**: the latest snapshot is still current.
-- Restarting services fails → job fails; not running within `start_timeout` → warning.
-  A `failed` unit or an `exited`/`dead` container (without a running one of the same
-  service) right after the start is a failed restart (`servicemanager.errStartFailed`).
+- Restarting services fails, or they are not running within `start_timeout`
+  (`backup.ErrNotStarted`) → job fails. A `failed` unit or an `exited`/`dead` container
+  (without a running one of the same service) ends the wait at once
+  (`servicemanager.errStartFailed`). The job's backup outcome stays as it was
+  (`result.backup`): its snapshot counts for forget and prune, so a service that does not
+  come back never blocks retention. A job that `requires` it is skipped (the job failed).
 - `start_all`: listing or starting the services that were not stopped fails, or they are
   not running within `start_timeout` → warning only (a service that was down must not
   block forget and prune on every run).
 - A failed job runs its on_failure hook after the post hook.
+- What goes wrong without failing the job is a warning: logged, and kept per job for
+  `RESTOR_WARNINGS` (stop failed or timed out, no services running, incomplete snapshot,
+  `start_all` problems), plus the run-level ones (skipped forget or prune).
 - A job whose `requires` job failed is skipped and fails (see Schedule).
 - Other jobs always continue, also those that run after the failed one; each failure is
   logged once by `Manager` with the job, and `main` logs the summary
@@ -477,12 +483,18 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - Run with the process environment, the run context and these variables: `pre` gets
   `RESTOR_JOB`, `RESTOR_HOOK=pre`; `post` and the job's `on_failure` also
   `RESTOR_STATUS` (`success`, `incomplete`, `failed`), `RESTOR_SNAPSHOT_ID` (empty without
-  a snapshot) and, after a failure, `RESTOR_ERROR`. The run-level `post` and `on_failure`
+  a snapshot), after a failure `RESTOR_ERROR` and, when the job warned, `RESTOR_WARNINGS`
+  (`; `-separated). The run-level `post` and `on_failure`
   get the run summary (`backup.summary`): `RESTOR_HOOK`, `RESTOR_STATUS` (`failed` when a
   job or the maintenance failed, else `incomplete` when a snapshot is, else `success`),
   the comma-separated `RESTOR_JOBS`, `RESTOR_SUCCEEDED_JOBS`, `RESTOR_INCOMPLETE_JOBS`,
   `RESTOR_FAILED_JOBS`, `RESTOR_SNAPSHOT_IDS` (`job=ID`) and, when anything failed,
-  `RESTOR_ERROR` (maintenance failures, then job failures, `; `-separated).
+  `RESTOR_ERROR` (maintenance failures, then job failures, `; `-separated)
+  and, when anything warned, `RESTOR_WARNINGS` (run-level warnings, then each job's as
+  `job: warning`). There is no `warning` status: hooks that compare `RESTOR_STATUS` keep
+  working. Every value is cleaned before exec (`backup.execSafe`): NUL bytes dropped
+  (exec refuses the whole environment otherwise) and cut to 32 KiB (Linux refuses a
+  variable over 128 KiB).
 - The post hook runs after the services are started again whenever the pre hook succeeded
   (or there is none), also when the backup or the restart failed, so it can undo the pre
   hook. The job's on_failure hook runs after it when the job failed (also after a failed
@@ -646,6 +658,15 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   system's; the key exists for a renamed host, whose old series would otherwise never be
   forgotten again. `restor snapshots` lists every host's snapshots: a restore may need
   another host's.
+- **A service that does not come back fails its job, not its backup:** a warning was
+  missed in practice (exit 0, `RESTOR_STATUS=success`) while a database stayed down. The
+  job fails (exit code, on_failure, `RESTOR_FAILED_JOBS`), but its snapshot is fine, so
+  the backup outcome (`result.backup`) drives forget and prune: a broken service must not
+  stop retention for every job. The other jobs are not affected, except those that
+  `require` it.
+- **Warnings as a variable, not a status:** `RESTOR_WARNINGS` carries what went wrong
+  without failing (a backup of live data, services that did not stop in time). A new
+  `RESTOR_STATUS` value would have broken every hook that compares it.
 - **The process group gets SIGKILL after its leader was reaped:** `exec.Cmd.Wait` reaps
   the leader before `command.Runner.finish` can kill what is left of the group. While a
   member lives, Linux keeps the group ID allocated, so the signal reaches only that
