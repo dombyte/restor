@@ -55,6 +55,9 @@ if [ -z "${RESTOR_JOB:-}" ]; then
 		[ -n "$RESTOR_FAILED_JOBS" ] || subject="maintenance failed"
 		;;
 	esac
+	if [ "$level" = info ] && [ -n "${RESTOR_WARNINGS:-}" ]; then
+		level=warning subject="all $jobs jobs backed up, with warnings"
+	fi
 elif [ "$RESTOR_HOOK" = pre ]; then
 	level=info subject="$RESTOR_JOB: backup started"
 else
@@ -63,6 +66,9 @@ else
 	incomplete) level=warning subject="$RESTOR_JOB: backup incomplete" ;;
 	*) level=error subject="$RESTOR_JOB: backup failed" ;;
 	esac
+	if [ "$level" = info ] && [ -n "${RESTOR_WARNINGS:-}" ]; then
+		level=warning subject="$subject, with warnings"
+	fi
 fi
 
 # rank orders the levels, so NOTIFY_LEVEL can drop the less important ones.
@@ -84,6 +90,9 @@ rank() { case "$1" in info) echo 0 ;; warning) echo 1 ;; *) echo 2 ;; esac }
 	# RESTOR_ERROR holds every failure, "; "-separated: one per line.
 	if [ -n "${RESTOR_ERROR:-}" ]; then
 		printf 'Errors:\n%s\n\n' "$RESTOR_ERROR" | sed 's/; /\n/g'
+	fi
+	if [ -n "${RESTOR_WARNINGS:-}" ]; then
+		printf 'Warnings:\n%s\n\n' "$RESTOR_WARNINGS" | sed 's/; /\n/g'
 	fi
 	echo "Variables of this hook:"
 	env | grep '^RESTOR_' | grep -v '^RESTOR_HOOKS_CONF=' | sort | sed 's/^/  /'

@@ -13,8 +13,8 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
 - Typed, validated restic options (excludes, tags, limits, ...) and retention policies
   (`keep`) with a single prune for the whole repository, and an optional `restic check`
   after it
-- Hooks before and after each job and on failure, with the job's result in their
-  environment
+- Hooks before and after each job and on failure, with the job's result and warnings in
+  their environment
 - `restor restore` restores a snapshot, as a dry run unless `--apply` is given
 - `restor restic ...` runs restic against the configured repository, for everything else
 
@@ -103,7 +103,8 @@ other: a normal user who wants the system configuration runs restor with `sudo`.
 journal: `journalctl -u restor` (or `journalctl --user -u restor`).
 
 `restor run` exits 0 when every job was backed up and 1 when the config is invalid, a job
-failed or the run was cancelled. A failed forget, prune or check is logged and runs the
+failed (also when its services did not come back) or the run was cancelled. A failed
+forget, prune or check is logged and runs the
 top-level `on_failure` hook; a failed `post` or `on_failure` hook is only logged. Neither
 changes the exit code. Before anything is stopped, it checks
 that `restic` is installed and supported (see below). `restor snapshots`,
@@ -270,9 +271,11 @@ incomplete snapshot (some unreadable files) does not skip. `restor run files` wi
 and only those are started again afterwards, also when the backup failed. When none of
 them runs, restor warns and backs up anyway: check `compose_file` or `units` if the
 services should have been running (a project started with `-p` needs `project_name`,
-services of a profile need `profiles`). A unit that is `failed`, or a container that has
-exited, right after the start fails the restart at once; a container that is
-`restarting` does not count as running. With
+services of a profile need `profiles`). Services that are not running again within
+`start_timeout` fail the job: its `on_failure` hook runs and the run exits 1. Its snapshot
+still counts, so forget and prune run, and the other jobs are not affected (those that
+`require` it are skipped). A unit that is `failed`, or a container that exited, ends the
+wait at once. A container that is `restarting` does not count as running. With
 `start_all: true` the backup also starts the job's other services (`services`, or all of
 the compose file / all `units`), so a service that was down comes back up; a failed start
 of those is only a warning and does not fail the job. `start_all` works with `stop: false`
@@ -304,17 +307,23 @@ for output that is still open and then warns.
 | Hook | Runs | Environment |
 |---|---|---|
 | `pre` | before the services are stopped; if it fails, the job fails and nothing else runs | `RESTOR_JOB`, `RESTOR_HOOK=pre` |
-| `post` | after the services are started again, whenever `pre` succeeded | also `RESTOR_STATUS` (`success`, `incomplete`, `failed`), `RESTOR_SNAPSHOT_ID`, `RESTOR_ERROR` |
+| `post` | after the services are started again, whenever `pre` succeeded | also `RESTOR_STATUS` (`success`, `incomplete`, `failed`), `RESTOR_SNAPSHOT_ID`, `RESTOR_ERROR`, `RESTOR_WARNINGS` |
 | job `on_failure` | after `post`, when the job failed | as `post` |
 | top-level `post` | once after every run, after forget, prune and check | the run summary below |
 | top-level `on_failure` | after the top-level `post`, when a job, forget, prune or check failed | the run summary below |
+
+`RESTOR_WARNINGS` (`; `-separated, set only when there are any) lists what went wrong
+without failing the job: services that did not stop in time or were not running (the
+backup ran on live data), an incomplete snapshot, skipped forgets and prunes.
 
 The top-level hooks get a summary of the whole run: `RESTOR_HOOK`, `RESTOR_STATUS`
 (`failed` when anything failed, `incomplete` when a snapshot is incomplete, else
 `success`), the comma-separated job names in `RESTOR_JOBS`, `RESTOR_SUCCEEDED_JOBS`,
 `RESTOR_INCOMPLETE_JOBS` and `RESTOR_FAILED_JOBS`, the snapshots in `RESTOR_SNAPSHOT_IDS`
 (`db=4f2a…,web=9c1e…`) and, when anything failed, every failure in `RESTOR_ERROR`
-(`; `-separated). A top-level `post` is the place for one notification per run.
+(`; `-separated) and the warnings of every job in `RESTOR_WARNINGS` (`job: warning`). A
+top-level `post` is the place for one notification per run. Values longer than 32 KiB are
+cut, and NUL bytes in a program's output are dropped, so that the hook always starts.
 
 A failing `post` or `on_failure` hook is logged and changes nothing. After a cancel
 (SIGTERM) a job's `post` hook still runs, for at most one minute, so that it can undo its
@@ -406,6 +415,8 @@ restor restore 1a2b3c4d --in-place --include /srv/app/db --apply
   forgotten again.
 - **Unset variables are errors:** `${VAR}` without a default and an unset or empty `VAR`
   used to become empty; write `${VAR:-}` where that was meant.
+- **Services that do not come back fail the job:** not running within `start_timeout`
+  used to be a warning only. The snapshot still counts for forget and prune.
 - **Env file:** text after a closing quote is an error instead of being dropped.
 
 ## Upgrading from configuration version 1

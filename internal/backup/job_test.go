@@ -52,11 +52,15 @@ func newFixture(t *testing.T) *fixture {
 	return f
 }
 
+func (f *fixture) deps() Deps {
+	return Deps{
+		Restic: f.restic, Locker: f.locker, Hooks: f.hooks, Log: zerolog.Nop(),
+	}
+}
+
 func (f *fixture) manager(t *testing.T, s Settings, jobs ...Job) *Manager {
 	t.Helper()
-	m, err := NewManager(s, jobs, Deps{
-		Restic: f.restic, Locker: f.locker, Hooks: f.hooks, Log: zerolog.Nop(),
-	})
+	m, err := NewManager(s, jobs, f.deps())
 	require.NoError(t, err)
 	return m
 }
@@ -142,8 +146,7 @@ func TestNewManager_MissingDependencies(t *testing.T) {
 	require.ErrorIs(t, err, ErrMissingDependency)
 
 	f := newFixture(t)
-	_, err = NewManager(Settings{}, []Job{{Settings: JobSettings{Name: "x"}}},
-		Deps{Restic: f.restic, Locker: f.locker, Hooks: f.hooks})
+	_, err = NewManager(Settings{}, []Job{{Settings: JobSettings{Name: "x"}}}, f.deps())
 	require.ErrorIs(t, err, ErrMissingDependency)
 	assert.Contains(t, err.Error(), "Jobs[x].Services")
 }
@@ -151,7 +154,7 @@ func TestNewManager_MissingDependencies(t *testing.T) {
 func TestNewManager_RequiresNotAfter(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	deps := Deps{Restic: f.restic, Locker: f.locker, Hooks: f.hooks}
+	deps := f.deps()
 	job := func(after ...string) []Job {
 		return []Job{{
 			Settings: JobSettings{Name: "web", After: after, Requires: []string{"db"}},
@@ -217,14 +220,29 @@ func TestRunJob_FailureHandling(t *testing.T) {
 			},
 		},
 		{
-			name: "stop and start time out: warnings only",
+			name: "stop times out: warning only",
 			setup: func(f *fixture, s *mocks.MockServices) {
 				f.expectHook("pre", nil)
 				f.expectStop(s, false, nil)
 				f.expectBackup("web", nil)
+				f.expectStart(s, true, nil)
+				f.expectHook("post", nil)
+			},
+			want: []string{
+				"lock key", "hook pre", "stop", "backup web", "start", "hook post",
+				"release key",
+			},
+		},
+		{
+			name: "start times out: job fails, post hook runs",
+			setup: func(f *fixture, s *mocks.MockServices) {
+				f.expectHook("pre", nil)
+				f.expectStop(s, true, nil)
+				f.expectBackup("web", nil)
 				f.expectStart(s, false, nil)
 				f.expectHook("post", nil)
 			},
+			wantErr: true,
 			want: []string{
 				"lock key", "hook pre", "stop", "backup web", "start", "hook post",
 				"release key",
@@ -346,9 +364,9 @@ func TestRunJob_NoServicesRunningWarns(t *testing.T) {
 	p := job("web", svc)
 	p.Settings.Pre, p.Settings.Post = "", ""
 	var logs bytes.Buffer
-	m, err := NewManager(Settings{}, []Job{p}, Deps{
-		Restic: f.restic, Locker: f.locker, Hooks: f.hooks, Log: zerolog.New(&logs),
-	})
+	d := f.deps()
+	d.Log = zerolog.New(&logs)
+	m, err := NewManager(Settings{}, []Job{p}, d)
 	require.NoError(t, err)
 
 	require.NoError(t, errOf(m.runJob(context.Background(), p)))
@@ -596,7 +614,8 @@ func TestRunJob_HookEnvironment(t *testing.T) {
 	assert.Equal(t, []string{
 		"RESTOR_JOB=web", "RESTOR_HOOK=post", "RESTOR_STATUS=success",
 		"RESTOR_SNAPSHOT_ID=abc",
-	}, envs["post"])
+		"RESTOR_WARNINGS=no services running, nothing to stop; backing up anyway",
+	}, envs["post"], "a hot backup reaches the hooks")
 }
 
 func TestRunJob_FailedHookEnvironment(t *testing.T) {

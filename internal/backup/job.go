@@ -14,7 +14,8 @@ import (
 // restartGrace is added to the start timeout to bound restarting the services after the
 // run was cancelled (the run context can no longer be used for that). It is above what a
 // service manager adds to the timeout itself (2 min for the start command, plus one status
-// query of at most 30 s), so a slow start ends with a warning, not a cancelled restart.
+// query of at most 30 s), so a slow start ends with a timeout error, not a cancelled
+// restart.
 const restartGrace = 3 * time.Minute
 
 // postHookGrace bounds the post hook of a job after the run was cancelled: it still runs,
@@ -35,6 +36,20 @@ const (
 	statusIncomplete = "incomplete"
 	statusFailed     = "failed"
 )
+
+const (
+	// warningSeparator joins warnings and errors in the hook environment.
+	warningSeparator = "; "
+	// maxEnvVar bounds one variable of a hook's environment, well below the 128 KiB that
+	// Linux accepts.
+	maxEnvVar = 32 << 10
+	// truncated ends a variable that was cut to maxEnvVar.
+	truncated = " … (truncated)"
+)
+
+// ErrNotStarted is the error of a job whose services were not running within the start
+// timeout after the backup.
+var ErrNotStarted = errors.New("services did not start")
 
 // JobSettings configure the backup of one job.
 type JobSettings struct {
@@ -81,11 +96,25 @@ const (
 	outcomeComplete
 )
 
-// result is how a job ended, with its snapshot ID and, when it failed, why.
+// result is how a job ended, with its snapshot ID, why it failed and what it warned
+// about. backup is how the backup alone ended: a job whose services did not come back
+// fails, but its snapshot still counts for forget and prune.
 type result struct {
 	outcome    outcome
+	backup     outcome
 	snapshotID string
 	err        error
+	warnings   []string
+}
+
+// failure is the result of a job that saved no snapshot.
+func failure(err error) result {
+	return result{outcome: outcomeFailed, backup: outcomeFailed, err: err}
+}
+
+// backedUp is the result of a job that saved a snapshot (or found nothing changed).
+func backedUp(o outcome, snapshotID string) result {
+	return result{outcome: o, backup: o, snapshotID: snapshotID}
 }
 
 // status is the RESTOR_STATUS of r.
@@ -100,37 +129,61 @@ func (r result) status() string {
 	}
 }
 
+// jobRun is one job while it runs: its logger and the warnings for its hooks.
+type jobRun struct {
+	Job
+	log      zerolog.Logger
+	warnings []string
+}
+
+func (m *Manager) newRun(j Job) *jobRun {
+	return &jobRun{Job: j, log: m.d.Log.With().Str("job", j.Settings.Name).Logger()}
+}
+
+// warn logs msg (with err) as a warning and keeps it for the hooks (RESTOR_WARNINGS).
+func (r *jobRun) warn(err error, msg string) {
+	e, text := r.log.Warn(), msg
+	if err != nil {
+		e, text = e.Err(err), msg+": "+err.Error()
+	}
+	e.Msg(msg)
+	r.warnings = append(r.warnings, text)
+}
+
 // runJob backs up one job and logs a failure. Services that were stopped are always
 // restarted, also when the backup failed or the run was cancelled. The on_failure hook
 // runs after a failure.
 func (m *Manager) runJob(ctx context.Context, j Job) result {
-	s := j.Settings
-	log := m.d.Log.With().Str("job", s.Name).Logger()
-	var r result
-	releases, err := m.lockAll(j.Services.LockKeys())
+	r := m.newRun(j)
+	res := m.lockedJob(ctx, r)
+	res.warnings = r.warnings
+	if res.outcome == outcomeFailed {
+		r.log.Error().Err(res.err).Msg("job failed")
+		m.jobHook(ctx, r, hookOnFailure, res)
+	}
+	return res
+}
+
+// lockedJob takes the job's locks, backs it up and releases them.
+func (m *Manager) lockedJob(ctx context.Context, r *jobRun) result {
+	releases, err := m.lockAll(r.Services.LockKeys())
+	defer m.releaseAll(releases, r.log)
 	if err != nil {
-		r = result{outcome: outcomeFailed, err: fmt.Errorf("backup: %s: %w", s.Name, err)}
-	} else {
-		log.Info().Msg("starting job")
-		r = m.backupJob(ctx, j, log)
+		return failure(fmt.Errorf("backup: %s: %w", r.Settings.Name, err))
 	}
-	m.releaseAll(releases, log)
-	if r.outcome == outcomeFailed {
-		log.Error().Err(r.err).Msg("job failed")
-		m.jobHook(ctx, s, hookOnFailure, r, log)
-	}
-	return r
+	r.log.Info().Msg("starting job")
+	return m.backupJob(ctx, r)
 }
 
 // skipJob fails a job without running it, because the job it requires failed; only its
 // on_failure hook runs.
-func (m *Manager) skipJob(ctx context.Context, s JobSettings, required string) result {
-	log := m.d.Log.With().Str("job", s.Name).Logger()
-	r := result{outcome: outcomeFailed, err: fmt.Errorf("backup: %s: %w: %s", s.Name,
-		ErrRequiredJobFailed, required)}
-	log.Error().Err(r.err).Msg("job skipped")
-	m.jobHook(ctx, s, hookOnFailure, r, log)
-	return r
+func (m *Manager) skipJob(ctx context.Context, j Job, required string) result {
+	r := m.newRun(j)
+	res := failure(fmt.Errorf("backup: %s: %w: %s", j.Settings.Name, ErrRequiredJobFailed,
+		required))
+	r.log.Error().Err(res.err).Msg("job skipped")
+	m.jobHook(ctx, r, hookOnFailure, res)
+	return res
 }
 
 // lockAll takes the locks for keys and returns the release functions of those it took,
@@ -160,49 +213,46 @@ func (m *Manager) releaseAll(releases []func() error, log zerolog.Logger) {
 // backupJob runs the hooks around the service stop/start and the backup of a locked job.
 // Once the pre hook succeeded, the post hook always runs, also when the backup failed, so
 // it can undo what the pre hook did (e.g. a maintenance mode). An error names the job.
-func (m *Manager) backupJob(ctx context.Context, j Job, log zerolog.Logger) result {
-	s := j.Settings
+func (m *Manager) backupJob(ctx context.Context, r *jobRun) result {
+	s := r.Settings
 	if err := m.hook(ctx, s.Pre, hookEnv(hookPre, s.Name, result{})); err != nil {
-		return result{outcome: outcomeFailed, err: fmt.Errorf("backup: %s: pre hook: %w",
-			s.Name, err)}
+		return failure(fmt.Errorf("backup: %s: pre hook: %w", s.Name, err))
 	}
-	r := m.backupWithServices(ctx, j, log)
-	if r.err != nil {
-		r.err = fmt.Errorf("backup: %s: %w", s.Name, r.err)
+	res := m.backupWithServices(ctx, r)
+	if res.err != nil {
+		res.err = fmt.Errorf("backup: %s: %w", s.Name, res.err)
 	}
-	m.jobHook(ctx, s, hookPost, r, log)
-	if r.outcome != outcomeFailed {
-		log.Info().Msg("job completed")
+	m.jobHook(ctx, r, hookPost, res)
+	if res.outcome != outcomeFailed {
+		r.log.Info().Msg("job completed")
 	}
-	return r
+	return res
 }
 
 // backupWithServices stops the services, runs the backup and starts the services again.
-func (m *Manager) backupWithServices(ctx context.Context, j Job, log zerolog.Logger) result {
-	stopped, err := m.stopServices(ctx, j, log)
+// Services that do not come back fail the job, but leave its backup outcome alone.
+func (m *Manager) backupWithServices(ctx context.Context, r *jobRun) result {
+	stopped, err := m.stopServices(ctx, r)
 	if err != nil {
-		return result{outcome: outcomeFailed, err: err}
+		return failure(err)
 	}
-	r := m.backup(ctx, j.Settings, log)
-	if err := m.startServices(ctx, j, stopped, log); err != nil {
-		return result{
-			outcome: outcomeFailed, snapshotID: r.snapshotID, err: errors.Join(r.err, err),
-		}
+	res := m.backup(ctx, r)
+	if err := m.startServices(ctx, r, stopped); err != nil {
+		res.outcome, res.err = outcomeFailed, errors.Join(res.err, err)
+		return res
 	}
-	m.startOthers(ctx, j, stopped, log)
-	return r
+	m.startOthers(ctx, r, stopped)
+	return res
 }
 
-// jobHook runs the post or on_failure hook of s with the job's result in its
+// jobHook runs the post or on_failure hook of the job with its result in the
 // environment; a failure is logged and does not change the result. The post hook undoes
-// the pre hook, so it also runs after a cancel, for at most postHookGrace; the on_failure
-// hook is skipped then, like the run-level hooks.
-func (m *Manager) jobHook(ctx context.Context, s JobSettings, kind string, r result,
-	log zerolog.Logger,
-) {
-	command := s.OnFailure
+// the pre hook, so it also runs after a cancel, for at most postHookGrace; the
+// on_failure hook is skipped then, like the run-level hooks.
+func (m *Manager) jobHook(ctx context.Context, r *jobRun, kind string, res result) {
+	command := r.Settings.OnFailure
 	if kind == hookPost {
-		command = s.Post
+		command = r.Settings.Post
 		var cancel context.CancelFunc
 		ctx, cancel = graceContext(ctx, postHookGrace)
 		defer cancel()
@@ -211,11 +261,12 @@ func (m *Manager) jobHook(ctx context.Context, s JobSettings, kind string, r res
 		return
 	}
 	if ctx.Err() != nil {
-		log.Warn().Str("hook", kind).Msg("hook skipped because the run was cancelled")
+		r.log.Warn().Str("hook", kind).Msg("hook skipped because the run was cancelled")
 		return
 	}
-	if err := m.hook(ctx, command, hookEnv(kind, s.Name, r)); err != nil {
-		log.Error().Err(err).Str("hook", kind).Msg("hook failed")
+	res.warnings = r.warnings
+	if err := m.hook(ctx, command, hookEnv(kind, r.Settings.Name, res)); err != nil {
+		r.log.Error().Err(err).Str("hook", kind).Msg("hook failed")
 	}
 }
 
@@ -240,58 +291,60 @@ func hookEnv(kind, job string, r result) []string {
 	if r.err != nil {
 		env = append(env, "RESTOR_ERROR="+r.err.Error())
 	}
+	if len(r.warnings) > 0 {
+		env = append(env, "RESTOR_WARNINGS="+strings.Join(r.warnings, warningSeparator))
+	}
 	return env
 }
 
 // stopServices stops the job's running services and returns them, so that only those
-// are started again. A failed or slow stop is logged and the backup continues.
-func (m *Manager) stopServices(ctx context.Context, j Job, log zerolog.Logger) (
-	[]string, error,
-) {
-	if !j.Settings.StopServices {
-		log.Debug().Msg("service stop/start disabled")
+// are started again. A failed or slow stop is a warning and the backup continues.
+func (m *Manager) stopServices(ctx context.Context, r *jobRun) ([]string, error) {
+	s := r.Settings
+	if !s.StopServices {
+		r.log.Debug().Msg("service stop/start disabled")
 		return nil, nil
 	}
-	services, err := j.Services.Running(ctx, j.Settings.Services)
+	services, err := r.Services.Running(ctx, s.Services)
 	if err != nil {
 		return nil, err
 	}
 	if len(services) == 0 {
 		// Usually a service that is down, but also what a wrong compose project (started
 		// with -p, or from other compose files) looks like: the backup runs on live data.
-		log.Warn().Msg("no services running, nothing to stop; backing up anyway")
+		r.warn(nil, "no services running, nothing to stop; backing up anyway")
 		return nil, nil
 	}
-	log.Info().Strs("services", services).Msg("stopping services")
-	stopped, err := j.Services.Stop(ctx, services, j.Settings.StopTimeout)
+	r.log.Info().Strs("services", services).Msg("stopping services")
+	stopped, err := r.Services.Stop(ctx, services, s.StopTimeout)
 	switch {
 	case err != nil:
-		log.Warn().Err(err).Msg("cannot stop services, backing up anyway")
+		r.warn(err, "cannot stop services, backing up anyway")
 	case !stopped:
-		log.Warn().Stringer("timeout", j.Settings.StopTimeout).
-			Msg("services did not stop within the timeout, backing up anyway")
+		r.warn(nil, fmt.Sprintf("services did not stop within %s, backing up anyway",
+			s.StopTimeout))
 	}
 	return services, nil
 }
 
-// startServices starts the services stopServices stopped. It uses its own bounded context
-// so that services come back up after the run was cancelled.
-func (m *Manager) startServices(ctx context.Context, j Job, services []string,
-	log zerolog.Logger,
-) error {
+// startServices starts the services stopServices stopped, and fails when they do not run
+// within the start timeout: a service that does not come back needs attention. It uses
+// its own bounded context so that services come back up after the run was cancelled.
+func (m *Manager) startServices(ctx context.Context, r *jobRun, services []string) error {
 	if len(services) == 0 {
 		return nil
 	}
-	timeout := j.Settings.StartTimeout
+	timeout := r.Settings.StartTimeout
 	startCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout+restartGrace)
 	defer cancel()
-	log.Info().Strs("services", services).Msg("starting services")
-	running, err := j.Services.Start(startCtx, services, timeout)
-	if err != nil {
+	r.log.Info().Strs("services", services).Msg("starting services")
+	running, err := r.Services.Start(startCtx, services, timeout)
+	switch {
+	case err != nil:
 		return fmt.Errorf("start services: %w", err)
-	}
-	if !running {
-		log.Warn().Stringer("timeout", timeout).Msg("services did not start within the timeout")
+	case !running:
+		return fmt.Errorf("%w within %s: %s", ErrNotStarted, timeout,
+			strings.Join(services, ", "))
 	}
 	return nil
 }
@@ -300,56 +353,54 @@ func (m *Manager) startServices(ctx context.Context, j Job, services []string,
 // running are left as they are by the service manager. A failure is a warning only: a
 // service that was down before the backup must not fail it, or one broken service would
 // block forget and prune on every run. After a cancel it is skipped.
-func (m *Manager) startOthers(ctx context.Context, j Job, stopped []string,
-	log zerolog.Logger,
-) {
-	if !j.Settings.StartAll || ctx.Err() != nil {
+func (m *Manager) startOthers(ctx context.Context, r *jobRun, stopped []string) {
+	s := r.Settings
+	if !s.StartAll || ctx.Err() != nil {
 		return
 	}
-	all, err := j.Services.All(ctx, j.Settings.Services)
+	all, err := r.Services.All(ctx, s.Services)
 	if err != nil {
-		log.Warn().Err(err).Msg("cannot list the services to start")
+		r.warn(err, "cannot list the services to start")
 		return
 	}
 	others := slices.DeleteFunc(all, func(s string) bool { return slices.Contains(stopped, s) })
 	if len(others) == 0 {
 		return
 	}
-	log.Info().Strs("services", others).Msg("starting services that were not stopped")
-	running, err := j.Services.Start(ctx, others, j.Settings.StartTimeout)
+	r.log.Info().Strs("services", others).Msg("starting services that were not stopped")
+	running, err := r.Services.Start(ctx, others, s.StartTimeout)
 	switch {
 	case err != nil:
-		log.Warn().Err(err).Msg("cannot start services that were not stopped")
+		r.warn(err, "cannot start services that were not stopped")
 	case !running:
-		log.Warn().Stringer("timeout", j.Settings.StartTimeout).
-			Msg("services that were not stopped did not start within the timeout")
+		r.warn(nil, fmt.Sprintf("services that were not stopped did not start within %s",
+			s.StartTimeout))
 	}
 }
 
 // backup runs restic. A snapshot without some unreadable source files, or a run that
-// names no snapshot, is logged as a warning: the job counts as backed up, but is not
-// complete, so forget and prune leave the older snapshots alone.
-func (m *Manager) backup(ctx context.Context, s JobSettings, log zerolog.Logger) result {
-	id, err := m.resticBackup(ctx, s)
+// names no snapshot, is a warning: the job counts as backed up, but is not complete, so
+// forget and prune leave the older snapshots alone.
+func (m *Manager) backup(ctx context.Context, r *jobRun) result {
+	id, err := m.resticBackup(ctx, r.Settings)
 	var incomplete interface{ Incomplete() bool }
 	var unchanged interface{ Unchanged() bool }
 	switch {
 	case errors.As(err, &unchanged) && unchanged.Unchanged():
 		// The latest snapshot is still current and complete: forget and prune may run.
-		log.Info().Msg("backup completed, nothing changed since the last snapshot")
-		return result{outcome: outcomeComplete}
+		r.log.Info().Msg("backup completed, nothing changed since the last snapshot")
+		return backedUp(outcomeComplete, "")
 	case errors.As(err, &incomplete) && incomplete.Incomplete():
-		log.Warn().Err(err).Str("snapshot_id", id).
-			Msg("backup completed, but some source files could not be read")
-		return result{outcome: outcomeIncomplete, snapshotID: id}
+		r.warn(err, "backup completed, but some source files could not be read")
+		return backedUp(outcomeIncomplete, id)
 	case err != nil:
-		return result{outcome: outcomeFailed, err: err}
+		return failure(err)
 	case id == "":
-		log.Warn().Msg("backup completed, but restic reported no snapshot ID")
-		return result{outcome: outcomeIncomplete}
+		r.warn(nil, "backup completed, but restic reported no snapshot ID")
+		return backedUp(outcomeIncomplete, "")
 	}
-	log.Info().Str("snapshot_id", id).Msg("backup completed")
-	return result{outcome: outcomeComplete, snapshotID: id}
+	r.log.Info().Str("snapshot_id", id).Msg("backup completed")
+	return backedUp(outcomeComplete, id)
 }
 
 // resticBackup runs restic backup, cancelled when it takes longer than the backup
@@ -373,8 +424,24 @@ func (m *Manager) hook(ctx context.Context, command string, env []string) error 
 	if len(parts) == 0 {
 		return nil
 	}
-	if _, err := m.d.Hooks.RunEnv(ctx, env, parts[0], parts[1:]...); err != nil {
+	if _, err := m.d.Hooks.RunEnv(ctx, execSafe(env), parts[0], parts[1:]...); err != nil {
 		return fmt.Errorf("%s: %w", parts[0], err)
 	}
 	return nil
+}
+
+// execSafe returns env as exec accepts it: without NUL bytes (a program's output in
+// RESTOR_ERROR may hold them, and exec refuses the whole environment then) and each
+// variable at most maxEnvVar bytes (Linux refuses a longer one, and RESTOR_ERROR of the
+// run joins the errors of every job). A hook must not fail exactly when it reports one.
+func execSafe(env []string) []string {
+	out := make([]string, len(env))
+	for i, kv := range env {
+		kv = strings.ReplaceAll(kv, "\x00", "")
+		if len(kv) > maxEnvVar {
+			kv = strings.ToValidUTF8(kv[:maxEnvVar-len(truncated)], "") + truncated
+		}
+		out[i] = kv
+	}
+	return out
 }

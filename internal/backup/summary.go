@@ -2,20 +2,33 @@ package backup
 
 import "strings"
 
-// summary is how a whole run ended: the jobs by result and every failure, for the
-// run-level hooks.
+// notes are what went wrong outside of the jobs' own results, in the maintenance.
+type notes struct {
+	failures, warnings []string
+}
+
+// add appends the notes of o.
+func (n *notes) add(o notes) {
+	n.failures = append(n.failures, o.failures...)
+	n.warnings = append(n.warnings, o.warnings...)
+}
+
+// summary is how a whole run ended: the jobs by result and every failure and warning,
+// for the run-level hooks.
 type summary struct {
 	jobs, succeeded, incomplete, failed []string
 	// snapshots are the snapshot IDs as job=ID, of the jobs that saved one.
 	snapshots []string
 	// failures are the maintenance failures, then the job failures.
 	failures []string
+	// warnings are the other warnings, then those of the jobs as "job: warning".
+	warnings []string
 }
 
-// summarize collects the results of a run and the failures of its maintenance. Jobs that
+// summarize collects the results of a run and the notes from outside the jobs. Jobs that
 // never started (after a cancel) are listed in jobs only.
-func (m *Manager) summarize(results []result, maintenance []string) summary {
-	s := summary{failures: maintenance}
+func (m *Manager) summarize(results []result, n notes) summary {
+	s := summary{failures: n.failures, warnings: n.warnings}
 	for i, r := range results {
 		name := m.jobs[i].Settings.Name
 		s.jobs = append(s.jobs, name)
@@ -30,6 +43,9 @@ func (m *Manager) summarize(results []result, maintenance []string) summary {
 		}
 		if r.snapshotID != "" {
 			s.snapshots = append(s.snapshots, name+"="+r.snapshotID)
+		}
+		for _, w := range r.warnings {
+			s.warnings = append(s.warnings, name+": "+w)
 		}
 	}
 	return s
@@ -49,7 +65,7 @@ func (s summary) status() string {
 }
 
 // env returns the RESTOR_* variables of a run-level hook; RESTOR_ERROR only when
-// something failed.
+// something failed, RESTOR_WARNINGS only when something warned.
 func (s summary) env(kind string) []string {
 	env := []string{
 		"RESTOR_HOOK=" + kind, "RESTOR_STATUS=" + s.status(),
@@ -60,7 +76,10 @@ func (s summary) env(kind string) []string {
 		"RESTOR_SNAPSHOT_IDS=" + strings.Join(s.snapshots, ","),
 	}
 	if len(s.failures) > 0 {
-		env = append(env, "RESTOR_ERROR="+strings.Join(s.failures, "; "))
+		env = append(env, "RESTOR_ERROR="+strings.Join(s.failures, warningSeparator))
+	}
+	if len(s.warnings) > 0 {
+		env = append(env, "RESTOR_WARNINGS="+strings.Join(s.warnings, warningSeparator))
 	}
 	return env
 }
