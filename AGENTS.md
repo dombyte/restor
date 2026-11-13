@@ -83,6 +83,7 @@ restor orchestrates **restic** backups of several **jobs** on one host.
 make check                                                # ./scripts/pre-commit.sh, check-only
 make integration                                          # integration tests, restic on PATH
 make integration-oldest                                   # same with the oldest supported restic
+make e2e [E2E_IMAGE=<image>]                              # end-to-end tests in a container
 golangci-lint fmt --config .golangci.yml                  # gofumpt + goimports
 golangci-lint run --config .golangci.yml                  # full linter set (section 12)
 go tool deadcode -test ./... # unused exported code
@@ -160,6 +161,7 @@ example/                   config.yaml (full reference, kept valid by a test), r
 packaging/                 .deb/.rpm only: system + user units (/usr/bin/restor) and the
                            install/remove scripts (nfpm in .goreleaser.yaml)
 scripts/pre-commit.sh      local checks (make check)
+scripts/e2e.sh             runs the e2e tests in a throwaway privileged container
 scripts/install-restic.sh  downloads a restic release, checksum and signature verified
                            (CI, make integration-oldest; needs gpg)
 scripts/restic-release-key.asc  restic's release signing key (CF8F…A907), pinned
@@ -172,7 +174,7 @@ Layout rules:
 - `pkg/` only for code meant for other modules, and only with user confirmation.
 - Root files: `AGENTS.md`, `README.md`, `.golangci.yml`, `.goreleaser.yaml`,
   `.mockery.yaml`, `Makefile`, `renovate.json`, `scripts/pre-commit.sh`,
-  `scripts/install-restic.sh`, `scripts/restic-release-key.asc`, `example/`, `packaging/`.
+  `scripts/e2e.sh`, `scripts/install-restic.sh`, `scripts/restic-release-key.asc`, `example/`, `packaging/`.
 
 ---
 
@@ -971,6 +973,15 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
   Backups that must be unchanged use `testdata/static` and are retried
   (`unchangedWithin`): restic also records the directories above a source, those of a
   temp dir change while other tests run, and even the home directory can change.
+- `internal/app/e2e_test.go` (build tag `e2e`) runs the service managers against real
+  Docker Compose, Podman Compose and systemd (profiles, project name, stop, start, a
+  container or unit that crashes at once) and a whole `restor run` that starts services
+  a killed run left stopped. They start containers and units, so they skip without
+  `RESTOR_E2E=1` and refuse to run outside a container or CI. `scripts/e2e.sh [image]`
+  builds the test binary and runs it in a throwaway privileged container: the default
+  `docker:<version>-dind` covers Docker Compose only (the others skip); an image with
+  systemd as PID 1, dockerd, podman and restic covers everything. There is no Dockerfile
+  for it in the repository (section 8). CI runs them on the runner VM, as root.
 - Tests run with `-race` locally and in CI.
 - New code comes with tests; bug fixes come with a regression test (failing first).
 - Coverage (SHOULD): ≥ 70 % per package with logic, ≥ 80 % for packages with ≥ 5 functions
@@ -984,8 +995,8 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
 |---|---|
 | `.golangci.yml` | v2 config, linters from section 12, formatters gofumpt + goimports |
 | `scripts/pre-commit.sh` | check-only (never rewrites or stages): fmt diff, lint, deadcode, govulncheck, build, `go test -race` |
-| `Makefile` | `build` (ldflags build info), `check` (runs the script), `clean`, `run`, `integration` (restic on PATH), `integration-oldest` (downloads `minSupported` into `~/.cache/restor/restic`) |
-| `.github/workflows/checks.yml` | on push to main, PRs and `workflow_call`: tidy check, build, race tests, deadcode, govulncheck, mock drift, golangci-lint, integration tests against the oldest supported and the newest tested restic (downloaded; checksums verified, and their signature by restic's pinned release key); a `gate` job skips them on a push to main that is a PR's merge commit (15.5); `concurrency` cancels superseded PR runs only |
+| `Makefile` | `build` (ldflags build info), `check` (runs the script), `clean`, `run`, `integration` (restic on PATH), `integration-oldest` (downloads `minSupported` into `~/.cache/restor/restic`), `e2e` (`scripts/e2e.sh`) |
+| `.github/workflows/checks.yml` | on push to main, PRs and `workflow_call`: tidy check, build, race tests, deadcode, govulncheck, mock drift, golangci-lint, integration tests against the oldest supported and the newest tested restic (downloaded; checksums verified, and their signature by restic's pinned release key); the e2e tests (`e2e` job, root on the runner, newest tested restic); a `gate` job skips them on a push to main that is a PR's merge commit (15.5); `concurrency` cancels superseded PR runs only |
 | `.github/workflows/release.yml` | on `vX.Y.Z` / `vX.Y.Z-*` tags: a `guard` job verifies the exact tag format and that the tag is on `main`, then reuses `checks.yml` (granted `pull-requests: read` for the gate); passes `GOVERSION` to goreleaser; `concurrency` runs one release per tag, never cancelled |
 | `.goreleaser.yaml` | `go mod verify` only (never rewrites), `-trimpath`, reproducible (`CommitDate`), `goamd64: v1`, grouped changelog, archives + nfpm `.deb`/`.rpm` (`mtime` = `CommitDate`), no image (section 8) |
 | `.gitignore` | never commit local config (`config.yaml`, `*.env` in the root), secrets or build output |
@@ -1010,7 +1021,9 @@ project:
   not that input), and the newest tested restic, marked with a
   `renovate: datasource=… depName=…` comment in `checks.yml` and
   `internal/restic/version.go` (one PR updates both; `TestSupported_MatchesCI` fails
-  when they differ). Its PR merges only when the integration tests pass with the new
+  when they differ), and the e2e test images (`docker:<version>-dind` in
+  `scripts/e2e.sh`, busybox in `internal/app/e2e_test.go`), marked with a
+  `renovate: datasource=docker` comment. Its PR merges only when the integration tests pass with the new
   release; restic majors are disabled. The oldest supported release is raised by hand.
 - Updates that need manual work (Go module majors = new module path, golangci-lint and
   goreleaser majors = config migration) are disabled with a `description` saying why.
@@ -1096,8 +1109,8 @@ protection):
 - "main: signed commits": every commit signed; no bypass, not even for the admin.
 - "main: required checks": the `checks.yml` jobs `Gate`, `golangci-lint` and
   `Build, test, deadcode, govulncheck` must pass, with "branches must be up to date" on.
-  The `Integration (oldest restic)` and `Integration (newest restic)` jobs are not in the
-  ruleset on purpose: they gate releases (`release.yml` reuses `checks.yml`, so a tag only
+  The `Integration (oldest restic)`, `Integration (newest restic)` and
+  `End-to-end (compose, systemd)` jobs are not in the ruleset on purpose: they gate releases (`release.yml` reuses `checks.yml`, so a tag only
   ships when they pass) and Renovate's merges (it waits for every check), while a direct
   push to `main` does not wait for a restic download.
   Bypass: only the Repository admin role, mode "always". Bots (Renovate) and other
