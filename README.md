@@ -15,6 +15,7 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
   after it
 - Hooks before and after each job and on failure, with the job's result and warnings in
   their environment
+- Services that a killed or crashed run left stopped are started by the next run
 - `restor restore` restores a snapshot, as a dry run unless `--apply` is given
 - `restor restic ...` runs restic against the configured repository, for everything else
 
@@ -120,6 +121,13 @@ timeout (the largest `start_timeout` + 4 minutes, + 1 minute for a `post` hook, 
 their monitor process in restor's cgroup and would inherit a `Nice=` setting. The units
 start after `network-online.target` and the container engines, so that a run caught up at
 boot finds the services running.
+
+**Services left stopped:** before a job stops its services, restor records them in
+`/var/lib/restor` (root) or `~/.local/state/restor`, and removes the record once they run
+again. When a run ends in between (killed after its shutdown timeout, out of memory, a
+power loss), the next run starts those services first, warns about it in the log and in
+`RESTOR_WARNINGS`, and only then backs up. Until they start, the record stays and every
+run tries again.
 
 ## Configuration
 
@@ -314,7 +322,8 @@ for output that is still open and then warns.
 
 `RESTOR_WARNINGS` (`; `-separated, set only when there are any) lists what went wrong
 without failing the job: services that did not stop in time or were not running (the
-backup ran on live data), an incomplete snapshot, skipped forgets and prunes.
+backup ran on live data), an incomplete snapshot, services an earlier run left stopped,
+skipped forgets and prunes.
 
 The top-level hooks get a summary of the whole run: `RESTOR_HOOK`, `RESTOR_STATUS`
 (`failed` when anything failed, `incomplete` when a snapshot is incomplete, else

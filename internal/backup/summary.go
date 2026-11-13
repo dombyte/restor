@@ -2,7 +2,8 @@ package backup
 
 import "strings"
 
-// notes are what went wrong outside of the jobs' own results, in the maintenance.
+// notes are what went wrong outside of the jobs' own results: in the maintenance, or
+// while starting services an earlier run left stopped.
 type notes struct {
 	failures, warnings []string
 }
@@ -19,7 +20,7 @@ type summary struct {
 	jobs, succeeded, incomplete, failed []string
 	// snapshots are the snapshot IDs as job=ID, of the jobs that saved one.
 	snapshots []string
-	// failures are the maintenance failures, then the job failures.
+	// failures are the other failures (recovery, maintenance), then the job failures.
 	failures []string
 	// warnings are the other warnings, then those of the jobs as "job: warning".
 	warnings []string
@@ -51,8 +52,8 @@ func (m *Manager) summarize(results []result, n notes) summary {
 	return s
 }
 
-// status is the RESTOR_STATUS of the run: failed when a job or the maintenance failed,
-// incomplete when a snapshot is incomplete, else success.
+// status is the RESTOR_STATUS of the run: failed when a job, the recovery or the
+// maintenance failed, incomplete when a snapshot is incomplete, else success.
 func (s summary) status() string {
 	switch {
 	case len(s.failures) > 0:
