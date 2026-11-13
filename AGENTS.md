@@ -133,8 +133,8 @@ make build                                                # ./restor with versio
 
 ```
 cmd/main.go                main package: cobra commands (run, maintain, validate, snapshots,
-                           restore, restic, version), logger, signal context, shutdown
-                           deadline, exit code, build info
+                           restore, restic, version), logger (console or JSON), signal
+                           context, shutdown deadline, exit code, build info
 internal/app/              composition root: config Plan → Settings, CreateServiceManager,
                            restic flags, wiring, restic version check, startup warnings,
                            Describe (validate), snapshots, restore and the restic
@@ -272,7 +272,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 ### Run
 1. `cmd/main`: cobra parses the command and flags (`--config` defaults to
    `app.DefaultConfig`, see CLI); logger = console writer on stderr, `--debug` = debug
-   level (`validate`, `snapshots` and `restic` log warnings only); `signal.NotifyContext` for SIGINT/SIGTERM/SIGHUP;
+   level (`validate`, `snapshots` and `restic` log warnings only), `--log-format json` = one
+   JSON object per line; `signal.NotifyContext` for SIGINT/SIGTERM/SIGHUP;
    build info is logged. `restor` without a command is an error, so the call of version
    1 (`restor --config x`) cannot pass as a backup.
 2. `app.New`: `config.Load` (file, expansion, paths, env file, defaults, validation),
@@ -474,6 +475,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   to a fresh snapshot), then the run-level hooks with `RESTOR_COMMAND=maintain` and empty
   job lists. Exit 1 when one of them failed (`backup.ErrMaintenanceFailed`). Works
   without jobs.
+- `--log-format console|json` (every command): human-readable (default) or one JSON
+  object per line; another value is an error before the command runs.
 - `restor validate`: loads and wires everything, then prints the jobs in the order they
   start with concurrency 1 (`Manager.Order`), with type, after, requires, stop, start
   all, a keep label and sources (above them the concurrency, prune and check settings
