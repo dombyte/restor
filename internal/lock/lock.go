@@ -1,5 +1,5 @@
-// Package lock provides per-key locks that keep two runs (two processes, or two projects
-// of one run) from stopping and backing up the same services at the same time. A lock is
+// Package lock provides per-key locks that keep two runs (two processes, or two jobs of
+// one run) from stopping and backing up the same services at the same time. A lock is
 // an flock(2) on a file in the lock directory: the kernel releases it when its holder
 // exits, so a crashed run never leaves a stale lock behind.
 package lock

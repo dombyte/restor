@@ -23,7 +23,7 @@ type ComposeSettings struct {
 	// Binary is "docker" or "podman"; the manager runs `<binary> compose -f <file> …`.
 	Binary string
 	// Files are the compose file paths, each passed with -f; the first one names the
-	// project in lock keys and errors, the others override it.
+	// job's services in lock keys and errors, the others override it.
 	Files []string
 }
 
@@ -56,7 +56,7 @@ func NewCompose(s ComposeSettings, d Deps) (*Compose, error) {
 // back up the same data.
 func (c *Compose) LockKeys() []string { return []string{"compose:" + c.file()} }
 
-// file returns the compose file that names the project.
+// file returns the compose file that names the job's services.
 func (c *Compose) file() string { return c.s.Files[0] }
 
 // Running returns the services among requested (every service of the compose file when

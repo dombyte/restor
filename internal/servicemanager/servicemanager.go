@@ -1,4 +1,4 @@
-// Package servicemanager stops and starts the services of a project around its backup:
+// Package servicemanager stops and starts the services of a job around its backup:
 // Docker/Podman Compose projects, systemd units, or nothing (noop). Each manager runs its
 // CLI through an injected Runner and polls with an injected Clock.
 package servicemanager

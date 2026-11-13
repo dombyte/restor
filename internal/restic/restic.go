@@ -54,7 +54,7 @@ type Runner interface {
 // IncompleteError is returned by Backup when restic saved the snapshot, but could not
 // read some source files (exit code 3). Backup returns the snapshot ID with it.
 type IncompleteError struct {
-	// Tag is the project tag of the snapshot.
+	// Tag is the job tag of the snapshot.
 	Tag string
 	// Err is the runner's error, with restic's last output lines.
 	Err error
