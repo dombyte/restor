@@ -39,10 +39,13 @@ func TestCompose_OverrideFiles(t *testing.T) {
 	t.Parallel()
 	d, r, _ := newDeps(t)
 	files := []string{composeFile, "/srv/app/compose.override.yml"}
-	c, err := NewCompose(ComposeSettings{Binary: "docker", Files: files}, d)
+	c, err := NewCompose(ComposeSettings{
+		Binary: "docker", Files: files, ProjectName: "shop", Profiles: []string{"a", "b"},
+	}, d)
 	require.NoError(t, err)
 	r.On("Run", mock.Anything, "docker", "compose", "-f", files[0], "-f", files[1],
-		"config", "--services").Return([]byte("web\nextra\n"), nil).Once()
+		"-p", "shop", "--profile", "a", "--profile", "b", "config", "--services").
+		Return([]byte("web\nextra\n"), nil).Once()
 
 	got, err := c.All(context.Background(), nil)
 

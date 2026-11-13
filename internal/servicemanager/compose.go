@@ -25,6 +25,10 @@ type ComposeSettings struct {
 	// Files are the compose file paths, each passed with -f; the first one names the
 	// job's services in lock keys and errors, the others override it.
 	Files []string
+	// ProjectName is passed with -p; empty leaves it to Compose (the file's directory).
+	ProjectName string
+	// Profiles are enabled with --profile, so that their services are found and stopped.
+	Profiles []string
 }
 
 // Compose manages the services of one compose file with docker or podman compose. It
@@ -183,6 +187,12 @@ func (c *Compose) run(ctx context.Context, args ...string) ([]byte, error) {
 	all := []string{"compose"}
 	for _, f := range c.s.Files {
 		all = append(all, "-f", f)
+	}
+	if c.s.ProjectName != "" {
+		all = append(all, "-p", c.s.ProjectName)
+	}
+	for _, p := range c.s.Profiles {
+		all = append(all, "--profile", p)
 	}
 	return c.runner.Run(ctx, c.s.Binary, append(all, args...)...)
 }

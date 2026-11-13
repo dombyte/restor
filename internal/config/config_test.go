@@ -57,6 +57,8 @@ jobs:
   web:
     type: podman-compose
     compose_file: /srv/app/compose.yml
+    profiles: [tools]
+    project_name: shop
     sources: [/srv/app/data]
     exclude: []
     keep: {daily: 30, within: 1y2m}
@@ -118,6 +120,8 @@ func TestLoad(t *testing.T) {
 	assert.Equal(t, Keep{Daily: 30, Within: "1y2m"}, web.Keep, "keep replaces the default")
 	assert.Equal(t, []string{"prod"}, web.Tags)
 	assert.Equal(t, "/bin/pre", web.Pre)
+	assert.Equal(t, []string{"tools"}, web.Profiles)
+	assert.Equal(t, "shop", web.ProjectName)
 
 	assert.Equal(t, []string{"db"}, host.After, "references are case-insensitive")
 	assert.Equal(t, ScopeUser, host.Scope)
@@ -243,6 +247,16 @@ func TestLoad_Validation(t *testing.T) {
 		},
 		{"limit", "repository: {limit_upload: -1}", "repository.limit_upload: must be >= 0"},
 		{"host", "repository: {host: 'a b'}", "repository.host: must not start"},
+		{"compose profile", "jobs: {web: {type: podman-compose, compose_file: c, " +
+			"profiles: [''], sources: [/a]}}", "jobs.web.profiles: must not contain empty"},
+		{"compose project", "jobs: {web: {type: docker-compose, compose_file: c, " +
+			"project_name: Web, sources: [/a]}}", `jobs.web.project_name: "Web" is not`},
+		{"systemd profiles", "jobs: {web: {type: systemd, units: [a], profiles: [x], " +
+			"sources: [/a]}}", "jobs.web.profiles: only for type docker-compose"},
+		{
+			"files project", "jobs: {web: {project_name: x, sources: [/a]}}",
+			"jobs.web.project_name: only for jobs with a type",
+		},
 		{"retry lock", "repository: {retry_lock: -1s}", "repository.retry_lock: must be >= 0"},
 		{"max unused", "repository: {max_unused: lots}", `repository.max_unused: "lots" is not`},
 		{

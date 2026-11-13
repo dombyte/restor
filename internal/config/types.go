@@ -108,8 +108,12 @@ type Defaults struct {
 // JobConfig is one job as written: the fields of Defaults plus the job's own.
 type JobConfig struct {
 	Defaults    `yaml:",inline"`
-	Type        string   `yaml:"type"`
-	ComposeFile string   `yaml:"compose_file"`
+	Type        string `yaml:"type"`
+	ComposeFile string `yaml:"compose_file"`
+	// Profiles are the compose profiles to enable; ProjectName replaces the project name
+	// Compose derives from the directory of the compose file.
+	Profiles    []string `yaml:"profiles"`
+	ProjectName string   `yaml:"project_name"`
 	Units       []string `yaml:"units"`
 	Scope       string   `yaml:"scope"`
 	Services    []string `yaml:"services"`

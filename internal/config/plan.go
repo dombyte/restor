@@ -60,7 +60,10 @@ type Job struct {
 	ComposeFile string
 	// ComposeFiles are ComposeFile and the override file Compose would load with it.
 	ComposeFiles []string
-	Units        []string
+	// Profiles and ProjectName are passed to every compose command.
+	Profiles    []string
+	ProjectName string
+	Units       []string
 	// Scope is ScopeSystem or ScopeUser (systemd only).
 	Scope    string
 	Services []string
@@ -216,7 +219,8 @@ func (f *File) job(name string, j JobConfig, after []string) Job {
 	}
 	return Job{
 		Name: name, Type: j.Type, ComposeFile: j.ComposeFile,
-		ComposeFiles: composeFiles(j.ComposeFile), Units: j.Units,
+		ComposeFiles: composeFiles(j.ComposeFile), Profiles: j.Profiles,
+		ProjectName: j.ProjectName, Units: j.Units,
 		Scope: or(j.Scope, ScopeSystem), Services: j.Services, Sources: j.Sources,
 		StdinCommand: j.StdinCommand, StdinFilename: j.StdinFilename,
 		After: after, Requires: sortedUnique(j.Requires), Stop: pick(j.Stop, d.Stop, true),
