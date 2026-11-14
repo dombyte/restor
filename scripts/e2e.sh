@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-default_image=docker:27.5.1-dind # renovate: datasource=docker
+default_image=docker:29.9.2-dind # renovate: datasource=docker
 image=${1:-$default_image}
 name="restor-e2e-$$"
 tmp=$(mktemp -d)
