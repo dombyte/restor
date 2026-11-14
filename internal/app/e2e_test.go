@@ -31,7 +31,7 @@ import (
 	"github.com/dombyte/restor/internal/util"
 )
 
-const e2eImage = "busybox:1.37.0" // renovate: datasource=docker
+const e2eImage = "busybox:1.38.0" // renovate: datasource=docker
 
 // e2eCompose has a service that runs, one of a profile and one that exits at once. No
 // networks: podman's netavark fails to set them up inside the test container.
