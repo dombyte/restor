@@ -2,6 +2,12 @@
 # manual installs into /usr/local/bin).
 [Unit]
 Description=Restic Backup Orchestrator
+# A run the timer catches up at boot (Persistent=true) must wait for the network (a
+# remote repository) and for the container engines: before they have started the
+# containers, restor finds nothing running, stops nothing and backs up live data. After=
+# on an engine that is not installed is ignored.
+Wants=network-online.target
+After=network-online.target docker.service podman-restart.service
 
 [Service]
 # No [Install] section: the timer starts this unit. Enabling the service itself would

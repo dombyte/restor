@@ -32,6 +32,7 @@ func options(path string) Options {
 	return Options{
 		ConfigPath: path, Getenv: func(string) string { return "" },
 		Environ: []string{"PATH=/usr/bin"}, Log: zerolog.Nop(),
+		Hostname: func() (string, error) { return "test-host", nil },
 	}
 }
 
@@ -183,7 +184,7 @@ func TestJobSettings(t *testing.T) {
 		OneFileSystem: true, Tags: []string{"prod"}, Pre: "pre", Post: "post",
 		OnFailure: "fail", After: []string{"db"}, BackupTimeout: time.Hour,
 	}
-	s := jobSettings(j)
+	s := jobSettings(j, false)
 	assert.Equal(t, "web", s.Name)
 	assert.Equal(t, []string{"s"}, s.Services)
 	assert.Equal(t, []string{"/x"}, s.Sources)
@@ -200,13 +201,31 @@ func TestJobSettings(t *testing.T) {
 	assert.Equal(t, time.Hour, s.BackupTimeout)
 
 	j.Type = config.TypeFiles
-	assert.False(t, jobSettings(j).StopServices, "file jobs stop nothing")
+	assert.False(t, jobSettings(j, false).StopServices, "file jobs stop nothing")
+	assert.Equal(t, []string{"--exclude=*.tmp", "--one-file-system", "--dry-run", "--tag=prod"},
+		jobSettings(j, true).BackupArgs)
 
 	j.Sources, j.StdinCommand, j.StdinFilename = nil, []string{"pg_dumpall", "-c"}, "pg.sql"
-	s = jobSettings(j)
+	s = jobSettings(j, true)
 	assert.Equal(t, []string{"pg_dumpall", "-c"}, s.Sources, "the command is backed up")
-	assert.Equal(t, []string{"--stdin-from-command", "--stdin-filename=pg.sql", "--tag=prod"},
-		s.BackupArgs, "without the file selection")
+	assert.Equal(t, []string{
+		"--stdin-from-command", "--stdin-filename=pg.sql", "--dry-run", "--tag=prod",
+	}, s.BackupArgs, "without the file selection")
+}
+
+func TestHostName(t *testing.T) {
+	t.Parallel()
+	system := func() (string, error) { return "nas", nil }
+	broken := func() (string, error) { return "", assert.AnError }
+
+	h, err := hostName(config.Repository{}, system)
+	require.NoError(t, err)
+	assert.Equal(t, "nas", h)
+	h, err = hostName(config.Repository{Host: "old-nas"}, broken)
+	require.NoError(t, err)
+	assert.Equal(t, "old-nas", h, "repository.host wins")
+	_, err = hostName(config.Repository{}, broken)
+	require.ErrorIs(t, err, ErrNoHostname)
 }
 
 func TestResticSettingsAndEnv(t *testing.T) {
@@ -216,7 +235,8 @@ func TestResticSettingsAndEnv(t *testing.T) {
 		BackendOptions: map[string]string{"s3.connections": "2"}, MaxUnused: "1%",
 		Check: true, CheckReadDataSubset: "2G",
 	}
-	s := resticSettings(r)
+	s := resticSettings(r, "nas")
+	assert.Equal(t, "nas", s.Host)
 	assert.Equal(t, []string{"--option=s3.connections=2", "--limit-upload=5"}, s.GlobalArgs)
 	assert.Equal(t, []string{"--max-unused=1%"}, s.PruneArgs)
 	assert.Equal(t, []string{"--read-data-subset=2G"}, s.CheckArgs)

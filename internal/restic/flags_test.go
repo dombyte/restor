@@ -28,18 +28,19 @@ func TestBackupFlags_Args(t *testing.T) {
 		Exclude: []string{"*.tmp", "-weird"}, IExclude: []string{"*.LOG"},
 		ExcludeFile: []string{"/etc/x"}, ExcludeIfPresent: []string{".nobackup"},
 		ExcludeCaches: true, ExcludeLargerThan: "1G", OneFileSystem: true,
-		SkipIfUnchanged: true, Tags: []string{"prod"},
+		SkipIfUnchanged: true, Tags: []string{"prod"}, DryRun: true,
 	}
 	assert.Equal(t, []string{
 		"--exclude=*.tmp", "--exclude=-weird", "--iexclude=*.LOG", "--exclude-file=/etc/x",
 		"--exclude-if-present=.nobackup", "--exclude-caches", "--exclude-larger-than=1G",
-		"--one-file-system", "--skip-if-unchanged", "--tag=prod",
+		"--one-file-system", "--skip-if-unchanged", "--dry-run", "--tag=prod",
 	}, f.Args())
 	assert.Empty(t, BackupFlags{}.Args())
 
 	f.StdinFromCommand, f.StdinFilename = true, "db.sql"
 	assert.Equal(t, []string{
-		"--stdin-from-command", "--stdin-filename=db.sql", "--skip-if-unchanged", "--tag=prod",
+		"--stdin-from-command", "--stdin-filename=db.sql", "--skip-if-unchanged", "--dry-run",
+		"--tag=prod",
 	}, f.Args(), "no file selection for a command's output")
 	assert.Equal(t, []string{"--stdin-from-command"}, BackupFlags{StdinFromCommand: true}.Args())
 }

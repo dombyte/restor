@@ -1,5 +1,6 @@
 // Package main is the restor CLI. `restor run` runs one backup cycle and exits 0 when
-// every job was backed up, 1 otherwise; `restor validate` checks the configuration,
+// every job was backed up, 1 otherwise; `restor maintain` runs prune and check on their
+// own; `restor validate` checks the configuration,
 // `restor snapshots` lists the snapshots of the jobs, `restor restore` restores a snapshot
 // (a dry run unless --apply is given), `restor restic …` runs restic against the
 // configured repository and `restor version` (or --version) prints the build
@@ -50,6 +51,14 @@ var (
 		"pass --config <file>")
 	// errAllWithJobs is returned by `restor snapshots --all` with job names.
 	errAllWithJobs = errors.New("--all lists every snapshot: name no jobs with it")
+	// errLogFormat is returned for an unknown --log-format.
+	errLogFormat = errors.New(`--log-format must be "console" or "json"`)
+)
+
+// Values of --log-format.
+const (
+	logConsole = "console"
+	logJSON    = "json"
 )
 
 func main() {
@@ -58,7 +67,10 @@ func main() {
 
 // run executes the CLI with args and returns the process exit code.
 func run(args []string, stdout, stderr io.Writer) int {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	// SIGHUP too: a manual run in an SSH session that drops must still restart the
+	// services it stopped, not die at once.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM,
+		syscall.SIGHUP)
 	defer stop()
 
 	root := newRootCommand(app.DefaultConfig(os.Getuid(), os.Getenv), stdout, stderr)
@@ -83,8 +95,9 @@ func buildInfo() string {
 
 // flags are the options every command shares.
 type flags struct {
-	config string
-	debug  bool
+	config    string
+	debug     bool
+	logFormat string
 	// defaultConfig is the configuration file used without --config.
 	defaultConfig string
 }
@@ -102,7 +115,13 @@ its sources, starts the services again and applies the retention policies.`,
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		RunE:          func(*cobra.Command, []string) error { return errNoCommand },
+		PersistentPreRunE: func(*cobra.Command, []string) error {
+			if f.logFormat != logConsole && f.logFormat != logJSON {
+				return errLogFormat
+			}
+			return nil
+		},
+		RunE: func(*cobra.Command, []string) error { return errNoCommand },
 	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
@@ -110,7 +129,10 @@ its sources, starts the services again and applies the retention policies.`,
 	root.PersistentFlags().StringVarP(&f.config, "config", "c", defaultConfig,
 		"configuration file")
 	root.PersistentFlags().BoolVar(&f.debug, "debug", false, "enable debug logging")
-	root.AddCommand(newRunCommand(f, stderr), newValidateCommand(f, stdout, stderr),
+	root.PersistentFlags().StringVar(&f.logFormat, "log-format", logConsole,
+		"log format: console (human-readable) or json (one object per line)")
+	root.AddCommand(newRunCommand(f, stderr), newMaintainCommand(f, stderr),
+		newValidateCommand(f, stdout, stderr),
 		newSnapshotsCommand(f, stdout, stderr), newRestoreCommand(f, stdout, stderr),
 		newResticCommand(f, stdout, stderr),
 		&cobra.Command{
@@ -122,17 +144,63 @@ its sources, starts the services again and applies the retention policies.`,
 	return root
 }
 
+// runOptions are the flags of run and maintain.
+type runOptions struct {
+	dryRun, skipPrune, skipCheck bool
+}
+
 func newRunCommand(f *flags, stderr io.Writer) *cobra.Command {
-	return &cobra.Command{
+	var o runOptions
+	cmd := &cobra.Command{
 		Use:   "run [job...]",
 		Short: "Run one backup cycle of all jobs, or of the named ones",
 		Long: `Run one backup cycle: back up every job (or only the named ones, in the order
-their before/after allows), then forget and prune. Exits 1 when a job failed.`,
+their before/after allows), then forget, prune and check as configured. Exits 1 when a
+job failed. --dry-run only shows what each job would stop and back up: no services are
+stopped, no hooks run and no snapshot is saved.`,
 		RunE: func(cmd *cobra.Command, jobs []string) error {
-			return runBackup(cmd.Context(), f, jobs,
-				newLogger(stderr, level(f.debug, zerolog.InfoLevel)))
+			return runBackup(cmd.Context(), f, jobs, o,
+				f.logger(stderr, zerolog.InfoLevel))
 		},
 	}
+	cmd.Flags().BoolVar(&o.dryRun, "dry-run", false,
+		"show what would be stopped and backed up, change nothing")
+	skipFlags(cmd, &o)
+	return cmd
+}
+
+func newMaintainCommand(f *flags, stderr io.Writer) *cobra.Command {
+	var o runOptions
+	cmd := &cobra.Command{
+		Use:   "maintain",
+		Short: "Run prune, unlock and check of the repository, without backups",
+		Long: `Run restic prune and unlock, then restic check (with
+repository.max_unused and check_read_data_subset), without backups or forget, whatever
+repository.prune and repository.check say: for a schedule of their own, e.g. a weekly
+check next to daily backups. The run-level hooks run after it with RESTOR_COMMAND=maintain.
+Exits 1 when prune, unlock or check failed.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			log := f.logger(stderr, zerolog.InfoLevel)
+			a, err := newApp(f, nil, o, log)
+			if err != nil {
+				return err
+			}
+			if err := a.Maintain(cmd.Context()); err != nil {
+				log.Error().Err(err).Msg("maintenance failed")
+				return errReported
+			}
+			log.Info().Msg("maintenance completed")
+			return nil
+		},
+	}
+	skipFlags(cmd, &o)
+	return cmd
+}
+
+func skipFlags(cmd *cobra.Command, o *runOptions) {
+	cmd.Flags().BoolVar(&o.skipPrune, "skip-prune", false, "do not run prune and unlock")
+	cmd.Flags().BoolVar(&o.skipCheck, "skip-check", false, "do not run check")
 }
 
 func newValidateCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
@@ -141,8 +209,8 @@ func newValidateCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
 		Short: "Check the configuration and print the jobs in their start order",
 		Args:  cobra.NoArgs,
 		RunE: func(*cobra.Command, []string) error {
-			log := newLogger(stderr, level(f.debug, zerolog.WarnLevel))
-			a, err := newApp(f, nil, log)
+			log := f.logger(stderr, zerolog.WarnLevel)
+			a, err := newApp(f, nil, runOptions{}, log)
 			if err != nil {
 				return err
 			}
@@ -165,8 +233,8 @@ other options.`,
 			if all && len(jobs) > 0 {
 				return errAllWithJobs
 			}
-			log := newLogger(stderr, level(f.debug, zerolog.WarnLevel))
-			a, err := newApp(f, jobs, log)
+			log := f.logger(stderr, zerolog.WarnLevel)
+			a, err := newApp(f, jobs, runOptions{}, log)
 			if err != nil {
 				return err
 			}
@@ -194,8 +262,8 @@ stop the services that use them, and restor.timer, before an in-place restore.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			o.Snapshot = args[0]
-			log := newLogger(stderr, level(f.debug, zerolog.InfoLevel))
-			a, err := newApp(f, nil, log)
+			log := f.logger(stderr, zerolog.InfoLevel)
+			a, err := newApp(f, nil, runOptions{}, log)
 			if err != nil {
 				return err
 			}
@@ -243,8 +311,8 @@ func newResticCommand(f *flags, stdout, stderr io.Writer) *cobra.Command {
 		Example: `  restor restic snapshots --tag web
   restor restic restore latest --tag web --target /tmp/restore`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log := newLogger(stderr, level(f.debug, zerolog.WarnLevel))
-			a, err := newApp(f, nil, log)
+			log := f.logger(stderr, zerolog.WarnLevel)
+			a, err := newApp(f, nil, runOptions{}, log)
 			if err != nil {
 				return err
 			}
@@ -265,10 +333,19 @@ func level(debug bool, def zerolog.Level) zerolog.Level {
 	return def
 }
 
-// newLogger writes human-readable logs to w, colored only when w is a terminal: under
-// systemd, stderr goes to the journal, which would store the escape codes.
-func newLogger(w io.Writer, level zerolog.Level) zerolog.Logger {
-	out := zerolog.ConsoleWriter{Out: w, NoColor: !isTerminal(w)}
+// logger returns the logger of a command whose level is def without --debug.
+func (f *flags) logger(w io.Writer, def zerolog.Level) zerolog.Logger {
+	return newLogger(w, level(f.debug, def), f.logFormat == logJSON)
+}
+
+// newLogger writes logs to w: one JSON object per line with asJSON (for log collectors),
+// else human-readable, colored only when w is a terminal (under systemd, stderr goes to
+// the journal, which would store the escape codes).
+func newLogger(w io.Writer, level zerolog.Level, asJSON bool) zerolog.Logger {
+	out := w
+	if !asJSON {
+		out = zerolog.ConsoleWriter{Out: w, NoColor: !isTerminal(w)}
+	}
 	return zerolog.New(out).Level(level).With().Timestamp().Logger()
 }
 
@@ -285,12 +362,14 @@ func isTerminal(w io.Writer) bool {
 // newApp wires the application for the jobs (all when empty) with the process
 // environment. Errors are logged here, one line per problem: an invalid config lists all
 // of its problems at once.
-func newApp(f *flags, jobs []string, log zerolog.Logger) (*app.App, error) {
+func newApp(f *flags, jobs []string, o runOptions, log zerolog.Logger) (*app.App, error) {
 	if f.config == "" {
 		return nil, errNoConfig
 	}
 	a, err := app.New(app.Options{
 		ConfigPath: f.config, Jobs: jobs, Getenv: os.Getenv, Environ: os.Environ(), Log: log,
+		Hostname: os.Hostname, DryRun: o.dryRun, SkipPrune: o.skipPrune,
+		SkipCheck: o.skipCheck,
 	})
 	if err != nil {
 		for _, problem := range joined(err) {
@@ -317,10 +396,12 @@ func needsConfigHint(err error, f *flags) bool {
 
 // runBackup wires the application and runs one backup cycle of the jobs (all when
 // empty). Errors are logged here.
-func runBackup(ctx context.Context, f *flags, jobs []string, log zerolog.Logger) error {
+func runBackup(ctx context.Context, f *flags, jobs []string, o runOptions,
+	log zerolog.Logger,
+) error {
 	log.Info().Str("version", Version).Str("commit", Commit).Str("build_date", BuildDate).
 		Str("go_version", GoVersion).Str("config", f.config).Msg("starting restor")
-	a, err := newApp(f, jobs, log)
+	a, err := newApp(f, jobs, o, log)
 	if err != nil {
 		return err
 	}

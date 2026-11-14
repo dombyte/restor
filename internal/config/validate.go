@@ -15,6 +15,8 @@ const (
 	maxUnusedPattern = `^(unlimited|[0-9]+(\.[0-9]+)?%|[0-9]+[kKmMgGtT]?)$`
 	withinPattern    = `^([0-9]+[ymdh])+$`
 	backendPattern   = `^[a-z0-9]+\.[a-z0-9_.-]+$`
+	// projectPattern is a compose project name: lowercase letters, digits, "-" and "_".
+	projectPattern = `^[a-z0-9][a-z0-9_-]*$`
 	// subsetPattern is restic check's --read-data-subset: n/t, a percentage or a size.
 	subsetPattern = `^(([0-9]+)/([0-9]+)|([0-9]+(\.[0-9]+)?)%|[0-9]+[kKmMgGtT]?)$`
 )
@@ -83,6 +85,8 @@ func (v *validator) matches(pattern, value, field, problem string) {
 
 func (v *validator) repository(r RepositoryConfig) {
 	rv := v.at("repository")
+	rv.check(r.Host == "" || validName(r.Host), "host",
+		`must not start with "-" or contain "," or whitespace`)
 	for _, key := range sortedKeys(r.BackendOptions) {
 		rv.matches(backendPattern, key, "backend_options", "a backend option such as "+
 			"s3.connections")
@@ -96,7 +100,6 @@ func (v *validator) repository(r RepositoryConfig) {
 			`a limit such as "5%", "1G" or "unlimited"`)
 	}
 	if r.CheckReadDataSubset != "" {
-		rv.check(r.Check, "check_read_data_subset", "only with check: true")
 		rv.check(validSubset(r.CheckReadDataSubset), "check_read_data_subset", fmt.Sprintf(
 			`%q is not a subset such as "5%%", "1/10" or "2G"`, r.CheckReadDataSubset))
 	}
@@ -262,6 +265,11 @@ func (v *validator) references(f *File, self, field string, names []string) {
 
 func (v *validator) compose(j JobConfig) {
 	v.check(j.ComposeFile != "", "compose_file", "required for type "+j.Type)
+	v.check(!slices.Contains(j.Profiles, ""), "profiles", "must not contain empty entries")
+	if j.ProjectName != "" {
+		v.matches(projectPattern, j.ProjectName, "project_name",
+			"a compose project name (lowercase letters, digits, - and _)")
+	}
 	v.onlyFor(j.Units == nil, "units", TypeSystemd)
 	v.onlyFor(j.Scope == "", "scope", TypeSystemd)
 }
@@ -273,13 +281,17 @@ func (v *validator) systemd(j JobConfig) {
 	for _, s := range j.Services {
 		v.check(slices.Contains(j.Units, s), "services", fmt.Sprintf("%q is not in units", s))
 	}
-	v.onlyFor(j.ComposeFile == "", "compose_file", "docker-compose or podman-compose")
+	composeTypes := "docker-compose or podman-compose"
+	v.onlyFor(j.ComposeFile == "", "compose_file", composeTypes)
+	v.onlyFor(j.Profiles == nil, "profiles", composeTypes)
+	v.onlyFor(j.ProjectName == "", "project_name", composeTypes)
 }
 
 // files checks that a job without a type sets nothing that only services use.
 func (v *validator) files(j JobConfig) {
 	unset := map[string]bool{
-		"compose_file": j.ComposeFile == "", "units": j.Units == nil, "scope": j.Scope == "",
+		"compose_file": j.ComposeFile == "", "profiles": j.Profiles == nil,
+		"project_name": j.ProjectName == "", "units": j.Units == nil, "scope": j.Scope == "",
 		"services": j.Services == nil, "stop": j.Stop == nil, "start_all": j.StartAll == nil,
 		"stop_timeout": j.StopTimeout == nil, "start_timeout": j.StartTimeout == nil,
 	}

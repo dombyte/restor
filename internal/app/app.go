@@ -26,6 +26,7 @@ import (
 	"github.com/dombyte/restor/internal/lock"
 	"github.com/dombyte/restor/internal/restic"
 	"github.com/dombyte/restor/internal/servicemanager"
+	"github.com/dombyte/restor/internal/state"
 	"github.com/dombyte/restor/internal/util"
 )
 
@@ -49,6 +50,9 @@ var (
 	// ErrRestoreTarget is returned by Restore unless exactly one of Target and InPlace is
 	// set: restor never picks where a restore writes.
 	ErrRestoreTarget = errors.New("app: restore needs either --target <dir> or --in-place")
+	// ErrNoHostname is returned by New when the system has no host name and
+	// repository.host is not set: forget must select this host's snapshots only.
+	ErrNoHostname = errors.New("app: cannot determine the host name")
 )
 
 // Options are the inputs of New.
@@ -63,10 +67,17 @@ type Options struct {
 	Environ []string
 	// Log is the root logger.
 	Log zerolog.Logger
+	// Hostname returns the host name of the snapshots when repository.host is not set.
+	Hostname func() (string, error)
+	// DryRun makes Run report what it would stop and back up, without changing anything.
+	DryRun bool
+	// SkipPrune and SkipCheck leave out prune and unlock, or check, in Run and Maintain.
+	SkipPrune, SkipCheck bool
 }
 
 // App is one wired backup run.
 type App struct {
+	opts         Options
 	plan         *config.Plan
 	manager      *backup.Manager
 	restic       *restic.Client
@@ -83,27 +94,46 @@ func New(o Options) (*App, error) {
 	if plan, err = plan.Select(o.Jobs); err != nil {
 		return nil, err
 	}
+	host, err := hostName(plan.Repository, o.Hostname)
+	if err != nil {
+		return nil, err
+	}
 	resticEnv := resticEnv(o.Environ, plan.Repository)
 	warnConfig(o.Log, plan, resticEnv)
 	warnMissingBinaries(o.Log, plan.Jobs, exec.LookPath)
 
 	resticRunner := command.New(resticEnv, component(o.Log, "restic"))
-	resticClient, err := restic.New(resticSettings(plan.Repository),
+	resticClient, err := restic.New(resticSettings(plan.Repository, host),
 		restic.Deps{Runner: resticRunner, Log: component(o.Log, "restic")})
 	if err != nil {
 		return nil, err
 	}
-	manager, err := createManager(plan, managerDeps{
+	locks := lockDir(o.Getenv)
+	manager, err := createManager(plan, o, managerDeps{
 		runner: command.New(o.Environ, component(o.Log, "command")), restic: resticClient,
-		clock: util.NewRealClock(), lockDir: lockDir(o.Getenv), log: o.Log,
+		clock: util.NewRealClock(), lockDir: locks, stateDir: stateDir(o.Getenv, locks),
+		log: o.Log,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &App{
-		plan: plan, manager: manager, restic: resticClient, resticRunner: resticRunner,
-		log: o.Log,
+		opts: o, plan: plan, manager: manager, restic: resticClient,
+		resticRunner: resticRunner, log: o.Log,
 	}, nil
+}
+
+// hostName returns the host name of the snapshots: repository.host, else the system's.
+// Backup and forget both use it, so forget never selects another host's snapshots.
+func hostName(r config.Repository, hostname func() (string, error)) (string, error) {
+	if r.Host != "" {
+		return r.Host, nil
+	}
+	h, err := hostname()
+	if err != nil || h == "" {
+		return "", fmt.Errorf("%w (set repository.host): %w", ErrNoHostname, err)
+	}
+	return h, nil
 }
 
 // Run checks the restic version, then runs one backup cycle.
@@ -116,6 +146,18 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 	return a.manager.Run(ctx)
+}
+
+// Maintain checks the restic version, then runs prune and unlock, and check, without
+// backups (unless SkipPrune or SkipCheck leave one out): `restor maintain` on a schedule
+// of its own.
+func (a *App) Maintain(ctx context.Context) error {
+	if err := a.checkRestic(ctx); err != nil {
+		return err
+	}
+	return a.manager.Maintain(ctx, backup.Maintenance{
+		Prune: !a.opts.SkipPrune, Check: !a.opts.SkipCheck,
+	})
 }
 
 // checkRestic fails when restic is missing or older than restor supports, before any
@@ -150,7 +192,7 @@ type Stdio = command.Stdio
 // Restic runs restic with args, the repository settings and env file, connected to
 // stdio: `restor restic snapshots` and the like.
 func (a *App) Restic(ctx context.Context, stdio Stdio, args []string) error {
-	global := resticSettings(a.plan.Repository).GlobalArgs
+	global := globalArgs(a.plan.Repository)
 	return a.resticRunner.Attach(ctx, stdio, "restic", slices.Concat(global, args)...)
 }
 
@@ -165,7 +207,7 @@ func (a *App) Snapshots(ctx context.Context, stdio Stdio, all bool) error {
 			tags = append(tags, j.Name)
 		}
 	}
-	args := slices.Concat(resticSettings(a.plan.Repository).GlobalArgs, []string{"snapshots"},
+	args := slices.Concat(globalArgs(a.plan.Repository), []string{"snapshots"},
 		restic.SnapshotsFlags{Tags: tags}.Args())
 	return a.resticRunner.Attach(ctx, stdio, "restic", args...)
 }
@@ -202,7 +244,7 @@ func (a *App) Restore(ctx context.Context, stdio Stdio, o RestoreOptions) error 
 	log := a.log.With().Str("snapshot", o.Snapshot).Str("target", flags.Target).
 		Bool("dry_run", flags.DryRun).Logger()
 	log.Info().Msg("restoring snapshot")
-	args := slices.Concat(resticSettings(a.plan.Repository).GlobalArgs, []string{"restore"},
+	args := slices.Concat(globalArgs(a.plan.Repository), []string{"restore"},
 		flags.Args())
 	if err := a.resticRunner.Attach(ctx, stdio, "restic", args...); err != nil {
 		return err
@@ -240,6 +282,7 @@ func (a *App) Describe(w io.Writer) error {
 	jobs := a.orderedJobs()
 	labels, groups := keepGroups(jobs)
 	tw := tabwriter.NewWriter(w, 0, 0, columnPadding, ' ', 0)
+	_, _ = fmt.Fprintf(tw, "host:\t%s\n", or(a.plan.Repository.Host, "(system host name)"))
 	_, _ = fmt.Fprintf(tw, "concurrency:\t%d (0 = all at once)\n", a.plan.Concurrency)
 	_, _ = fmt.Fprintf(tw, "prune:\t%t\n", a.plan.Repository.Prune)
 	_, _ = fmt.Fprintf(tw, "check:\t%s\n", checkLabel(a.plan.Repository))
@@ -264,16 +307,17 @@ func (a *App) Describe(w io.Writer) error {
 	return tw.Flush()
 }
 
-// checkLabel says whether the run ends with restic check, and how much data it reads.
+// checkLabel says whether the run ends with restic check, and how much data it (and
+// restor maintain) reads.
 func checkLabel(r config.Repository) string {
-	switch {
-	case !r.Check:
-		return "false"
-	case r.CheckReadDataSubset == "":
-		return "true (structure only)"
-	default:
-		return "true (reads " + r.CheckReadDataSubset + " of the data)"
+	reads := "structure only"
+	if r.CheckReadDataSubset != "" {
+		reads = "reads " + r.CheckReadDataSubset + " of the data"
 	}
+	if !r.Check {
+		return "false (restor maintain: " + reads + ")"
+	}
+	return "true (" + reads + ")"
 }
 
 // sourcesLabel is what a job backs up: its sources, or the command whose output it saves.
@@ -358,11 +402,12 @@ func keepLabel(n int) string {
 func (a *App) ShutdownTimeout() time.Duration { return a.manager.ShutdownTimeout() }
 
 type managerDeps struct {
-	runner  *command.Runner
-	restic  *restic.Client
-	clock   util.Clock
-	lockDir string
-	log     zerolog.Logger
+	runner   *command.Runner
+	restic   *restic.Client
+	clock    util.Clock
+	lockDir  string
+	stateDir string
+	log      zerolog.Logger
 }
 
 // SystemConfig is the configuration file of root, a system installation.
@@ -396,8 +441,21 @@ func lockDir(getenv func(string) string) string {
 	})
 }
 
-func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
+// stateDir picks the directory of the records of stopped services; locks is the
+// fallback for a user without a home directory.
+func stateDir(getenv func(string) string, locks string) string {
+	return state.DefaultDir(state.User{
+		UID: os.Getuid(), StateHome: getenv("XDG_STATE_HOME"), Home: getenv("HOME"),
+		Fallback: locks,
+	})
+}
+
+func createManager(plan *config.Plan, o Options, d managerDeps) (*backup.Manager, error) {
 	locker, err := lock.New(lock.Settings{Dir: d.lockDir})
+	if err != nil {
+		return nil, err
+	}
+	records, err := state.New(state.Settings{Dir: d.stateDir})
 	if err != nil {
 		return nil, err
 	}
@@ -408,13 +466,15 @@ func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
 		if err != nil {
 			return nil, fmt.Errorf("app: job %s: %w", j.Name, err)
 		}
-		jobs = append(jobs, backup.Job{Settings: jobSettings(j), Services: services})
+		jobs = append(jobs, backup.Job{Settings: jobSettings(j, o.DryRun), Services: services})
 	}
 	return backup.NewManager(backup.Settings{
-		Concurrency: plan.Concurrency, Prune: plan.Repository.Prune,
-		Check: plan.Repository.Check, Post: plan.Post, OnFailure: plan.OnFailure,
+		Concurrency: plan.Concurrency, Prune: plan.Repository.Prune && !o.SkipPrune,
+		Check: plan.Repository.Check && !o.SkipCheck, DryRun: o.DryRun, Post: plan.Post,
+		OnFailure: plan.OnFailure,
 	}, jobs, backup.Deps{
-		Restic: d.restic, Locker: locker, Hooks: d.runner, Log: component(d.log, "backup"),
+		Restic: d.restic, Locker: locker, State: records, Hooks: d.runner,
+		Log: component(d.log, "backup"),
 	})
 }
 
@@ -422,11 +482,9 @@ func createManager(plan *config.Plan, d managerDeps) (*backup.Manager, error) {
 func CreateServiceManager(j config.Job, d servicemanager.Deps) (backup.Services, error) {
 	switch j.Type {
 	case config.TypeDockerCompose:
-		return servicemanager.NewCompose(
-			servicemanager.ComposeSettings{Binary: "docker", Files: j.ComposeFiles}, d)
+		return servicemanager.NewCompose(composeSettings("docker", j), d)
 	case config.TypePodmanCompose:
-		return servicemanager.NewCompose(
-			servicemanager.ComposeSettings{Binary: "podman", Files: j.ComposeFiles}, d)
+		return servicemanager.NewCompose(composeSettings("podman", j), d)
 	case config.TypeSystemd:
 		return servicemanager.NewSystemd(servicemanager.SystemdSettings{
 			Units: j.Units, User: j.Scope == config.ScopeUser,
@@ -440,13 +498,19 @@ func CreateServiceManager(j config.Job, d servicemanager.Deps) (backup.Services,
 	}
 }
 
-func jobSettings(j config.Job) backup.JobSettings {
+func composeSettings(binary string, j config.Job) servicemanager.ComposeSettings {
+	return servicemanager.ComposeSettings{
+		Binary: binary, Files: j.ComposeFiles, ProjectName: j.ProjectName, Profiles: j.Profiles,
+	}
+}
+
+func jobSettings(j config.Job, dryRun bool) backup.JobSettings {
 	return backup.JobSettings{
 		Name: j.Name, After: j.After, Requires: j.Requires, Services: j.Services,
 		Sources:      backupSources(j),
 		StopServices: j.StopsServices(), StartAll: j.StartsAll(), StopTimeout: j.StopTimeout,
 		StartTimeout: j.StartTimeout, BackupTimeout: j.BackupTimeout,
-		BackupArgs: backupFlags(j).Args(), ForgetArgs: keep(j.Keep).Args(),
+		BackupArgs: backupFlags(j, dryRun).Args(), ForgetArgs: keep(j.Keep).Args(),
 		Pre: j.Pre, Post: j.Post, OnFailure: j.OnFailure,
 	}
 }
@@ -460,19 +524,19 @@ func backupSources(j config.Job) []string {
 	return j.Sources
 }
 
-func backupFlags(j config.Job) restic.BackupFlags {
+func backupFlags(j config.Job, dryRun bool) restic.BackupFlags {
 	if j.FromStdin() {
 		// The file selection of the defaults does not apply to a command's output.
 		return restic.BackupFlags{
 			StdinFromCommand: true, StdinFilename: j.StdinFilename,
-			SkipIfUnchanged: j.SkipIfUnchanged, Tags: j.Tags,
+			SkipIfUnchanged: j.SkipIfUnchanged, Tags: j.Tags, DryRun: dryRun,
 		}
 	}
 	return restic.BackupFlags{
 		Exclude: j.Exclude, IExclude: j.IExclude, ExcludeFile: j.ExcludeFile,
 		ExcludeIfPresent: j.ExcludeIfPresent, ExcludeCaches: j.ExcludeCaches,
 		ExcludeLargerThan: j.ExcludeLargerThan, OneFileSystem: j.OneFileSystem,
-		SkipIfUnchanged: j.SkipIfUnchanged, Tags: j.Tags,
+		SkipIfUnchanged: j.SkipIfUnchanged, Tags: j.Tags, DryRun: dryRun,
 	}
 }
 
@@ -485,15 +549,21 @@ func keep(k config.Keep) restic.Keep {
 	}
 }
 
-func resticSettings(r config.Repository) restic.Settings {
+func resticSettings(r config.Repository, host string) restic.Settings {
 	return restic.Settings{
-		GlobalArgs: restic.Repository{
-			BackendOptions: r.BackendOptions, LimitUpload: r.LimitUpload,
-			LimitDownload: r.LimitDownload, RetryLock: r.RetryLock,
-		}.Args(),
-		PruneArgs: restic.PruneFlags{MaxUnused: r.MaxUnused}.Args(),
-		CheckArgs: restic.CheckFlags{ReadDataSubset: r.CheckReadDataSubset}.Args(),
+		Host:       host,
+		GlobalArgs: globalArgs(r),
+		PruneArgs:  restic.PruneFlags{MaxUnused: r.MaxUnused}.Args(),
+		CheckArgs:  restic.CheckFlags{ReadDataSubset: r.CheckReadDataSubset}.Args(),
 	}
+}
+
+// globalArgs are the restic flags of every command.
+func globalArgs(r config.Repository) []string {
+	return restic.Repository{
+		BackendOptions: r.BackendOptions, LimitUpload: r.LimitUpload,
+		LimitDownload: r.LimitDownload, RetryLock: r.RetryLock,
+	}.Args()
 }
 
 // resticEnv is the environment of restic: the process environment, the env file and the
@@ -516,6 +586,9 @@ func logJobs(log zerolog.Logger, jobs []config.Job) {
 		e := log.Info().Str("job", j.Name).Str("type", or(j.Type, "files"))
 		if len(j.ComposeFiles) > 0 {
 			e = e.Strs("compose_files", j.ComposeFiles)
+		}
+		if len(j.Profiles) > 0 {
+			e = e.Strs("profiles", j.Profiles)
 		}
 		if j.FromStdin() {
 			e = e.Strs("stdin_command", j.StdinCommand)

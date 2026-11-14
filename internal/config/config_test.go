@@ -33,6 +33,7 @@ version: 2
 concurrency: 2
 repository:
   url: ${REPO}
+  host: nas
   env_file: restic.env
   backend_options: {s3.connections: "10"}
   limit_upload: ${LIMIT}
@@ -56,6 +57,8 @@ jobs:
   web:
     type: podman-compose
     compose_file: /srv/app/compose.yml
+    profiles: [tools]
+    project_name: shop
     sources: [/srv/app/data]
     exclude: []
     keep: {daily: 30, within: 1y2m}
@@ -94,7 +97,7 @@ func TestLoad(t *testing.T) {
 	assert.Equal(t, "/bin/notify summary", plan.Post)
 	assert.Equal(t, "/bin/notify run", plan.OnFailure)
 	assert.Equal(t, Repository{
-		URL: "/srv/repo", EnvFile: filepath.Join(dir, "restic.env"),
+		URL: "/srv/repo", Host: "nas", EnvFile: filepath.Join(dir, "restic.env"),
 		Env:            []string{"RESTIC_PASSWORD=pa$word"},
 		BackendOptions: map[string]string{"s3.connections": "10"}, LimitUpload: 100,
 		RetryLock: 10 * time.Minute, Prune: true, MaxUnused: "5%",
@@ -117,6 +120,8 @@ func TestLoad(t *testing.T) {
 	assert.Equal(t, Keep{Daily: 30, Within: "1y2m"}, web.Keep, "keep replaces the default")
 	assert.Equal(t, []string{"prod"}, web.Tags)
 	assert.Equal(t, "/bin/pre", web.Pre)
+	assert.Equal(t, []string{"tools"}, web.Profiles)
+	assert.Equal(t, "shop", web.ProjectName)
 
 	assert.Equal(t, []string{"db"}, host.After, "references are case-insensitive")
 	assert.Equal(t, ScopeUser, host.Scope)
@@ -241,12 +246,19 @@ func TestLoad_Validation(t *testing.T) {
 			"repository.backend_options.s3.connections: must not be empty",
 		},
 		{"limit", "repository: {limit_upload: -1}", "repository.limit_upload: must be >= 0"},
+		{"host", "repository: {host: 'a b'}", "repository.host: must not start"},
+		{"compose profile", "jobs: {web: {type: podman-compose, compose_file: c, " +
+			"profiles: [''], sources: [/a]}}", "jobs.web.profiles: must not contain empty"},
+		{"compose project", "jobs: {web: {type: docker-compose, compose_file: c, " +
+			"project_name: Web, sources: [/a]}}", `jobs.web.project_name: "Web" is not`},
+		{"systemd profiles", "jobs: {web: {type: systemd, units: [a], profiles: [x], " +
+			"sources: [/a]}}", "jobs.web.profiles: only for type docker-compose"},
+		{
+			"files project", "jobs: {web: {project_name: x, sources: [/a]}}",
+			"jobs.web.project_name: only for jobs with a type",
+		},
 		{"retry lock", "repository: {retry_lock: -1s}", "repository.retry_lock: must be >= 0"},
 		{"max unused", "repository: {max_unused: lots}", `repository.max_unused: "lots" is not`},
-		{
-			"subset without check", "repository: {check_read_data_subset: 5%}",
-			"repository.check_read_data_subset: only with check: true",
-		},
 		{
 			"subset", "repository: {check: true, check_read_data_subset: half}",
 			`repository.check_read_data_subset: "half" is not a subset such as "5%"`,
@@ -495,6 +507,22 @@ jobs:
 	assert.Equal(t, 50, plan.Repository.LimitDownload, "a plain scalar is re-typed")
 	assert.Equal(t, []string{"/$HOME/x", "/srv/y"}, plan.Jobs[0].Sources)
 	assert.Equal(t, "/bin/h", plan.Jobs[0].Pre)
+}
+
+func TestLoad_UnsetVariable(t *testing.T) {
+	t.Parallel()
+	_, err := load(t, `version: 2
+jobs:
+  web:
+    sources: ["${DATA}/db"]
+    exclude: ['*.$1']
+    pre: ${HOOK:-}
+`, nil)
+
+	require.ErrorIs(t, err, ErrInvalid)
+	assert.Contains(t, err.Error(), "jobs.web.sources: $DATA is not set (line 4)")
+	assert.Contains(t, err.Error(), "jobs.web.exclude: $1 is not set (line 5)")
+	assert.NotContains(t, err.Error(), "HOOK", "a default makes a variable optional")
 }
 
 func TestPlan_Select(t *testing.T) {

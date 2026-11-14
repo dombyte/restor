@@ -52,7 +52,13 @@ summary() {
 	if [ -n "${RESTOR_ERROR:-}" ]; then
 		printf '\n%s\n' "$RESTOR_ERROR" | sed 's/; /\n/g'
 	fi
+	if [ -n "${RESTOR_WARNINGS:-}" ]; then
+		printf '\n⚠️ %s\n' "$RESTOR_WARNINGS" | sed 's/; /\n⚠️ /g'
+	fi
 }
+
+# warnings prints RESTOR_WARNINGS one per line.
+warnings() { printf '%s' "${RESTOR_WARNINGS:-}" | sed 's/; /\n/g'; }
 
 if [ -z "${RESTOR_JOB:-}" ]; then
 	# The top-level post or on_failure hook: the whole run in one message.
@@ -72,6 +78,13 @@ if [ -z "${RESTOR_JOB:-}" ]; then
 		[ -n "$RESTOR_FAILED_JOBS" ] || title="🚨 restor on $host: maintenance failed"
 		;;
 	esac
+	if [ "${RESTOR_COMMAND:-run}" = maintain ]; then
+		[ "$level" = error ] || title="✅ restor on $host: maintenance completed"
+	elif [ "$level" = info ] && [ -n "${RESTOR_WARNINGS:-}" ]; then
+		# Backed up, but e.g. on live data, or after services an earlier run left stopped.
+		level=warning
+		title="⚠️ restor on $host: all $jobs jobs backed up, with warnings"
+	fi
 	message=$(summary)
 elif [ "$RESTOR_HOOK" = pre ]; then
 	level=info
@@ -97,6 +110,14 @@ else
 		message=${RESTOR_ERROR:-unknown error}
 		;;
 	esac
+	if [ -n "${RESTOR_WARNINGS:-}" ]; then
+		message="$message
+
+$(warnings)"
+		if [ "$level" = info ]; then
+			level=warning title="⚠️ $RESTOR_JOB: backed up, with warnings"
+		fi
+	fi
 fi
 
 # rank orders the levels, so NOTIFY_LEVEL can drop the less important ones.

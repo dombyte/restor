@@ -66,7 +66,9 @@ type includeFile struct {
 
 // RepositoryConfig is the repository section.
 type RepositoryConfig struct {
-	URL            string            `yaml:"url"`
+	URL string `yaml:"url"`
+	// Host is the host name of the snapshots; empty is the system's host name.
+	Host           string            `yaml:"host"`
 	EnvFile        string            `yaml:"env_file"`
 	BackendOptions map[string]string `yaml:"backend_options"`
 	LimitUpload    int               `yaml:"limit_upload"`   // KiB/s
@@ -106,8 +108,12 @@ type Defaults struct {
 // JobConfig is one job as written: the fields of Defaults plus the job's own.
 type JobConfig struct {
 	Defaults    `yaml:",inline"`
-	Type        string   `yaml:"type"`
-	ComposeFile string   `yaml:"compose_file"`
+	Type        string `yaml:"type"`
+	ComposeFile string `yaml:"compose_file"`
+	// Profiles are the compose profiles to enable; ProjectName replaces the project name
+	// Compose derives from the directory of the compose file.
+	Profiles    []string `yaml:"profiles"`
+	ProjectName string   `yaml:"project_name"`
 	Units       []string `yaml:"units"`
 	Scope       string   `yaml:"scope"`
 	Services    []string `yaml:"services"`

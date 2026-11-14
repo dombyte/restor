@@ -54,7 +54,7 @@ type Runner interface {
 // IncompleteError is returned by Backup when restic saved the snapshot, but could not
 // read some source files (exit code 3). Backup returns the snapshot ID with it.
 type IncompleteError struct {
-	// Tag is the project tag of the snapshot.
+	// Tag is the job tag of the snapshot.
 	Tag string
 	// Err is the runner's error, with restic's last output lines.
 	Err error
@@ -95,6 +95,11 @@ type Deps struct {
 
 // Settings configure a Client.
 type Settings struct {
+	// Host is the host name backup records and forget selects (--host): in a repository
+	// shared by several hosts, forget must never apply this host's retention policy to the
+	// snapshots of another host. Empty leaves both to restic (the system host name for
+	// backup, every host for forget).
+	Host string
 	// GlobalArgs come before the command of every restic call (Repository.Args).
 	GlobalArgs []string
 	// PruneArgs are the options of prune (PruneFlags.Args).
@@ -125,11 +130,11 @@ func (c *Client) run(ctx context.Context, command string, args ...string) ([]byt
 	return c.runner.Run(ctx, program, slices.Concat(c.s.GlobalArgs, []string{command}, args)...)
 }
 
-// Backup runs `restic backup --json --group-by=host,tags [args] --tag=<tag> -- <sources>`
-// and returns the short ID of the new snapshot, or "" when restic reports none. args come
-// from BackupFlags.Args; with its StdinFromCommand, sources are the command and its
-// arguments. An incomplete snapshot returns its ID together with an *IncompleteError, a
-// snapshot that --skip-if-unchanged skipped an *UnchangedError.
+// Backup runs `restic backup --json --group-by=host,tags [args] --host=<host> --tag=<tag>
+// -- <sources>` and returns the short ID of the new snapshot, or "" when restic reports
+// none. args come from BackupFlags.Args; with its StdinFromCommand, sources are the
+// command and its arguments. An incomplete snapshot returns its ID together with an
+// *IncompleteError, a snapshot that --skip-if-unchanged skipped an *UnchangedError.
 func (c *Client) Backup(ctx context.Context, tag string, sources, args []string) (
 	string, error,
 ) {
@@ -140,7 +145,7 @@ func (c *Client) Backup(ctx context.Context, tag string, sources, args []string)
 	// name): by restic's default (host,paths) a job with the same sources as another would
 	// compare against that job's snapshot, and --skip-if-unchanged would skip its own.
 	out, err := c.run(ctx, "backup", slices.Concat([]string{"--json", "--group-by=host,tags"},
-		args, []string{"--tag=" + tag, "--"}, sources)...)
+		args, c.hostArgs(), []string{"--tag=" + tag, "--"}, sources)...)
 	if err != nil && !isExit(err, exitIncomplete) {
 		return "", failed("backup "+tag, err)
 	}
@@ -149,6 +154,14 @@ func (c *Client) Backup(ctx context.Context, tag string, sources, args []string)
 		c.logSummary(tag, sum)
 	}
 	return backupResult(tag, sum, found, slices.Contains(args, skipIfUnchanged), err)
+}
+
+// hostArgs returns the --host flag of backup and forget; none without a host.
+func (c *Client) hostArgs() []string {
+	if c.s.Host == "" {
+		return nil
+	}
+	return []string{"--host=" + c.s.Host}
 }
 
 // backupResult returns the snapshot ID of a backup that ended with err (nil or exit code
@@ -251,12 +264,15 @@ func isExit(err error, code int) bool {
 	return errors.As(err, &exit) && exit.ExitCode() == code
 }
 
-// Forget runs `restic forget --group-by=host --tag=<tag> [args]`; args come from
-// Keep.Args. The tag selects the job's snapshots and grouping by host alone keeps them in
-// one group per host: restic's default (host,paths) would leave the snapshots of
-// changed sources in a group of their own that is never forgotten.
+// Forget runs `restic forget --group-by=host --host=<host> --tag=<tag> [args]`; args come
+// from Keep.Args. The host and tag select the job's snapshots of this host (without
+// --host, forget would also thin out another host's snapshots of a job with the same
+// name), and grouping by host alone keeps them in one group: restic's default
+// (host,paths) would leave the snapshots of changed sources in a group of their own that
+// is never forgotten.
 func (c *Client) Forget(ctx context.Context, tag string, args []string) error {
-	all := slices.Concat([]string{"--group-by=host", "--tag=" + tag}, args)
+	all := slices.Concat([]string{"--group-by=host"}, c.hostArgs(), []string{"--tag=" + tag},
+		args)
 	if _, err := c.run(ctx, "forget", all...); err != nil {
 		return failed("forget "+tag, err)
 	}

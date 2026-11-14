@@ -33,6 +33,8 @@ type Plan struct {
 // Repository is the restic repository and the settings of every restic call.
 type Repository struct {
 	URL string
+	// Host is the host name of the snapshots; empty is the system's host name.
+	Host string
 	// EnvFile is the absolute path of the env file, "" when there is none.
 	EnvFile string
 	// Env are the variables of EnvFile as sorted KEY=value pairs; only restic gets them.
@@ -58,7 +60,10 @@ type Job struct {
 	ComposeFile string
 	// ComposeFiles are ComposeFile and the override file Compose would load with it.
 	ComposeFiles []string
-	Units        []string
+	// Profiles and ProjectName are passed to every compose command.
+	Profiles    []string
+	ProjectName string
+	Units       []string
 	// Scope is ScopeSystem or ScopeUser (systemd only).
 	Scope    string
 	Services []string
@@ -147,8 +152,9 @@ func (f *File) plan() (*Plan, []error) {
 	return &Plan{
 		Concurrency: valueOr(f.Concurrency, DefaultConcurrency),
 		Repository: Repository{
-			URL: r.URL, EnvFile: r.EnvFile, Env: env, BackendOptions: r.BackendOptions,
-			LimitUpload: r.LimitUpload, LimitDownload: r.LimitDownload,
+			URL: r.URL, Host: r.Host, EnvFile: r.EnvFile, Env: env,
+			BackendOptions: r.BackendOptions,
+			LimitUpload:    r.LimitUpload, LimitDownload: r.LimitDownload,
 			RetryLock: time.Duration(r.RetryLock), Prune: r.Prune, MaxUnused: r.MaxUnused,
 			Check: r.Check, CheckReadDataSubset: r.CheckReadDataSubset,
 		},
@@ -213,7 +219,8 @@ func (f *File) job(name string, j JobConfig, after []string) Job {
 	}
 	return Job{
 		Name: name, Type: j.Type, ComposeFile: j.ComposeFile,
-		ComposeFiles: composeFiles(j.ComposeFile), Units: j.Units,
+		ComposeFiles: composeFiles(j.ComposeFile), Profiles: j.Profiles,
+		ProjectName: j.ProjectName, Units: j.Units,
 		Scope: or(j.Scope, ScopeSystem), Services: j.Services, Sources: j.Sources,
 		StdinCommand: j.StdinCommand, StdinFilename: j.StdinFilename,
 		After: after, Requires: sortedUnique(j.Requires), Stop: pick(j.Stop, d.Stop, true),

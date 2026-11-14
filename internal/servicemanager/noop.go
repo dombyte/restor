@@ -7,7 +7,7 @@ import (
 
 // NoopSettings configure a Noop manager.
 type NoopSettings struct {
-	// LockKey identifies the project for the locker.
+	// LockKey identifies the job for the locker.
 	LockKey string
 }
 

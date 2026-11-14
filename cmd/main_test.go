@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -43,6 +44,11 @@ func TestRun_Errors(t *testing.T) {
 		{name: "validate", args: []string{"validate", "-c", missing}, want: "startup failed"},
 		{name: "restic", args: []string{"restic", "-c", missing}, want: "startup failed"},
 		{name: "snapshots", args: []string{"snapshots", "-c", missing}, want: "startup failed"},
+		{name: "maintain", args: []string{"maintain", "-c", missing}, want: "startup failed"},
+		{
+			name: "log format", args: []string{"validate", "--log-format", "xml"},
+			want: "--log-format must be",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -293,10 +299,24 @@ func TestJoined(t *testing.T) {
 	assert.Equal(t, []error{a}, joined(a))
 }
 
+func TestNewLogger_JSON(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	log := newLogger(&buf, zerolog.InfoLevel, true)
+	log.Debug().Msg("hidden")
+	log.Info().Str("job", "web").Msg("hello")
+
+	var line map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &line), buf.String())
+	assert.Equal(t, "hello", line["message"])
+	assert.Equal(t, "web", line["job"])
+	assert.Contains(t, line, "time")
+}
+
 func TestNewLogger_NoColorWithoutTerminal(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
-	log := newLogger(&buf, zerolog.InfoLevel)
+	log := newLogger(&buf, zerolog.InfoLevel, false)
 	log.Info().Str("k", "v").Msg("hello")
 	assert.NotContains(t, buf.String(), "\x1b[")
 	assert.Contains(t, buf.String(), "hello k=v")

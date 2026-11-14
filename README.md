@@ -13,8 +13,11 @@ Restic Backup Orchestrator - Back up services and files to a restic repository.
 - Typed, validated restic options (excludes, tags, limits, ...) and retention policies
   (`keep`) with a single prune for the whole repository, and an optional `restic check`
   after it
-- Hooks before and after each job and on failure, with the job's result in their
-  environment
+- Hooks before and after each job and on failure, with the job's result and warnings in
+  their environment
+- Services that a killed or crashed run left stopped are started by the next run
+- `restor run --dry-run` shows what a run would stop and back up; `restor maintain` runs
+  prune and check on a schedule of their own
 - `restor restore` restores a snapshot, as a dry run unless `--apply` is given
 - `restor restic ...` runs restic against the configured repository, for everything else
 
@@ -82,8 +85,11 @@ sudo loginctl enable-linger "$USER"   # keep the timer running while logged out
 ## Usage
 
 ```bash
-restor run                      # back up every job, then forget and prune
+restor run                      # back up every job, then forget, prune and check
 restor run web db               # only these jobs (their order among each other is kept)
+restor run --dry-run            # show what would be stopped and backed up, change nothing
+restor run --skip-check         # this time without check (also --skip-prune)
+restor maintain                 # prune, unlock and check only, no backups (see below)
 restor validate                 # check the config, print the jobs in start order and
                                 # each retention policy once, with the jobs using it
 restor snapshots                # list the snapshots of every job
@@ -100,22 +106,35 @@ Every command reads `/etc/restor/config.yaml` when run as root and
 user, unless `--config <file>` (`-c`) says otherwise. There is no fallback from one to the
 other: a normal user who wants the system configuration runs restor with `sudo`.
 `--debug` logs every command line. Logs go to stderr, under systemd to the
-journal: `journalctl -u restor` (or `journalctl --user -u restor`).
+journal: `journalctl -u restor` (or `journalctl --user -u restor`). `--log-format json`
+writes one JSON object per line instead, for log collectors.
 
 `restor run` exits 0 when every job was backed up and 1 when the config is invalid, a job
-failed or the run was cancelled. A failed forget, prune or check is logged and runs the
+failed (also when its services did not come back) or the run was cancelled. A failed
+forget, prune or check is logged and runs the
 top-level `on_failure` hook; a failed `post` or `on_failure` hook is only logged. Neither
-changes the exit code. Before anything is stopped, it checks
+changes the exit code. `restor maintain` exits 1 when prune, unlock or check failed.
+Before anything is stopped, it checks
 that `restic` is installed and supported (see below). `restor snapshots`,
 `restor restore` and `restor restic` exit with restic's exit code.
 
-On SIGINT/SIGTERM restor stops the running backups, restarts the services it stopped,
+On SIGINT, SIGTERM or SIGHUP (a closed SSH session) restor stops the running backups,
+restarts the services it stopped,
 runs the `post` hook of those jobs, starts no further job and exits within its shutdown
 timeout (the largest `start_timeout` + 4 minutes, + 1 minute for a `post` hook, logged as
 `shutdown_timeout`). The shipped units allow 900 s (`TimeoutStopSec`); raise it if a
 `start_timeout` is above 10 minutes. Keep `KillMode=process` and the `CPUWeight=`/
 `IOWeight=` settings in custom units: containers that podman-compose starts again keep
-their monitor process in restor's cgroup and would inherit a `Nice=` setting.
+their monitor process in restor's cgroup and would inherit a `Nice=` setting. The units
+start after `network-online.target` and the container engines, so that a run caught up at
+boot finds the services running.
+
+**Services left stopped:** before a job stops its services, restor records them in
+`/var/lib/restor` (root) or `~/.local/state/restor`, and removes the record once they run
+again. When a run ends in between (killed after its shutdown timeout, out of memory, a
+power loss), the next run starts those services first, warns about it in the log and in
+`RESTOR_WARNINGS`, and only then backs up. Until they start, the record stays and every
+run tries again.
 
 ## Configuration
 
@@ -151,7 +170,9 @@ jobs:
 startup and every problem is reported with its field path; an unknown key is an error,
 so typos never go unnoticed. Durations are strings such as `30s`, `5m` or `4h`.
 `$VAR`, `${VAR}` and `${VAR:-default}` in values are replaced from restor's process
-environment; `$$` is a literal `$`. Relative `env_file`, `compose_file`, `sources` and
+environment; `$$` is a literal `$`. A variable that is unset or empty is an error, so
+`${DATA}/db` never becomes `/db`; write `${VAR:-}` when empty is fine, and `$$` for a `$`
+that restic should see (`*.$$1`). Relative `env_file`, `compose_file`, `sources` and
 `exclude_file` paths are resolved against the directory of the config file; `~` is not
 expanded (use `$HOME`). YAML anchors and merge keys work: keep shared blocks under a
 top-level key starting with `x-` and merge them with `<<: *name`.
@@ -172,14 +193,18 @@ A file with only
 in the backup; `restor run` then fails with "no jobs configured".
 
 **Repository:** `url` (or `RESTIC_REPOSITORY`/`RESTIC_REPOSITORY_FILE` in the env file),
-`env_file`, `backend_options` (`--option key=value`), `limit_upload`, `limit_download`
-(KiB/s), `retry_lock`, `prune`, `max_unused`, `check`, `check_read_data_subset`. The repository is passed to restic as
-`RESTIC_REPOSITORY`, so it never shows up in command lines or logs.
+`host`, `env_file`, `backend_options` (`--option key=value`), `limit_upload`,
+`limit_download` (KiB/s), `retry_lock`, `prune`, `max_unused`, `check`,
+`check_read_data_subset`. The repository is passed to restic as `RESTIC_REPOSITORY`, so
+it never shows up in command lines or logs. `host` is the host name of the snapshots
+(default: the system's); set it to keep a series going after the host was renamed.
 
 **The env file** holds the variables of restic only: the repository password and the
 backend credentials, and restic's own settings such as `RESTIC_CACHE_DIR` or
 `RESTIC_COMPRESSION`. One `KEY=value` per line, like systemd's `EnvironmentFile=`, but
-values are taken literally, also in quotes: a `$` or `\` in a password stays as it is. Keep it private (`chmod 600`);
+values are taken literally, also in quotes: a `$` or `\` in a password stays as it is.
+Only a ` #` comment may follow a closing quote (`KEY="abc"def` is an error). Keep it
+private (`chmod 600`);
 restor warns when other users can read it. Hooks and service managers do not see it.
 
 **Jobs:** the name is case-insensitive, its lowercase form is the restic tag, and it must
@@ -191,13 +216,15 @@ not start with `-` or contain `,` or whitespace.
 | `sources` | paths to back up (required, unless `stdin_command`) |
 | `stdin_command`, `stdin_filename` | back up the output of this command instead of `sources`, saved as `stdin_filename` (default `stdin`); see below |
 | `compose_file` | the compose file (compose types, required); for `compose.yaml`, `compose.yml`, `docker-compose.yml` or `docker-compose.yaml` the override file next to it (`compose.override.yml`, …) is used too, as `docker compose` without `-f` does |
+| `profiles` | compose profiles to enable (`--profile`): without them Compose does not list, and restor does not stop, the services of a profile |
+| `project_name` | the compose project name (`-p`), when the project was started with one |
 | `units`, `scope` | the systemd units (required) and `system` (default) or `user` |
 | `services` | services to stop; default: all of the compose file / all `units` |
 | `before`, `after` | jobs that run after / before this one |
 | `requires` | jobs that must succeed for this one to run (it also runs after them) |
 | `stop` | stop the services during the backup (default `true`) |
 | `start_all` | after the backup, also start the services that were not running (default `false`) |
-| `stop_timeout`, `start_timeout` | wait for the services to stop / start (default `1m` / `2m`); compose gets the stop timeout in whole seconds, rounded up |
+| `stop_timeout`, `start_timeout` | wait for the services to stop / start (default `1m` / `2m`); compose gets the stop timeout in whole seconds, rounded up, and it replaces each service's `stop_grace_period`: give a database that needs longer a larger `stop_timeout` |
 | `backup_timeout` | cancel a backup that takes longer; the services start again, the job fails |
 | `keep` | retention: `last`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`, `within…`, and `tags` next to another rule (not one of the job's own `tags`) |
 | `exclude`, `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`, `exclude_larger_than`, `one_file_system` | what restic leaves out (the restic options of the same name) |
@@ -206,7 +233,8 @@ not start with `-` or contain `,` or whitespace.
 | `pre`, `post`, `on_failure` | hooks, see below |
 
 Every key except `type`, `sources`, `stdin_command`, `stdin_filename`, `compose_file`,
-`units`, `scope`, `services`, `before`, `after` and `requires` can also be set under
+`profiles`, `project_name`, `units`, `scope`, `services`, `before`, `after` and
+`requires` can also be set under
 `defaults`. A job's own value replaces the default; lists are replaced, not merged.
 
 **Database dumps:** a job with `stdin_command` backs up what the command writes to
@@ -257,8 +285,12 @@ incomplete snapshot (some unreadable files) does not skip. `restor run files` wi
 **Services:** only the services that are running when a job's backup starts are stopped,
 and only those are started again afterwards, also when the backup failed. When none of
 them runs, restor warns and backs up anyway: check `compose_file` or `units` if the
-services should have been running (a project started with `-p` or from other compose
-files is not found). With
+services should have been running (a project started with `-p` needs `project_name`,
+services of a profile need `profiles`). Services that are not running again within
+`start_timeout` fail the job: its `on_failure` hook runs and the run exits 1. Its snapshot
+still counts, so forget and prune run, and the other jobs are not affected (those that
+`require` it are skipped). A unit that is `failed`, or a container that exited, ends the
+wait at once. A container that is `restarting` does not count as running. With
 `start_all: true` the backup also starts the job's other services (`services`, or all of
 the compose file / all `units`), so a service that was down comes back up; a failed start
 of those is only a warning and does not fail the job. `start_all` works with `stop: false`
@@ -266,10 +298,11 @@ too. Compose `start` does not create containers that were removed (`down`), and 
 services (init containers, `Type=oneshot` units) run again, so list `services` when the
 project has some. After a cancel only the stopped services are started. A systemd unit
 counts as started once `systemctl is-active` reports `active`, a `Type=oneshot` unit also
-once it has run (`inactive`). A `Type=simple` unit is
-`active` as soon as its process runs, so restor cannot tell when it crashes right after
-starting; use `Type=notify`, or check the unit in a `post` hook, when its start has to be
-confirmed. A lock per compose file and per unit keeps two restor runs from working on the
+once it has run (`inactive`). Services count as started only when two checks half a
+second apart see them running, so one that crashes at once (a container that exits, a
+`Type=simple` unit that fails) fails the job. A `Type=simple` unit is `active` as soon as
+its process runs, so a crash a few seconds later is not seen; use `Type=notify`, or check
+the unit in a `post` hook, when its start has to be confirmed. A lock per compose file and per unit keeps two restor runs from working on the
 same services; the second one fails.
 
 **Dependencies between units:** restor stops and waits for the listed `units` only, and
@@ -289,17 +322,25 @@ for output that is still open and then warns.
 | Hook | Runs | Environment |
 |---|---|---|
 | `pre` | before the services are stopped; if it fails, the job fails and nothing else runs | `RESTOR_JOB`, `RESTOR_HOOK=pre` |
-| `post` | after the services are started again, whenever `pre` succeeded | also `RESTOR_STATUS` (`success`, `incomplete`, `failed`), `RESTOR_SNAPSHOT_ID`, `RESTOR_ERROR` |
+| `post` | after the services are started again, whenever `pre` succeeded | also `RESTOR_STATUS` (`success`, `incomplete`, `failed`), `RESTOR_SNAPSHOT_ID`, `RESTOR_ERROR`, `RESTOR_WARNINGS` |
 | job `on_failure` | after `post`, when the job failed | as `post` |
-| top-level `post` | once after every run, after forget, prune and check | the run summary below |
+| top-level `post` | once after every run, after forget, prune and check, and after `restor maintain` | the run summary below |
 | top-level `on_failure` | after the top-level `post`, when a job, forget, prune or check failed | the run summary below |
 
-The top-level hooks get a summary of the whole run: `RESTOR_HOOK`, `RESTOR_STATUS`
+`RESTOR_WARNINGS` (`; `-separated, set only when there are any) lists what went wrong
+without failing the job: services that did not stop in time or were not running (the
+backup ran on live data), an incomplete snapshot, services an earlier run left stopped,
+skipped forgets and prunes.
+
+The top-level hooks get a summary of the whole run: `RESTOR_HOOK`, `RESTOR_COMMAND`
+(`run` or `maintain`), `RESTOR_STATUS`
 (`failed` when anything failed, `incomplete` when a snapshot is incomplete, else
 `success`), the comma-separated job names in `RESTOR_JOBS`, `RESTOR_SUCCEEDED_JOBS`,
 `RESTOR_INCOMPLETE_JOBS` and `RESTOR_FAILED_JOBS`, the snapshots in `RESTOR_SNAPSHOT_IDS`
 (`db=4f2a…,web=9c1e…`) and, when anything failed, every failure in `RESTOR_ERROR`
-(`; `-separated). A top-level `post` is the place for one notification per run.
+(`; `-separated) and the warnings of every job in `RESTOR_WARNINGS` (`job: warning`). A
+top-level `post` is the place for one notification per run. Values longer than 32 KiB are
+cut, and NUL bytes in a program's output are dropped, so that the hook always starts.
 
 A failing `post` or `on_failure` hook is logged and changes nothing. After a cancel
 (SIGTERM) a job's `post` hook still runs, for at most one minute, so that it can undo its
@@ -338,8 +379,9 @@ Tokens go into `hooks.conf`, not into the hook command: restor logs a hook's arg
 at debug level, and hooks do not see the env file.
 
 **Retention:** after all backups, every job with `keep` and a complete snapshot runs
-`restic forget --group-by=host --tag=<job>`, so each job's snapshots on this host are one
-group, also when its `sources` or `tags` change. With `repository.prune`, one `prune` and
+`restic forget --group-by=host --host=<host> --tag=<job>`, so each job's snapshots on this
+host are one group, also when its `sources` or `tags` change, and the snapshots that
+other hosts save into the same repository are never touched. With `repository.prune`, one `prune` and
 `unlock` follow, but only when every job of the run has a complete snapshot: a job that
 failed, or whose snapshot is incomplete (restic could not read some files), keeps its
 history and prune waits for a better run. A run that `skip_if_unchanged` skipped counts as
@@ -351,6 +393,24 @@ restore needs it. `check_read_data_subset` also reads back part of the data (`5%
 `1/10`, `2G`); without it, only the structure is checked. A failed check counts like a
 failed prune: it is logged, the run summary says `failed` and the top-level `on_failure`
 hook runs, but the exit code stays 0 when every job backed up.
+
+**Maintenance on its own schedule:** `restor maintain` runs `prune` and `unlock`, then
+`check` (with `max_unused` and `check_read_data_subset`), without backups or forget,
+whatever `repository.prune` and `repository.check` say; `--skip-prune` or `--skip-check`
+leave one out. For a weekly check that reads part of the data next to daily backups, set
+`check: false` (and `check_read_data_subset`) and add a second timer:
+
+```ini
+# /etc/systemd/system/restor-maintain.service: a copy of restor.service with
+ExecStart=/usr/bin/restor maintain --config /etc/restor/config.yaml
+# /etc/systemd/system/restor-maintain.timer
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00
+Persistent=true
+```
+
+Schedule it apart from the backups: prune needs an exclusive repository lock and fails
+while a backup runs (unless `retry_lock` waits for it).
 
 ## Restore
 
@@ -380,6 +440,21 @@ restor restore 1a2b3c4d --in-place --include /srv/app/db --apply
 - Only the repository part of the configuration is needed, so it works on a new host with
   a file that has `version` and `repository` only. Ownership is restored only when run
   as root.
+
+## Upgrading from an earlier 2.x release
+
+- **Forget selects this host:** forget used to select a job's snapshots by tag only, so in
+  a repository that several hosts share, one host's `keep` also thinned out another
+  host's snapshots of a job with the same name. It now passes `--host`. After a host was
+  renamed, set `repository.host` to the old name, or its old snapshots are never
+  forgotten again.
+- **Unset variables are errors:** `${VAR}` without a default and an unset or empty `VAR`
+  used to become empty; write `${VAR:-}` where that was meant.
+- **Services that do not come back fail the job:** not running within `start_timeout`
+  used to be a warning only. The snapshot still counts for forget and prune.
+- **Env file:** text after a closing quote is an error instead of being dropped.
+- **`check_read_data_subset`** no longer needs `check: true`: it also applies to
+  `restor maintain`.
 
 ## Upgrading from configuration version 1
 

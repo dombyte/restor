@@ -1,8 +1,9 @@
 // Package backup orchestrates one backup run: per job lock, pre hook, stop services,
 // restic backup, start services, post and on_failure hooks; the jobs run in the order
-// and with the concurrency the schedule allows. Then forget per job, one repository-wide
-// prune and unlock, check, and the run-level post and on_failure hooks. It talks to
-// restic, the service managers, the locker and the hook runner only through the
+// and with the concurrency the schedule allows. Before them it starts the services an
+// earlier run left stopped, after them it runs forget per job, one repository-wide prune
+// and unlock, check, and the run-level post and on_failure hooks. It talks to restic, the
+// service managers, the locker, the state records and the hook runner only through the
 // interfaces declared here.
 package backup
 
@@ -34,6 +35,10 @@ var (
 	// ErrRequiresNotAfter is returned by NewManager for a job that requires a job it does
 	// not run after: the schedule would not wait for the result it checks.
 	ErrRequiresNotAfter = errors.New("backup: a required job is not in after")
+	// ErrMaintenanceFailed is returned by Maintain when prune, unlock or check failed.
+	ErrMaintenanceFailed = errors.New("backup: maintenance failed")
+	// ErrNothingToMaintain is returned by Maintain when both prune and check are off.
+	ErrNothingToMaintain = errors.New("backup: nothing to do: both prune and check are skipped")
 )
 
 // Restic runs restic commands against the repository.
@@ -65,6 +70,14 @@ type Locker interface {
 	Lock(key string) (release func() error, err error)
 }
 
+// State records the services a job stopped until it started them again, so that the
+// next run starts them when a run ended in between. Load returns none without a record.
+type State interface {
+	Save(job string, services []string) error
+	Load(job string) ([]string, error)
+	Remove(job string) error
+}
+
 // Runner executes the hook commands with extra environment variables.
 type Runner interface {
 	RunEnv(ctx context.Context, env []string, name string, args ...string) ([]byte, error)
@@ -78,10 +91,22 @@ type Settings struct {
 	Prune bool
 	// Check runs check after forget and prune, whatever the jobs' results.
 	Check bool
+	// DryRun only reports the services each job would stop and runs its backup with the
+	// dry-run flag (in JobSettings.BackupArgs): no locks, hooks, service changes or
+	// maintenance.
+	DryRun bool
 	// Post is the hook that runs once after every run, with a summary of it.
 	Post string
 	// OnFailure is the hook that runs once after a run in which something failed.
 	OnFailure string
+}
+
+// Maintenance selects what Maintain runs.
+type Maintenance struct {
+	// Prune runs prune and unlock.
+	Prune bool
+	// Check runs check.
+	Check bool
 }
 
 // Job is one job and its service manager.
@@ -94,6 +119,7 @@ type Job struct {
 type Deps struct {
 	Restic Restic
 	Locker Locker
+	State  State
 	Hooks  Runner
 	Log    zerolog.Logger
 }
@@ -111,6 +137,7 @@ func NewManager(s Settings, jobs []Job, d Deps) (*Manager, error) {
 	reqs := []util.Requirement{
 		{Name: "Restic", OK: d.Restic != nil},
 		{Name: "Locker", OK: d.Locker != nil},
+		{Name: "State", OK: d.State != nil},
 		{Name: "Hooks", OK: d.Hooks != nil},
 	}
 	for _, j := range jobs {
@@ -132,28 +159,59 @@ func NewManager(s Settings, jobs []Job, d Deps) (*Manager, error) {
 	return &Manager{s: s, jobs: jobs, d: d}, nil
 }
 
-// Run backs up every job; a job whose required job failed is skipped and fails. Then it
-// runs forget for the jobs with a retention policy and a complete snapshot, with Prune,
-// prune and unlock when every snapshot is complete, and with Check, check. A cancelled
-// run does no maintenance. Job failures are logged here and summarized in the returned
-// ErrJobsFailed; forget, prune, unlock and check failures are only logged. Then the Post
-// hook runs, and when anything failed, the OnFailure hook.
+// Run starts the services an earlier run left stopped, then backs up every job; a job
+// whose required job failed is skipped and fails. Then it runs forget for the jobs with a
+// retention policy and a complete snapshot, with Prune, prune and unlock when every
+// snapshot is complete, and with Check, check. A cancelled run does no maintenance. Job
+// failures are logged here and summarized in the returned ErrJobsFailed; recovery,
+// forget, prune, unlock and check failures are only logged. Then the Post hook runs, and
+// when anything failed, the OnFailure hook. A dry run does only the backups.
 func (m *Manager) Run(ctx context.Context) error {
 	m.d.Log.Info().Int("concurrency", m.s.Concurrency).Int("jobs", len(m.jobs)).
-		Stringer("shutdown_timeout", m.ShutdownTimeout()).Msg("starting backup run")
+		Bool("dry_run", m.s.DryRun).Stringer("shutdown_timeout", m.ShutdownTimeout()).
+		Msg("starting backup run")
 
-	results := m.runJobs(ctx)
-	var maintenance []string
-	if ctx.Err() == nil {
-		maintenance = m.maintain(ctx, results)
+	var n notes
+	if !m.s.DryRun {
+		n = m.recoverAll(ctx)
 	}
-	s := m.summarize(results, maintenance)
-	m.runHook(ctx, hookPost, m.s.Post, s)
-	if len(s.failures) > 0 {
-		m.runHook(ctx, hookOnFailure, m.s.OnFailure, s)
+	results := m.runJobs(ctx)
+	if ctx.Err() == nil && !m.s.DryRun {
+		n.add(m.maintain(ctx, results))
+	}
+	s := m.summarize(commandRun, results, n)
+	if !m.s.DryRun {
+		m.runHooks(ctx, s)
 	}
 	if len(s.failed) > 0 {
 		return fmt.Errorf("%w: %d of %d", ErrJobsFailed, len(s.failed), len(m.jobs))
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+	return nil
+}
+
+// Maintain runs prune and unlock, and check, as mt selects, without any backup or forget
+// (forget belongs to a fresh snapshot), then the run-level hooks. It returns
+// ErrMaintenanceFailed when one of them failed.
+func (m *Manager) Maintain(ctx context.Context, mt Maintenance) error {
+	if !mt.Prune && !mt.Check {
+		return ErrNothingToMaintain
+	}
+	m.d.Log.Info().Bool("prune", mt.Prune).Bool("check", mt.Check).
+		Msg("starting maintenance")
+	var n notes
+	if mt.Prune {
+		n.add(m.prune(ctx))
+	}
+	if mt.Check {
+		n.add(m.check(ctx))
+	}
+	m.runHooks(ctx, m.summarize(commandMaintain, nil, n))
+	if len(n.failures) > 0 {
+		return fmt.Errorf("%w: %s", ErrMaintenanceFailed,
+			strings.Join(n.failures, warningSeparator))
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("backup: %w", err)
@@ -203,11 +261,7 @@ func (m *Manager) runJobs(ctx context.Context) []result {
 				// The required jobs have finished: they are in After.
 				required := m.failedRequirement(s, results, i)
 				go func() {
-					if required != "" {
-						results[i] = m.skipJob(ctx, m.jobs[i].Settings, required)
-					} else {
-						results[i] = m.runJob(ctx, m.jobs[i])
-					}
+					results[i] = m.startJob(ctx, m.jobs[i], required)
 					done <- i
 				}()
 			}
@@ -216,6 +270,18 @@ func (m *Manager) runJobs(ctx context.Context) []result {
 			return results
 		}
 		s.finish(<-done)
+	}
+}
+
+// startJob runs one job: skipped when the job it requires failed, a dry run, or a backup.
+func (m *Manager) startJob(ctx context.Context, j Job, failedRequirement string) result {
+	switch {
+	case failedRequirement != "":
+		return m.skipJob(ctx, j, failedRequirement)
+	case m.s.DryRun:
+		return m.dryRunJob(ctx, j)
+	default:
+		return m.runJob(ctx, j)
 	}
 }
 
@@ -230,28 +296,79 @@ func (m *Manager) failedRequirement(s *schedule, results []result, i int) string
 	return ""
 }
 
+// recoverAll starts the services that an earlier run stopped and never started again,
+// before any job runs.
+func (m *Manager) recoverAll(ctx context.Context) notes {
+	var n notes
+	for _, j := range m.jobs {
+		if ctx.Err() != nil {
+			break
+		}
+		services, err := m.d.State.Load(j.Settings.Name)
+		if err != nil {
+			m.d.Log.Error().Err(err).Str("job", j.Settings.Name).
+				Msg("cannot read the record of the stopped services")
+			n.failures = append(n.failures, err.Error())
+		} else if len(services) > 0 {
+			n.add(m.recoverJob(ctx, j))
+		}
+	}
+	return n
+}
+
+// recoverJob starts the services an earlier run of j left stopped (it was killed, or the
+// host went down). The record is read again under the job's locks: a lock that another
+// process holds means that its run stopped them and will start them itself.
+func (m *Manager) recoverJob(ctx context.Context, j Job) notes {
+	r := m.newRun(j)
+	releases, err := m.lockAll(j.Services.LockKeys())
+	defer m.releaseAll(releases, r.log)
+	if err != nil {
+		r.log.Info().Err(err).Msg("services were left stopped, but another run holds the " +
+			"job's lock: leaving them to it")
+		return notes{}
+	}
+	services, err := m.d.State.Load(j.Settings.Name)
+	if err != nil || len(services) == 0 {
+		return notes{} // reported by recoverAll, or started by the other run meanwhile
+	}
+	msg := "an earlier run stopped services and did not start them again: starting them"
+	r.log.Warn().Strs("services", services).Msg(msg)
+	n := notes{warnings: []string{
+		j.Settings.Name + ": " + msg + ": " + strings.Join(services, ", "),
+	}}
+	if err := m.startServices(ctx, r, services); err != nil {
+		err = fmt.Errorf("backup: %s: restart services an earlier run left stopped: %w",
+			j.Settings.Name, err)
+		r.log.Error().Err(err).Msg("recovery failed")
+		n.failures = append(n.failures, err.Error())
+	}
+	return n
+}
+
 // maintain runs forget for the jobs with a retention policy and a complete snapshot,
 // then one prune and unlock when every job has one, then check. They run after all
 // backups because they need exclusive repository locks. A failed or incomplete backup
-// keeps its job's history and skips prune, so a broken run never removes data. It
-// returns what failed.
-func (m *Manager) maintain(ctx context.Context, results []result) []string {
-	forgot, failures := m.forgetAll(ctx, results)
+// keeps its job's history and skips prune, so a broken run never removes data; services
+// that did not come back fail their job, but not its backup.
+func (m *Manager) maintain(ctx context.Context, results []result) notes {
+	forgot, n := m.forgetAll(ctx, results)
 	if m.s.Prune && forgot {
-		failures = append(failures, m.pruneIfComplete(ctx, results)...)
+		n.add(m.pruneIfComplete(ctx, results))
 	}
 	if m.s.Check {
-		failures = append(failures, m.check(ctx)...)
+		n.add(m.check(ctx))
 	}
-	return failures
+	return n
 }
 
 // pruneIfComplete runs prune and unlock when every job has a complete snapshot.
-func (m *Manager) pruneIfComplete(ctx context.Context, results []result) []string {
+func (m *Manager) pruneIfComplete(ctx context.Context, results []result) notes {
 	for _, r := range results {
-		if r.outcome != outcomeComplete {
-			m.d.Log.Warn().Msg("prune skipped because a job failed or is incomplete")
-			return nil
+		if r.backup != outcomeComplete {
+			msg := "prune skipped because a backup failed or is incomplete"
+			m.d.Log.Warn().Msg(msg)
+			return notes{warnings: []string{msg}}
 		}
 	}
 	return m.prune(ctx)
@@ -259,36 +376,39 @@ func (m *Manager) pruneIfComplete(ctx context.Context, results []result) []strin
 
 // check verifies the repository; a failure is logged and returned. It runs also after
 // failed jobs: what it checks is the data that is already there.
-func (m *Manager) check(ctx context.Context) []string {
+func (m *Manager) check(ctx context.Context) notes {
 	if err := m.d.Restic.Check(ctx); err != nil {
 		m.d.Log.Error().Err(err).Msg("check failed")
-		return []string{err.Error()}
+		return notes{failures: []string{err.Error()}}
 	}
 	m.d.Log.Info().Msg("check completed")
-	return nil
+	return notes{}
 }
 
 // forgetAll runs forget for the jobs with a retention policy and a complete snapshot. It
-// reports whether there was one, and what failed.
-func (m *Manager) forgetAll(ctx context.Context, results []result) (bool, []string) {
+// reports whether there was one, and what failed or was skipped.
+func (m *Manager) forgetAll(ctx context.Context, results []result) (bool, notes) {
 	forgot := false
-	var failures []string
+	var n notes
 	for i, j := range m.jobs {
 		if len(j.Settings.ForgetArgs) == 0 {
 			continue
 		}
-		switch results[i].outcome {
-		case outcomeComplete:
+		if results[i].backup == outcomeComplete {
 			forgot = true
 			if err := m.forget(ctx, j.Settings); err != nil {
-				failures = append(failures, err.Error())
+				n.failures = append(n.failures, err.Error())
 			}
-		case outcomeIncomplete:
-			m.d.Log.Warn().Str("job", j.Settings.Name).
-				Msg("forget skipped because the snapshot is incomplete")
+			continue
 		}
+		skipped := "forget skipped because the backup failed"
+		if results[i].backup == outcomeIncomplete {
+			skipped = "forget skipped because the snapshot is incomplete"
+		}
+		m.d.Log.Warn().Str("job", j.Settings.Name).Msg(skipped)
+		n.warnings = append(n.warnings, j.Settings.Name+": "+skipped)
 	}
-	return forgot, failures
+	return forgot, n
 }
 
 // forget applies the retention policy of one job; a failure is logged and returned.
@@ -303,19 +423,27 @@ func (m *Manager) forget(ctx context.Context, s JobSettings) error {
 }
 
 // prune runs prune and unlock for the whole repository; failures are logged and returned.
-func (m *Manager) prune(ctx context.Context) []string {
-	var failures []string
+func (m *Manager) prune(ctx context.Context) notes {
+	var n notes
 	if err := m.d.Restic.Prune(ctx); err != nil {
 		m.d.Log.Error().Err(err).Msg("prune failed")
-		failures = append(failures, err.Error())
+		n.failures = append(n.failures, err.Error())
 	} else {
 		m.d.Log.Info().Msg("prune completed")
 	}
 	if err := m.d.Restic.Unlock(ctx); err != nil {
 		m.d.Log.Error().Err(err).Msg("unlock failed")
-		failures = append(failures, err.Error())
+		n.failures = append(n.failures, err.Error())
 	}
-	return failures
+	return n
+}
+
+// runHooks runs the run-level post hook, then the on_failure hook when anything failed.
+func (m *Manager) runHooks(ctx context.Context, s summary) {
+	m.runHook(ctx, hookPost, m.s.Post, s)
+	if len(s.failures) > 0 {
+		m.runHook(ctx, hookOnFailure, m.s.OnFailure, s)
+	}
 }
 
 // runHook runs a run-level hook with the summary of the run in its environment; its own

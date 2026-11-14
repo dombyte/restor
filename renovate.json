@@ -97,6 +97,14 @@
       "depNameTemplate": "goreleaser/goreleaser",
       "datasourceTemplate": "github-releases",
       "versioningTemplate": "semver"
+    },
+    {
+      "description": "Docker images of the end-to-end tests, marked with a `# renovate: datasource=docker` (script) or `// renovate: datasource=docker` (Go) comment",
+      "customType": "regex",
+      "managerFilePatterns": ["/^scripts/e2e\\.sh$/", "/^internal/app/e2e_test\\.go$/"],
+      "matchStrings": ["(?<depName>[a-z0-9][a-z0-9./-]*):(?<currentValue>\\d[^\\s\"'}]*)\"?\\s*(?:#|//) renovate: datasource=docker"],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
     }
   ],
   "lockFileMaintenance": {

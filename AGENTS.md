@@ -22,15 +22,22 @@ restor orchestrates **restic** backups of several **jobs** on one host.
   up, plus, depending on its `type`, the services that
   must be stopped while they are backed up: `docker-compose`, `podman-compose`, `systemd`
   (system or user scope), or no type (files only, nothing to stop).
-- **Per job:** lock → pre hook → stop services → `restic backup --tag=<job>` → start
-  services → post hook (also after a failed backup) → on_failure hook (when it failed).
+- **Before the jobs:** start the services that an earlier run stopped and never started
+  again (it was killed, or the host went down), from the state records.
+- **Per job:** lock → pre hook → record the services → stop services →
+  `restic backup --host=<host> --tag=<job>` → start services → remove the record → post
+  hook (also after a failed backup) → on_failure hook (when it failed).
 - **Order:** a job starts once the jobs it runs `after` (or that name it in `before`, or
   that it `requires`) have finished, and is skipped as failed when a job it `requires`
   failed; at most `concurrency` jobs run at once (1 = one after another, 0 = all), and
   jobs that share a compose file or systemd unit never run together.
-- **After all jobs:** `restic forget --group-by=host --tag=<job> <keep>` per job, then one
+- **After all jobs:** `restic forget --group-by=host --host=<host> --tag=<job> <keep>` per
+  job, then one
   repository-wide `restic prune` and `restic unlock` (only with `repository.prune`), then
   `restic check` (only with `repository.check`); the run-level post hook, then the run-level on_failure hook when anything failed.
+- **`restor maintain`:** prune + unlock and check without backups or forget, for a
+  schedule of their own; **`restor run --dry-run`:** only reports the services each job
+  would stop and runs `restic backup --dry-run`.
 - **Runtime:** a single CLI binary that runs **on the host** as a oneshot systemd service
   (`restor run`), triggered by a systemd timer (`example/restor.service`,
   `example/restor.timer`). It shells out to `restic`, `docker compose`, `podman compose`
@@ -76,6 +83,7 @@ restor orchestrates **restic** backups of several **jobs** on one host.
 make check                                                # ./scripts/pre-commit.sh, check-only
 make integration                                          # integration tests, restic on PATH
 make integration-oldest                                   # same with the oldest supported restic
+make e2e [E2E_IMAGE=<image>]                              # end-to-end tests in a container
 golangci-lint fmt --config .golangci.yml                  # gofumpt + goimports
 golangci-lint run --config .golangci.yml                  # full linter set (section 12)
 go tool deadcode -test ./... # unused exported code
@@ -84,6 +92,8 @@ go test -race ./...                                       # all unit tests, as i
 go tool mockery                                           # regenerate mocks (.mockery.yaml)
 make build                                                # ./restor with version info (ldflags)
 ./restor run --config config.yaml [--debug] [job...]     # run one backup cycle
+./restor run --dry-run                                    # what a run would stop and back up
+./restor maintain [--skip-prune] [--skip-check]           # prune, unlock and check only
 ./restor validate --config config.yaml                    # check config, print job order
 ./restor restic --config config.yaml snapshots            # restic with repo + env file
 ./restor version                                          # build info (also --version, -v)
@@ -123,21 +133,24 @@ make build                                                # ./restor with versio
 ## 3. Project Structure
 
 ```
-cmd/main.go                main package: cobra commands (run, validate, snapshots, restore,
-                           restic, version), logger, signal context, shutdown deadline,
-                           exit code, build info
+cmd/main.go                main package: cobra commands (run, maintain, validate, snapshots,
+                           restore, restic, version), logger (console or JSON), signal
+                           context, shutdown deadline, exit code, build info
 internal/app/              composition root: config Plan → Settings, CreateServiceManager,
                            restic flags, wiring, restic version check, startup warnings,
                            Describe (validate), snapshots, restore and the restic
                            passthrough
 internal/config/           YAML file (version 2) and its job files decoded strictly, ${VAR}
                            expansion, paths, env file, defaults → validated read-only Plan
-internal/backup/           orchestration: Manager (schedule, per-job run, hooks,
-                           forget/prune/unlock/check); declares Restic, Services, Locker, Runner
+internal/backup/           orchestration: Manager (recovery, schedule, per-job run, dry run,
+                           hooks, forget/prune/unlock/check, Maintain); declares Restic,
+                           Services, Locker, State, Runner
 internal/restic/           restic CLI client: typed flags, backup, forget, prune, check,
                            unlock, version
 internal/servicemanager/   Compose (docker/podman), Systemd, Noop; status polling
 internal/lock/             flock(2) lock files per key, lock dir safety checks
+internal/state/            records of the services a job stopped (one JSON file per job,
+                           written atomically), state dir safety checks
 internal/command/          the only os/exec user: runs a program with a fixed env and ctx
                            (captured or attached to the terminal)
 internal/util/             RequireAll/DependencyError, Clock; clocktest (fake clock)
@@ -148,6 +161,7 @@ example/                   config.yaml (full reference, kept valid by a test), r
 packaging/                 .deb/.rpm only: system + user units (/usr/bin/restor) and the
                            install/remove scripts (nfpm in .goreleaser.yaml)
 scripts/pre-commit.sh      local checks (make check)
+scripts/e2e.sh             runs the e2e tests in a throwaway privileged container
 scripts/install-restic.sh  downloads a restic release, checksum and signature verified
                            (CI, make integration-oldest; needs gpg)
 scripts/restic-release-key.asc  restic's release signing key (CF8F…A907), pinned
@@ -160,7 +174,7 @@ Layout rules:
 - `pkg/` only for code meant for other modules, and only with user confirmation.
 - Root files: `AGENTS.md`, `README.md`, `.golangci.yml`, `.goreleaser.yaml`,
   `.mockery.yaml`, `Makefile`, `renovate.json`, `scripts/pre-commit.sh`,
-  `scripts/install-restic.sh`, `scripts/restic-release-key.asc`, `example/`, `packaging/`.
+  `scripts/e2e.sh`, `scripts/install-restic.sh`, `scripts/restic-release-key.asc`, `example/`, `packaging/`.
 
 ---
 
@@ -168,18 +182,19 @@ Layout rules:
 
 ```
 cmd/main               → internal/app, cobra, zerolog
-internal/app           → config, backup, restic, servicemanager, lock, command, util
+internal/app           → config, backup, restic, servicemanager, lock, state, command, util
 internal/backup        → util, zerolog
 internal/restic        → util, zerolog
 internal/servicemanager → util
 internal/lock          → util
+internal/state         → util
 internal/command       → zerolog
 internal/config        → yaml
 internal/util          → stdlib only
 ```
 
 Layers: `cmd → app (composition root) → backup (orchestration) → restic, servicemanager,
-lock, command (external clients)`. Dependencies flow down only; no import cycles.
+lock, state, command (external clients)`. Dependencies flow down only; no import cycles.
 
 Rules:
 - Only `internal/app` imports `config` and names concrete types. `backup`, `restic`,
@@ -187,8 +202,12 @@ Rules:
   config's `Plan` onto them. Only `restic` knows restic's flags: `app` turns the typed
   job and repository settings into arguments with `restic.BackupFlags`, `restic.Keep`,
   `restic.Repository` and `restic.PruneFlags`; `backup` passes them on unread.
-- `backup` talks to restic, the service managers, the locker and the hook runner only
-  through interfaces it declares itself (`Restic`, `Services`, `Locker`, `Runner`).
+- `backup` talks to restic, the service managers, the locker, the state records and the
+  hook runner only through interfaces it declares itself (`Restic`, `Services`, `Locker`,
+  `State`, `Runner`).
+- `state` and `lock` do the same job for different data and stay apart (no shared
+  helper for their directory checks): `lock` lives in `/run`, `state` must survive a
+  reboot.
 - `restic` and `servicemanager` run their CLIs through a `Runner` interface they declare;
   `command.Runner` implements it. Only `command` imports `os/exec` (`app` uses
   `exec.LookPath` for the startup warning).
@@ -234,6 +253,20 @@ restor itself has no data store. What it writes, and who writes it:
   services it did not stop (`Services.All` minus the stopped ones; `start` leaves running
   ones as they are), also with `stop: false`, but not after a cancel.
 
+- **State records:** `state.Store` keeps one file per job,
+  `<state dir>/<sha256 of job>.json` (`{"job", "services"}`), written to a temporary file,
+  synced and renamed. A job saves the services it is about to stop before the stop and
+  removes the record once `startServices` saw them running; a failed or timed-out start
+  keeps it. The state dir (`state.DefaultDir`) is `/var/lib/restor` for root,
+  `$XDG_STATE_HOME/restor` or `~/.local/state/restor` for other users, else the lock dir
+  (lost at a reboot); it persists because `compose stop` leaves containers stopped after
+  a reboot, also with `restart: unless-stopped`. Same safety checks as the lock dir
+  (`state.ErrUnsafeDir`). Before the jobs, `Manager.recoverAll` loads every job's record
+  (without a lock), and for one that exists takes the job's locks, reads it again and
+  starts the services: a lock that another process holds means that run owns the record.
+  A recovery is a run-level warning, a failed one a run-level failure (`RESTOR_ERROR`,
+  on_failure), and the record stays for the next run. Not in a dry run.
+
 ## 6. Lifecycle
 
 restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
@@ -241,7 +274,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 ### Run
 1. `cmd/main`: cobra parses the command and flags (`--config` defaults to
    `app.DefaultConfig`, see CLI); logger = console writer on stderr, `--debug` = debug
-   level (`validate`, `snapshots` and `restic` log warnings only); `signal.NotifyContext` for SIGINT/SIGTERM;
+   level (`validate`, `snapshots` and `restic` log warnings only), `--log-format json` = one
+   JSON object per line; `signal.NotifyContext` for SIGINT/SIGTERM/SIGHUP;
    build info is logged. `restor` without a command is an error, so the call of version
    1 (`restor --config x`) cannot pass as a backup.
 2. `app.New`: `config.Load` (file, expansion, paths, env file, defaults, validation),
@@ -251,7 +285,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
    commands that only need the repository); `restic version` must succeed and be at least the oldest supported release
    (`restic.Supported`), before any service is stopped; a release newer than the newest
    tested one is logged as a warning and runs.
-4. `Manager.Run`: run the jobs as the schedule allows; when the run was not cancelled:
+4. `Manager.Run`: start the services earlier runs left stopped (section 5), run the jobs
+   as the schedule allows; when the run was not cancelled:
    forget each job that has a complete snapshot and a `keep`, then, with
    `repository.prune` and only when every job has a complete snapshot, one prune + unlock
    (only if at least one job forgot); with `repository.check` one check, whatever the
@@ -274,18 +309,28 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   output → warning, the job counts as backed up but is **incomplete**: its forget and the
   prune are skipped. A snapshot that `--skip-if-unchanged` skipped (a summary without ID)
   counts as **complete**: the latest snapshot is still current.
-- Restarting services fails → job fails; not running within `start_timeout` → warning.
+- Restarting services fails, or they are not running within `start_timeout`
+  (`backup.ErrNotStarted`) → job fails. A `failed` unit or an `exited`/`dead` container
+  (without a running one of the same service) ends the wait at once
+  (`servicemanager.errStartFailed`). The job's backup outcome stays as it was
+  (`result.backup`): its snapshot counts for forget and prune, so a service that does not
+  come back never blocks retention. A job that `requires` it is skipped (the job failed).
 - `start_all`: listing or starting the services that were not stopped fails, or they are
   not running within `start_timeout` → warning only (a service that was down must not
   block forget and prune on every run).
 - A failed job runs its on_failure hook after the post hook.
+- What goes wrong without failing the job is a warning: logged, and kept per job for
+  `RESTOR_WARNINGS` (stop failed or timed out, no services running, incomplete snapshot,
+  `start_all` problems, the record of stopped services not written), plus the run-level
+  ones (recovered services, skipped forget or prune).
 - A job whose `requires` job failed is skipped and fails (see Schedule).
 - Other jobs always continue, also those that run after the failed one; each failure is
   logged once by `Manager` with the job, and `main` logs the summary
   (`backup: jobs failed: N of M`).
 
 ### Shutdown and supervision
-- SIGINT/SIGTERM cancel the run context: running commands get SIGTERM and are killed 10 s
+- SIGINT/SIGTERM/SIGHUP cancel the run context (SIGHUP: a manual run in an SSH session
+  that drops): running commands get SIGTERM and are killed 10 s
   later (`exec.Cmd.Cancel`/`WaitDelay`, so restic can remove its repository lock). Each
   command runs in its own process group: SIGTERM goes to the whole group (a hook's child
   processes too), and what is left of it gets SIGKILL when the command returns; no
@@ -311,7 +356,13 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   their own scope) instead of `Nice=`/`IOSchedulingClass=` (inherited by the containers
   podman-compose restarts).
 - There is no in-process retry and no restart: systemd records the failed run, and the
-  next timer run is the retry (`Persistent=true` catches up missed runs).
+  next timer run is the retry (`Persistent=true` catches up missed runs). The system
+  units run after `network-online.target` (`Wants=` too), `docker.service` and
+  `podman-restart.service`, the user unit after `podman-restart.service`, so that a run
+  caught up at boot finds the containers started; `After=` on a unit that is not
+  installed is ignored.
+- A run that ends without restarting services (killed after the deadline, OOM, power
+  loss) leaves their record; the next run starts them first (section 5).
 
 ### Rules (MUST)
 - Every goroutine has an owner that starts it and waits for it to end (`Manager.runJobs`
@@ -352,14 +403,16 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   are checked against the type they are merged into; top-level keys starting with `x-`
   are ignored (a place for anchors, as in Compose files).
 - `$VAR`, `${VAR}` and `${VAR:-default}` in scalar values (not keys) are expanded once at
-  load time from the **process** environment; `$$` is a literal `$`. A plain scalar is
-  re-typed after expansion, so `${LIMIT}` can fill a number.
+  load time from the **process** environment; `$$` is a literal `$`. A variable without
+  a default that is unset or empty is an error with the field path and line (`getenv`
+  cannot tell the two apart; `${VAR:-}` allows empty). A plain scalar is re-typed after
+  expansion, so `${LIMIT}` can fill a number.
 - Relative `repository.env_file`, `include`, `compose_file`, `sources` and
   `exclude_file` are resolved against the directory of the config file, a job file's
   against its own (systemd runs restor in `/`); hooks and `stdin_command` are not (they
   are commands).
 - `defaults` holds every job key except `type`, `sources`, `stdin_command`,
-  `stdin_filename`, `compose_file`, `units`, `scope`, `services`, `before`, `after` and
+  `stdin_filename`, `compose_file`, `profiles`, `project_name`, `units`, `scope`, `services`, `before`, `after` and
   `requires`
   (`config.Defaults`, inlined into `config.JobConfig`). A job's own value replaces the default, lists included (an empty
   list clears the default); `keep` is replaced as a whole. Unset: `stop` true,
@@ -371,14 +424,16 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - **Environment:** restic gets the process env + `repository.env_file` +
   `RESTIC_REPOSITORY` (from `repository.url`, if set). The env file is `.env` only
   (`KEY=value` per line, `export ` prefix allowed, a line without `=` is an error,
-  `"…"`/`'…'` values taken as is, an unquoted value ends at ` #`) and its values are
+  `"…"`/`'…'` values taken as is and followed by nothing or a whitespace + `#` comment, an
+  unquoted value ends at ` #`) and its values are
   **never expanded**. Service managers and hooks get only the process env (hooks plus
   their `RESTOR_*` variables).
 - Validation (all problems at once, with field paths): `version` is 2; `concurrency` ≥ 0;
   `jobs` may be empty; job names and tags are not empty, do not start with `-` and
   contain no `,` or whitespace (they are restic tags, and restic splits `--tag` on commas);
-  `type` is `docker-compose`, `podman-compose`, `systemd` or absent; `compose_file` for
-  the compose types, `units` for systemd, `scope` is `system` or `user`, `services` of a
+  `repository.host` like a job name; `type` is `docker-compose`, `podman-compose`,
+  `systemd` or absent; `compose_file` for the compose types, `profiles` (no empty entries)
+  and `project_name` (`^[a-z0-9][a-z0-9_-]*$`) only for them, `units` for systemd, `scope` is `system` or `user`, `services` of a
   systemd job are among its `units`; keys of another type are errors (`units` on a compose
   job, `services`/`stop`/`start_all`/timeouts on a files-only job); `sources` required
   unless `stdin_command`, no empty entries; `stdin_command` not empty and without empty
@@ -389,7 +444,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   and form no cycle (the first cycle is reported as `a → b → a`); durations ≥ 0, `stop_timeout` > 0 when services are
   stopped and `start_timeout` > 0 when they are stopped or `start_all` is set; `keep` counts ≥ 0 and `within…` restic durations (`1y2m3d4h`); sizes
   (`exclude_larger_than`) like `500M`; `max_unused` a percentage, size or `unlimited`;
-  `check_read_data_subset` only with `check`, `n/t` (1 ≤ n ≤ t), a percentage in (0, 100]
+  `check_read_data_subset` (also without `check`: `restor maintain` uses it) `n/t`
+  (1 ≤ n ≤ t), a percentage in (0, 100]
   or a size > 0;
   `backend_options` keys like `s3.connections` with non-empty values; limits ≥ 0; env file
   names and values without NUL bytes; no extra `tags` that are the name of a job (forget
@@ -411,10 +467,22 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 ### CLI
 - `restor run [job...]`: one backup cycle of all or the named jobs (`Plan.Select`;
   unknown names are an error). Ordering against jobs that are not selected is dropped.
+  `--dry-run`: no recovery, locks, hooks, service changes or maintenance; each job logs
+  the services it would stop (`Services.Running`) and runs `restic backup --dry-run`
+  (`BackupFlags.DryRun`); exit code as for a run. `--skip-prune` and `--skip-check` turn
+  off the configured prune + unlock and check for this run.
+- `restor maintain [--skip-prune] [--skip-check]`: checks the restic version, then
+  `Manager.Maintain`: prune + unlock and check, whatever `repository.prune`/`check` say
+  (both skipped = `backup.ErrNothingToMaintain`), no backup and no forget (forget belongs
+  to a fresh snapshot), then the run-level hooks with `RESTOR_COMMAND=maintain` and empty
+  job lists. Exit 1 when one of them failed (`backup.ErrMaintenanceFailed`). Works
+  without jobs.
+- `--log-format console|json` (every command): human-readable (default) or one JSON
+  object per line; another value is an error before the command runs.
 - `restor validate`: loads and wires everything, then prints the jobs in the order they
   start with concurrency 1 (`Manager.Order`), with type, after, requires, stop, start
   all, a keep label and sources (above them the concurrency, prune and check settings
-  and the job files read), and below them each distinct retention policy once with its label (A, B, … in
+  and the job files read, and the host), and below them each distinct retention policy once with its label (A, B, … in
   order of first use; `-` = never forgotten) and its jobs; never the repository URL (it
   may hold credentials). Without jobs it says so instead of the tables.
 - `restor snapshots [job...]`: `restic <repository global flags> snapshots --tag=<job>…`
@@ -464,12 +532,19 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
 - Run with the process environment, the run context and these variables: `pre` gets
   `RESTOR_JOB`, `RESTOR_HOOK=pre`; `post` and the job's `on_failure` also
   `RESTOR_STATUS` (`success`, `incomplete`, `failed`), `RESTOR_SNAPSHOT_ID` (empty without
-  a snapshot) and, after a failure, `RESTOR_ERROR`. The run-level `post` and `on_failure`
-  get the run summary (`backup.summary`): `RESTOR_HOOK`, `RESTOR_STATUS` (`failed` when a
-  job or the maintenance failed, else `incomplete` when a snapshot is, else `success`),
+  a snapshot), after a failure `RESTOR_ERROR` and, when the job warned, `RESTOR_WARNINGS`
+  (`; `-separated). The run-level `post` and `on_failure`
+  get the run summary (`backup.summary`): `RESTOR_HOOK`, `RESTOR_COMMAND` (`run` or
+  `maintain`), `RESTOR_STATUS` (`failed` when a job, the recovery or the maintenance
+  failed, else `incomplete` when a snapshot is, else `success`),
   the comma-separated `RESTOR_JOBS`, `RESTOR_SUCCEEDED_JOBS`, `RESTOR_INCOMPLETE_JOBS`,
   `RESTOR_FAILED_JOBS`, `RESTOR_SNAPSHOT_IDS` (`job=ID`) and, when anything failed,
-  `RESTOR_ERROR` (maintenance failures, then job failures, `; `-separated).
+  `RESTOR_ERROR` (recovery and maintenance failures, then job failures, `; `-separated)
+  and, when anything warned, `RESTOR_WARNINGS` (run-level warnings, then each job's as
+  `job: warning`). There is no `warning` status: hooks that compare `RESTOR_STATUS` keep
+  working. Every value is cleaned before exec (`backup.execSafe`): NUL bytes dropped
+  (exec refuses the whole environment otherwise) and cut to 32 KiB (Linux refuses a
+  variable over 128 KiB).
 - The post hook runs after the services are started again whenever the pre hook succeeded
   (or there is none), also when the backup or the restart failed, so it can undo the pre
   hook. The job's on_failure hook runs after it when the job failed (also after a failed
@@ -479,7 +554,8 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   failures are logged only.
 
 ### Service managers
-- Compose: `<docker|podman> compose -f <file> [-f <override>] …`; the override is the first
+- Compose: `<docker|podman> compose -f <file> [-f <override>] [-p <project_name>]
+  [--profile <p>]… …`; the override is the first
   of `compose.override.yml`, `compose.override.yaml`, `docker-compose.override.yml`,
   `docker-compose.override.yaml` next to a file with a default name (`compose.yaml`,
   `compose.yml`, `docker-compose.yml`, `docker-compose.yaml`), found at load time
@@ -488,23 +564,33 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   name that `config --services` does not report fails the job); stop with
   `stop -t <stop_timeout in s, rounded up> <services>` (ignores "no containers to stop"),
   start with `start <services>` (not `up`: a backup never recreates containers from a
-  changed compose file). Running = `ps --format json` reports the service with `State`
-  `running` (Docker JSON lines or a JSON array; podman-compose via the
-  `com.docker.compose.service` label).
+  changed compose file). Status = `ps --format json` (`--all` for docker only: Docker
+  lists only running containers without it, podman-compose always lists all and may not
+  know the flag); a service is running when one of its containers has `State` `running`
+  (Docker JSON lines or a JSON array; podman-compose via the
+  `com.docker.compose.service` label), `restarting` is not running, and `exited`/`dead`
+  without a running container ends a start (`errStartFailed`). `config --services` runs
+  only when a requested service has no container in `ps` (to tell a stopped service from
+  a typo) or none are requested.
 - systemd: `systemctl [--user] stop|start <units>` (stop ignores "not running"/"not
   loaded"); state from `systemctl is-active <units>`. Up (running before the backup, and
   not yet stopped) = `active`, `activating`, `deactivating`, `reloading` or `refreshing`;
-  started = all `active`, or `inactive` for a `Type=oneshot` unit (`systemctl start`
+  started = all `active`, or `inactive` for a `Type=oneshot` unit; a `failed` unit ends the
+  start at once (`errStartFailed`) (`systemctl start`
   waits until it has run and fails when it failed; the type comes from
   `systemctl show --property=Type <units>`, queried once when a unit is inactive). A
-  `Type=simple` unit is `active` as soon as its process runs, so a crash right after the
-  start is not seen; README says so.
+  `Type=simple` unit is `active` as soon as its process runs, so a crash a few seconds
+  after the start is not seen; README says so.
   `services` selects some of `units` (a name that is not one of them is a validation
   error); empty means all units.
 - Files only (no type): the `noop` service manager; no services, every operation
   succeeds, lock key `files:<job>`.
 - Stop and start poll every 500 ms until the expected state or the timeout; a failed
-  status query is retried, and its error counts only when the last poll failed. The
+  status query is retried, and its error counts only when the last poll failed
+  (`errStartFailed` ends the wait at once). Start counts the services as started only
+  when two polls in a row see them so (`confirmed`): right after the start command a
+  container that crashes at once is still `running` ("Up Less than a second"), and a
+  `Type=simple` unit `active`. The
   timeout counts from before the stop/start command, so a slow command shortens the wait
   (at least one status query still runs); a restart thus ends within `start_timeout` +
   2 min + one status query, inside the `start_timeout` + 3 min bound after a cancel.
@@ -520,13 +606,14 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   `backend_options` entry (sorted), `--limit-upload=`, `--limit-download=`,
   `--retry-lock=`. Settings restic reads from its environment (`RESTIC_CACHE_DIR`,
   `RESTIC_COMPRESSION`, `RESTIC_PACK_SIZE`, …) get no config key: they go in the env file.
-- `restic [global] backup --json --group-by=host,tags [backup flags] --tag=<job> --
-  <sources>`: the parent snapshot comes from the job's own snapshots (restic's default
+- `restic [global] backup --json --group-by=host,tags [backup flags] --host=<host>
+  --tag=<job> -- <sources>`: the host is `repository.host` or `os.Hostname()` (startup
+  fails without one, `app.ErrNoHostname`), the same for forget; the parent snapshot comes from the job's own snapshots (restic's default
   `host,paths` would compare a job with another one that has the same sources, and
   `--skip-if-unchanged` would then skip its snapshot); backup flags
   from `exclude`, `iexclude`, `exclude_file`, `exclude_if_present`, `exclude_caches`,
-  `exclude_larger_than`, `one_file_system`, `skip_if_unchanged` and `tags` (extra
-  `--tag=`). A `stdin_command` job runs `restic [global] backup --json
+  `exclude_larger_than`, `one_file_system`, `skip_if_unchanged`, `tags` (extra
+  `--tag=`) and, for `run --dry-run`, `--dry-run`. A `stdin_command` job runs `restic [global] backup --json
   --group-by=host,tags --stdin-from-command [--stdin-filename=…] [--skip-if-unchanged]
   [--tag=…] --tag=<job> -- <command>`: the command takes the place of the sources and
   the file selection flags are left out (`BackupFlags.StdinFromCommand`); a command that
@@ -543,7 +630,7 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   only restic's last stderr lines. backup writes its errors there as JSON messages; each
   is replaced by its text (`message`, or `error.message` for an unreadable file), so logs
   and `RESTOR_ERROR` read `Fatal: …`, not `{"message_type":"exit_error",…}`.
-- `restic [global] forget --group-by=host --tag=<job> [keep flags]`; keep flags
+- `restic [global] forget --group-by=host --host=<host> --tag=<job> [keep flags]`; keep flags
   `--keep-last=` … `--keep-yearly=`, `--keep-within…=` and `--keep-tag=`.
 - `restic [global] prune [--max-unused=]` and `restic [global] unlock`.
 - `restic [global] check [--read-data-subset=]` (`restic.CheckFlags`), after prune and
@@ -614,6 +701,37 @@ restor is a **oneshot** process: one `restor run` = one backup cycle, then exit.
   days, forgetting would rotate out every complete snapshot and keep only incomplete ones.
   Forget runs without `prune` too: forgetting alone frees nothing but keeps the snapshot
   list bounded.
+- **Forget selects this host:** without `--host`, forget selected a job's snapshots of
+  every host, so in a repository shared by several hosts one host's `keep` thinned out
+  the other host's snapshots of a job with the same name (and its prune then deleted
+  them). Backup and forget therefore both pass the same host, `repository.host` or the
+  system's; the key exists for a renamed host, whose old series would otherwise never be
+  forgotten again. `restor snapshots` lists every host's snapshots: a restore may need
+  another host's.
+- **A service that does not come back fails its job, not its backup:** a warning was
+  missed in practice (exit 0, `RESTOR_STATUS=success`) while a database stayed down. The
+  job fails (exit code, on_failure, `RESTOR_FAILED_JOBS`), but its snapshot is fine, so
+  the backup outcome (`result.backup`) drives forget and prune: a broken service must not
+  stop retention for every job. The other jobs are not affected, except those that
+  `require` it.
+- **Warnings as a variable, not a status:** `RESTOR_WARNINGS` carries what went wrong
+  without failing (a backup of live data, services left stopped by an earlier run). A new
+  `RESTOR_STATUS` value would have broken every hook that compares it.
+- **Records of stopped services, started by the next run:** a killed run (shutdown
+  deadline, OOM, power loss) used to leave services down until someone noticed, and the
+  next backup found nothing to stop. The record is a file per job in a directory that
+  survives a reboot; it is read under the job's lock, so a second restor process never
+  starts services that a running backup stopped on purpose. Recovery runs only for the
+  jobs of the run: `restor run web` does not touch the record of `db`.
+- **Maintenance as its own command:** prune and especially `check --read-data-subset`
+  can take longer than all backups together; `restor maintain` lets them run on another
+  timer. Forget stays with the backups: it may only run after a fresh complete snapshot.
+- **The process group gets SIGKILL after its leader was reaped:** `exec.Cmd.Wait` reaps
+  the leader before `command.Runner.finish` can kill what is left of the group. While a
+  member lives, Linux keeps the group ID allocated, so the signal reaches only that
+  group; a new process could get the ID only after the group is empty, and would have to
+  lead a group of its own within microseconds. Killing before the reap would need
+  `waitid(WNOWAIT)` per platform; not worth it for that window.
 - **Forget groups by host, selected by tag:** restic's default grouping (`host,paths`)
   would leave the snapshots of changed `sources` in a group that is never forgotten, and
   `host,tags` the same after a change of `tags`. `--tag=<job>` selects the job, grouping by
@@ -850,10 +968,20 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
   (`make integration`; `make integration-oldest` with the oldest supported release, which
   CI tests too): one subtest per restic feature restor uses (every backup, forget,
   global and prune flag, skip-if-unchanged, exit codes 3/10/11/12, a whole `restor run`,
-  `restor restore`), so a failing release shows what it lacks. A new restic option gets a check there.
+  `restor restore`, forget per host, backup `--dry-run`, `restor run --dry-run` and
+  `restor maintain`), so a failing release shows what it lacks. A new restic option gets a check there.
   Backups that must be unchanged use `testdata/static` and are retried
   (`unchangedWithin`): restic also records the directories above a source, those of a
   temp dir change while other tests run, and even the home directory can change.
+- `internal/app/e2e_test.go` (build tag `e2e`) runs the service managers against real
+  Docker Compose, Podman Compose and systemd (profiles, project name, stop, start, a
+  container or unit that crashes at once) and a whole `restor run` that starts services
+  a killed run left stopped. They start containers and units, so they skip without
+  `RESTOR_E2E=1` and refuse to run outside a container or CI. `scripts/e2e.sh [image]`
+  builds the test binary and runs it in a throwaway privileged container: the default
+  `docker:<version>-dind` covers Docker Compose only (the others skip); an image with
+  systemd as PID 1, dockerd, podman and restic covers everything. There is no Dockerfile
+  for it in the repository (section 8). CI runs them on the runner VM, as root.
 - Tests run with `-race` locally and in CI.
 - New code comes with tests; bug fixes come with a regression test (failing first).
 - Coverage (SHOULD): ≥ 70 % per package with logic, ≥ 80 % for packages with ≥ 5 functions
@@ -867,8 +995,8 @@ Allowed package-level variables: `Err…` sentinels, and build info set by the l
 |---|---|
 | `.golangci.yml` | v2 config, linters from section 12, formatters gofumpt + goimports |
 | `scripts/pre-commit.sh` | check-only (never rewrites or stages): fmt diff, lint, deadcode, govulncheck, build, `go test -race` |
-| `Makefile` | `build` (ldflags build info), `check` (runs the script), `clean`, `run`, `integration` (restic on PATH), `integration-oldest` (downloads `minSupported` into `~/.cache/restor/restic`) |
-| `.github/workflows/checks.yml` | on push to main, PRs and `workflow_call`: tidy check, build, race tests, deadcode, govulncheck, mock drift, golangci-lint, integration tests against the oldest supported and the newest tested restic (downloaded; checksums verified, and their signature by restic's pinned release key); a `gate` job skips them on a push to main that is a PR's merge commit (15.5); `concurrency` cancels superseded PR runs only |
+| `Makefile` | `build` (ldflags build info), `check` (runs the script), `clean`, `run`, `integration` (restic on PATH), `integration-oldest` (downloads `minSupported` into `~/.cache/restor/restic`), `e2e` (`scripts/e2e.sh`) |
+| `.github/workflows/checks.yml` | on push to main, PRs and `workflow_call`: tidy check, build, race tests, deadcode, govulncheck, mock drift, golangci-lint, integration tests against the oldest supported and the newest tested restic (downloaded; checksums verified, and their signature by restic's pinned release key); the e2e tests (`e2e` job, root on the runner, newest tested restic); a `gate` job skips them on a push to main that is a PR's merge commit (15.5); `concurrency` cancels superseded PR runs only |
 | `.github/workflows/release.yml` | on `vX.Y.Z` / `vX.Y.Z-*` tags: a `guard` job verifies the exact tag format and that the tag is on `main`, then reuses `checks.yml` (granted `pull-requests: read` for the gate); passes `GOVERSION` to goreleaser; `concurrency` runs one release per tag, never cancelled |
 | `.goreleaser.yaml` | `go mod verify` only (never rewrites), `-trimpath`, reproducible (`CommitDate`), `goamd64: v1`, grouped changelog, archives + nfpm `.deb`/`.rpm` (`mtime` = `CommitDate`), no image (section 8) |
 | `.gitignore` | never commit local config (`config.yaml`, `*.env` in the root), secrets or build output |
@@ -893,7 +1021,9 @@ project:
   not that input), and the newest tested restic, marked with a
   `renovate: datasource=… depName=…` comment in `checks.yml` and
   `internal/restic/version.go` (one PR updates both; `TestSupported_MatchesCI` fails
-  when they differ). Its PR merges only when the integration tests pass with the new
+  when they differ), and the e2e test images (`docker:<version>-dind` in
+  `scripts/e2e.sh`, busybox in `internal/app/e2e_test.go`), marked with a
+  `renovate: datasource=docker` comment. Its PR merges only when the integration tests pass with the new
   release; restic majors are disabled. The oldest supported release is raised by hand.
 - Updates that need manual work (Go module majors = new module path, golangci-lint and
   goreleaser majors = config migration) are disabled with a `description` saying why.
@@ -979,8 +1109,8 @@ protection):
 - "main: signed commits": every commit signed; no bypass, not even for the admin.
 - "main: required checks": the `checks.yml` jobs `Gate`, `golangci-lint` and
   `Build, test, deadcode, govulncheck` must pass, with "branches must be up to date" on.
-  The `Integration (oldest restic)` and `Integration (newest restic)` jobs are not in the
-  ruleset on purpose: they gate releases (`release.yml` reuses `checks.yml`, so a tag only
+  The `Integration (oldest restic)`, `Integration (newest restic)` and
+  `End-to-end (compose, systemd)` jobs are not in the ruleset on purpose: they gate releases (`release.yml` reuses `checks.yml`, so a tag only
   ships when they pass) and Renovate's merges (it waits for every check), while a direct
   push to `main` does not wait for a restic download.
   Bypass: only the Repository admin role, mode "always". Bots (Renovate) and other
