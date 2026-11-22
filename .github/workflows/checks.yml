@@ -105,7 +105,7 @@ jobs:
           - name: oldest
             restic: 0.17.1 # oldest supported
           - name: newest
-            restic: 0.19.1 # renovate: datasource=github-releases depName=restic/restic
+            restic: 0.20.0 # renovate: datasource=github-releases depName=restic/restic
     steps:
       - uses: actions/checkout@v7
 

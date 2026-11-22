@@ -14,7 +14,7 @@ import (
 // releases lack backup --group-by.
 const (
 	minSupported = "0.17.1"
-	newestTested = "0.19.1" // renovate: datasource=github-releases depName=restic/restic
+	newestTested = "0.20.0" // renovate: datasource=github-releases depName=restic/restic
 )
 
 // ErrVersion is returned by ParseVersion for output without a restic version.
